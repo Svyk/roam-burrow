@@ -34,10 +34,11 @@ The look must be subtle and native: Roam/Blueprint theme tokens, light and dark,
 - Routing: the Grok lane is live (`grok-run.sh`, see `~/.claude/orch/lane-fit.md` "Grok lane"). Use it for long-context reading of the
   reference repos or for a cross-family review. Plans go to Fable, implementation to sonnet-worker.
 
-## First step
+## Order of work
 
-Propose threads: (a) research both reference repos plus Roam's autocomplete DOM and write a short design spec,
-then (b) scaffold and build alias search, then (c) build drill-down plus preview. Wait for Svy's go-ahead.
+1. Spec (research only): both reference repos, roam-aliases, and Roam's autocomplete DOM. The result is `docs/spec.md`.
+2. Alias search plus `((` ranking.
+3. Drill-down plus the preview.
 
 ## Decisions (Svy, 2026-10-17)
 
