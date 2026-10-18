@@ -1,0 +1,24 @@
+{
+  "name": "roam-burrow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Roam Depot extension: alias search and referenced-first block search on top of Roam's native [[ and (( autocomplete",
+  "type": "module",
+  "main": "extension.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "test": "node --test test/*.test.js",
+    "verify:generated": "node scripts/verify-generated.mjs",
+    "check": "npm run build && npm run scan:secrets && node --check extension.js && npm test && npm run verify:generated",
+    "gate:live": "node tools/gate-all.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  },
+  "license": "MIT"
+}

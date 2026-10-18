@@ -1,0 +1,215 @@
+# Burrow design spec
+
+Task roam-burrow/1 (BRW-1), research only. Written 2026-10-17. Committed in BRW-2 with Svy's decisions of 2026-10-17 folded in (§9). Where a decision overrides the text below, §9 wins.
+
+## 0. Findings that change the brief
+
+1. **`((3XSu0IJ8f))` is not in the notes graph.** It is `{{[[TODO]]}} Watch [[Ant-Man]]` on `MCU Watch Order` in **svy** (1 inbound ref). A notes pull for that uid returns `null`. For testing on notes I propose this stand-in, which has the same shape (separator-insensitive match, referenced original, unreferenced look-alikes):
+   - query `real time pcr` in `((`: **`((6ZtlGN-Np))` "3. Real-time PCR screen"** (5 refs) must rank first. The other 5 notes blocks that match `real.?time.?pcr` have 0 refs.
+   - The svy `ant man` → `((3XSu0IJ8f))` case is the real acceptance (decision 2026-10-17: testing on svy is allowed and preferred for performance). `real time pcr` on notes is the second case.
+2. **Matching must ignore separators.** `ant man` must hit `Ant-Man` inside `[[Ant-Man]]`. Thymer's `_searchKey` (spaced and compact forms) already does this. Port it.
+3. **roam-aliases is loaded in the notes window**: its `.rm-aliases` / `.alias-container` CSS is present. Coexisting with it is a live constraint, not a hypothetical one.
+4. **The notes graph used two alias spellings.** It had 7 `Aliases::` blocks plus one `aliases:: EMP` (on `Environmental Monitoring Program`). roam-aliases (default keyword, `starts-with "Aliases::"`) missed the lowercase one. With Svy's approval BRW-2 renamed that block to `Aliases:: EMP`; Burrow still reads both spellings.
+5. **Native Roam already has a preview pane and ref counts** in the autocomplete (`.rm-autocomplete__preview`, `.rm-autocomplete__ref-count`, `--expanded` / `--expanded-left`, footer hotkeys). Burrow must not draw a second competing pane next to it (see §4).
+
+## 1. Sources read
+
+| Source | What Burrow takes |
+|---|---|
+| `Svyk/thymer-reference-extravaganza` v4.64.1 (`plugin.js` 58k lines; README) | Search scorer `_searchKey` / `_searchPlan` / `_searchStrictScoreFromKey` / `_searchMatchFromKey` (strict tiers 1200→380, recall tier with abbreviations, initialisms, edit distance ≤1–2 and never on numbers, `+` = AND, quotes = phrase); alias rows `Alias ↳ Real Title`; one row with `· alias: X` when the title and an alias both match; ambiguous aliases kept as separate rows; result dedupe (`_r5PostProcessResults`); the Navigator's `#heading` filter and `>` drill; pick memory; current-page boost. |
+| `mmssddss/roam-inline-autocomplete` (`extension.js`, `CLAUDE.md`) | The hook pattern: capture-phase `keydown` on `document` that intercepts **only while its own popup is open**; `commit()` checks the text before the cursor before writing and returns `false` so the key passes through on a mismatch; `nativeSetValue` + a dispatched `input` event; `ignoreNextInput`; IME `composing` gate; 200 ms late-open grace for Enter; cleanup through `on()`/`listeners`; themes measured from real Roam DOM. |
+| `dive2Pro/roam-aliases` (`src/roam.ts`, `index.tsx`, `config-settings.ts`) | Alias convention: a block on the page whose string starts with `${Keyword}::` (default `Aliases`, configurable), values split on `,` and trimmed. The README says first-level block, but the code accepts any depth. It injects an `.rm-aliases` section as first child of `.rm-autocomplete__results.bp3-elevation-3`, reacts to mouse only, and inserts `[alias]([[Page]])` through `updateBlock`. |
+| Roam notes window, CDP :9223, read-only `Runtime.evaluate` | Autocomplete CSS class map (§4), graph size, alias census, query timings (§6). Nothing was typed, clicked or written. |
+
+## 2. Alias search model
+
+**Index (read-only, never written by Burrow).**
+- An alias block is any block on a page whose string matches `^(Keyword)::` case-insensitively. Keyword is a Burrow setting (default `Aliases`), and Svy sets it to the same value as roam-aliases. The case-insensitive match also picks up `aliases:: EMP`.
+- Values come from `split(",")`, then `trim()`, with surrounding `[[ ]]` and `#` removed. Empty values are dropped.
+- The page is the identity. One alias can point to several pages, and Burrow then shows every page and guesses none (Thymer rule).
+- Built once at idle after load: titles (6,904, 57 ms query) plus aliases. Refreshed by a pull watch on the `Aliases` page's `:block/_refs` and a 60 s TTL checked when a popup opens, never on a keystroke.
+- **Burrow never edits `Aliases::` blocks.** The template rule says roam-aliases owns that comma list. Thymer's ⌥A "create alias while picking" is not ported.
+
+**`[[` behaviour.** An alias hit renders as one Burrow row: `alias ↳ Page Title`, matched span in `.rm-search-match` weight. If native results already show the page by title, Burrow adds no row for it.
+- Commit inserts `[alias]([[Page Title]])`, the same text roam-aliases writes, so both plugins leave identical source. The setting `Alias link format` offers `[alias]([[Page]])` (default) or `[[Page]]`.
+- **With roam-aliases present** (`.rm-aliases` found inside the native popup): Burrow does not draw its own alias rows, because roam-aliases already lists them. Burrow still uses aliases for ranking and for `((` expansion. Two plugins listing the same alias would be the "fight" the decision forbids.
+
+**`((` behaviour.** No new row type. An alias hit acts as query expansion: if the query, or a run of its tokens, matches an alias of page P, blocks that reference P get the alias boost (§3). Typing `Mike Khieu` in `((` then finds blocks that mention `[[Entities/Michael Khieu]]`. Burrow never inserts a page link from `((`.
+
+## 3. `((` ranking
+
+Roam's results stay as they are. Burrow adds a short ranked strip above them (§4).
+
+**Candidate pool = referenced blocks only.** In notes that is 3,767 blocks: `[?r :block/refs ?b] [?b :block/string]`. Without the `:block/string` clause the count is 7,269, because it also counts referenced pages, which `((` does not want. The query takes 61–200 ms. Burrow builds the set once at idle and refreshes it lazily when a popup opens if it is older than 60 s. Native search already covers unreferenced blocks. Restricting Burrow to the referenced set keeps every keystroke a JS loop over about 4k strings, with no datalog.
+
+**Order inside the strip:**
+1. Match tier from the Thymer scorer: strict before close (typo).
+2. **Originals before quoters.** A block whose text only contains `((X))` folds into X, and X takes its place. The original block, the one others already reference, ranks first.
+3. Inbound ref count, as `log2(1+refs)` steps.
+4. Alias boost (§2), current-page boost (+small), pick memory (phase 2).
+5. Shorter text, then uid, so ties always break the same way.
+
+Before matching, the key strips Roam markup (`[[ ]]`, `(( ))`, `{{ }}`, `**`, `^^`, attribute prefix) and uses Thymer's spaced and compact forms, so `ant man` = `Ant-Man` and `real time pcr` = `Real-time PCR`. Matching is on word boundaries. A rough substring probe for `ant` + `man` over the referenced set alone gave 66 hits (`important`, `semantic`…). Plain `ant` matches 460 referenced blocks and 15,780 blocks in the whole graph. The strict tiers rule those out.
+
+**Strip size:** at most 3 rows. A row is dropped when native's first row is already the same block. Native rows carry no uid, so the check compares rendered text; if that is ambiguous, the row stays.
+
+**Default selection.** The decision says the referenced original shows *first*. With the `((` ranking toggle on and Burrow's top row being a referenced original that native has not put first, that row is **pre-selected**, so Enter inserts it. Native's own active-row highlight is muted while Burrow owns selection. ↓ past Burrow's last row hands selection back to native's first row.
+
+**Acceptance:** svy: `((ant man` → first, pre-selected row is `((3XSu0IJ8f))`. notes: `((real time pcr` → `((6ZtlGN-Np))`.
+
+## 4. Popup hook
+
+**Native DOM, from Roam's live stylesheet** (the class names in the compiled bundle are generated, so the CSS is the stable contract):
+`.rm-autocomplete__results` (popover, 400 px, max-height 300 px, flex column) › `.rm-autocomplete__results-main` › `.rm-autocomplete__results-scroll` › `.rm-autocomplete-result` rows (with `.rm-autocomplete__ref-count`, `.rm-search-match`); `.rm-autocomplete__preview` › `.rm-autocomplete__preview-content` (title, `__preview-title__refs`, `.rm-zoom` breadcrumbs, ghost blocks); `--expanded` / `--expanded-left` when the preview is open; `.rm-autocomplete-footer` with `__action--preview` and hotkey icons. The Ctrl-Shift-9 Advanced Block Search dialog is `.rm-search-path`.
+
+**Open questions that need one live capture before code** (phase 1, step 0, §8): the active-row class, whether native rows are React-keyed children of `-scroll`, and what closes the popup after a programmatic value change.
+
+**Detection, with no global MutationObserver.** A capture-phase `input` / `keydown` handler on `textarea.rm-block-input` scans the text before the caret for the last unclosed `[[` or `((`, the same way inline-autocomplete's `insideRoamSyntax` does. Only then does it run one `querySelector('.rm-autocomplete__results')`. While a popup is open, one `ResizeObserver` follows it, and it is dropped when the popup closes.
+
+**Burrow's own DOM.** One portal node on `document.body`, sitting flush against the native popover's edge (above it, or below when there is no room), the same width, built from Blueprint `bp3-menu` / `bp3-menu-item` tokens.
+- It never gets the class `rm-autocomplete__results`: roam-aliases (`querySelector(TARGET_CLASS)`) and inline-autocomplete (`roamAutocompleteVisible`) both key on it.
+- It never inserts into or reorders React-owned native nodes. The one native mutation is a reversible class `burrow-owns-selection` on the native popover, which mutes the native active-row style while Burrow holds selection.
+
+**Keyboard ownership state machine** (explicit and reversible):
+
+| State | Enter | Leave | Keys Burrow consumes |
+|---|---|---|---|
+| IDLE | — | popup opens with a Burrow feature enabled | none |
+| ARMED | strip has rows, native holds selection | → OWNED on ↑ from the strip edge or on pre-select (§3); → IDLE when the popup closes | none |
+| OWNED | a Burrow row is active | ↓ past the last row → ARMED; Esc → ARMED and Esc passes through to Roam; caret move, blur, popup close or composition start → IDLE | ↑ ↓ Enter Tab |
+
+Every handler first checks `e.isComposing`, `state.composing`, that the event target is the tracked textarea, and that the selection is collapsed. If any check fails, the event passes through untouched.
+
+**Commit, byte-for-byte.** On keydown, Burrow snapshots `{uid, value, selStart, selEnd, token:{kind,start,end,query}}`. A write happens only when:
+- `value.slice(start, caret) === open + query`,
+- the auto-inserted closer, if any, sits right after the caret,
+- the caret has not moved, and
+- the uid is still focused (`ui.getFocusedBlock`).
+
+`next = value.slice(0,start) + insertion + value.slice(closerEnd)`. That is one `nativeSetValue` plus one `input` event, `ignoreNextInput`, and the caret set to the end of the insertion in the next rAF. Then a post-check: `ta.value === next`. If it does not match, Burrow logs `__BURROW.lastFailure` and **never writes a second time**. A precondition failure returns `false` and the key reaches Roam as if Burrow were absent.
+- Burrow never calls `updateBlock` (roam-aliases does). Writing through the textarea keeps Roam's undo stack and avoids a re-render race.
+- **Only the token span changes.** Every byte outside `[start, closerEnd)` must be identical.
+
+**Byte-for-byte gate (run on notes, page `Burrow/Fixtures`).** For each case, pull `:block/string` before and after: Enter, Tab, Esc, ↑, ↓, ←, →, typing `abc`, Backspace, an IME composition (Pinyin), click-away, and failure recovery (caret moved between keydown and commit; scorer throws; extension unloaded mid-popup). Expected: the string is unchanged in every case except a Burrow commit, where only the token span differs. Run the same sequence once more with every Burrow toggle off. Its result must equal the run with Burrow uninstalled.
+
+**Theme:** `.bp3-dark` on body or an ancestor first, then the measured `body` background luminance (notes measured `rgb(32,43,51)`, dark). Never `prefers-color-scheme` alone. Re-measure on class change of `<html>` / `<body>` only. Colors come from Roam's own tokens: no badges, no pills, plain `refs` number in `.rm-autocomplete__ref-count` style.
+
+## 5. Drill-down: `title#heading > child`
+
+**Grammar (inside `[[ ]]` only):** `expr := title ( "#" q )? ( ">" q )*`
+- `title` resolves to the best page by title or alias with the Burrow scorer. **Drill mode switches on only when `title` resolves exactly** (title or alias, case- and separator-insensitive). Titles that legitimately contain `#` or `>` (`C#`, `a > b`) stay native, because the full string then matches a page and nothing parses.
+- `#q` matches headings (`:block/heading` 1–3) anywhere under the page. notes has 4,130 heading blocks; `Systems/Executor Lanes and LaunchAgents` has 36. An empty `#` highlights the first heading.
+- `> q` matches the **direct children** of the current target, one level, as in the Slack post. An empty `q` highlights the first child. `title > q` without `#` starts from the page's top level.
+- Each step picks the best scorer match. Ties go to outline order. To get another sibling, the user types more. There are no arrow keys in the preview, per the brief and the Slack post.
+
+**Preview.** While drill mode is on, Burrow owns the native preview area's *content*: it hides `.rm-autocomplete__preview-content` with a class and renders its own read-only outline in a portal laid exactly over it, so there is one pane, not two.
+- The outline shows a breadcrumb trail of page › heading › … › parent (parent context stays visible), the resolved node's siblings, and the resolved node's first 2 levels of children.
+- **The resolved block gets a highlight** (Roam's block-highlight color from the theme, no outline box), and `scrollIntoView({block:"nearest"})` runs on each change.
+- The outline is built from one `pull` of the page tree, cached per page uid until the popup closes. It renders as text: `pointer-events:none` on bodies, no `renderBlock`, so a click cannot open an editor and change source.
+
+**Commit.**
+- Enter or Tab with a drill expression replaces the whole `[[expr]]` token with `((uid))` of the resolved block.
+- If nothing below the page resolved, the commit is `[[Page Title]]`.
+- **Burrow never lets Enter create a page named `title#heading > xxx`.**
+- Esc leaves the text as typed and passes through.
+
+**Example on notes (each step checked read-only over CDP):** `[[Systems/Executor Lanes and LaunchAgents#grok lane > never`
+- `Systems/Executor Lanes and LaunchAgents` is an exact page title.
+- `#grok lane` resolves to the level-2 heading `((TsuLMBRGP))` "Grok lane (since [[October 17th, 2026]])".
+- `> never` matches one of its 6 direct children: `((-EeRGLF5U))` "Never Grok for: document writing …".
+- The preview shows the trail `Systems/Executor Lanes and LaunchAgents › Grok lane …` with that child highlighted. Enter inserts `((-EeRGLF5U))`.
+
+**Counter-example:** `[[Executor Lanes#grok lane` does **not** enter drill mode. `Executor Lanes` is not an exact title: the pages are `Concepts/Executor Lanes` and `Systems/Executor Lanes and LaunchAgents`, and neither has an alias. The text stays native. A namespaced page needs its full title or an `Aliases::` entry to start a drill.
+
+## 6. Per-keystroke cost budget
+
+**Measured on notes** (103,156 blocks, 6,904 pages; Roam Desktop, read-only):
+
+| Operation | Cost | When Burrow runs it |
+|---|---|---|
+| datalog regex scan of all blocks | **110 ms** | never per key |
+| referenced-block set + ref counts | 61–203 ms | idle once, then lazy ≥60 s |
+| key normalisation of 3,767 refd blocks | 71 ms | idle once, with the set |
+| title list | 22–57 ms | idle once + watch |
+| JS match over 3,767 refd keys | **0.9–2.9 ms** | per key in `((` |
+| JS match over 6,904 title keys | **1.9 ms** | per key in `[[` |
+
+**Budget (each is a release gate, measured with `performance.now()` marks exposed at `window.__BURROW_PERF`):**
+- **0 datalog queries and 0 `pull`s per keystroke.** The exception is the first `#` or `>` after a title resolves: one `pull` of that page tree, then cached.
+- **Burrow JS ≤ 4 ms p95 per input event** on notes (match, rank, diff-render of at most 3 rows plus preview). No full `innerHTML` rebuild when rows are unchanged; the active-row change touches classes only (inline-autocomplete's `render` / `setActive` split).
+- **Input→paint delta vs Burrow-off ≤ +5 ms p95** over a 200-keystroke scripted run with the popup open, on a `Burrow/Fixtures` block. Baseline first, then Burrow on, n ≥ 2 runs each, with the spread reported.
+- Idle builds go through `requestIdleCallback` chunks of ≤ 6 ms (Thymer's cooperative lane) and pause while a popup is open.
+- Kill switch: every feature toggle is checked at the top of the handler; all off = listeners are present but return in the first line. Command palette `Burrow: Disable all` for safe mode.
+
+## 7. Settings (one toggle per feature, Svy decision)
+
+Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper with defaults. Each handler checks its toggle at the start of the event, so a change applies to the next keystroke with no reload.
+
+| id | Type | Default | Feature |
+|---|---|---|---|
+| `aliasPages` | switch | on | Alias rows in `[[` (auto-hidden when roam-aliases draws its own) |
+| `aliasExpand` | switch | on | Alias query expansion in `((` |
+| `refRanking` | switch | on | Referenced-first strip in `((` |
+| `refPreselect` | switch | on | Pre-select the referenced original (Enter takes it) |
+| `betterMatch` | switch | on | Separator-insensitive, any-order, initialism, typo matching for Burrow rows |
+| `drill` | switch | on | `title#heading > child` in `[[` |
+| `drillPreview` | switch | on | Highlighted preview for drill (drill still works without it) |
+| `pickMemory` | switch | off | Phase 2: learn from picks |
+| `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
+| `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
+| `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
+
+## 8. Build plan
+
+**Phase 1: alias search + `((` ranking + matching** (repo bootstrap from `~/roam-extension-template`)
+0. Live capture on notes, `Burrow/Fixtures` page: open `[[` and `((` once, save the popup's outerHTML, the active-row class, and what happens to the popup after a programmatic `nativeSetValue`. This needs typing into a notes block. Treat it as the first write step and get Svy's OK.
+1. Lifecycle, settings panel (§7), detection (§4), portal strip, theme.
+2. Port the Thymer scorer into `src/search.js` with node:test cases copied from Thymer (`ant man`/`Ant-Man`, `EMP 26`/`EMP26-002-BHP`, `s3`/`season 3`, no numeric fuzz).
+3. Alias index, `[[` alias rows, roam-aliases coexistence.
+4. Referenced-block index, `((` strip, originals-over-quoters fold, pre-select, keyboard state machine, commit.
+5. Gates: `npm run check`; the byte-for-byte gate (§4); the `real time pcr` → `((6ZtlGN-Np))` acceptance; the cost budget (§6). Then Svy installs by GitHub Pages URL after his go-ahead to create and push the repo.
+
+**Phase 2: drill-down + preview**
+1. Grammar parser with unit tests, including titles that contain `#` and `>`.
+2. Page-tree pull cache, resolver, commit to `((uid))`.
+3. Preview overlay with trail, siblings, highlight and scroll; native preview content hidden only while drill is on.
+4. Pick memory (off by default), current-page boost.
+5. Gates: byte-for-byte gate re-run with drill cases (Enter on unresolved, Esc, typing past `>`); no page created by any drill sequence (query `:node/title` count before and after); budget re-measured with the preview open.
+
+Routing per the brief: the plan review goes to Fable (`claude-run.sh --plan`) and the implementation units to `sonnet-worker`. A Grok cross-family review of the hook and commit code comes before phase 1 ships.
+
+## 9. Decisions (Svy, 2026-10-17)
+
+These override the text above.
+
+1. **svy is a test graph.** Testing on svy is allowed and preferred for performance: it is encrypted and slower, so every budget must hold there. Never reload the svy window (the unlock prompt). `((ant man` → `((3XSu0IJ8f))` on svy is the real acceptance; `((real time pcr` → `((6ZtlGN-Np))` on notes is the second case.
+2. **Scratch pages** (`Burrow/Fixtures`) are fine in notes and svy. Burrow's tests delete only what they created.
+3. **Pre-select stays on by default.** The referenced original shows first and Enter takes it; the `refPreselect` switch turns it off.
+4. **Every feature has its own on/off setting.**
+5. **Coexist with roam-aliases.** Burrow reads `Aliases::` case-insensitively and draws no alias row that roam-aliases already lists. The notes block `aliases:: EMP` was renamed to `Aliases:: EMP` so roam-aliases sees it.
+6. **Live checks** go through Roam Desktop CDP :9223. Install by GitHub Pages URL later; no GitHub repo and no push without Svy's go-ahead.
+7. **Commits** as `git -c user.name="Svyatoslav Kleshchev" -c user.email="svyk@icloud.com" commit`; new commits, never skip hooks.
+8. **Feel:** subtle, native Roam/Blueprint look, light and dark, no badges or pills.
+
+## 10. Phase 1 build notes (BRW-2)
+
+Findings from the live capture (§8 step 0) that the code relies on:
+
+- Native rows are `.rm-autocomplete__results-scroll > div.dont-unfocus-block[title]`; the `title` attribute holds the page title or the block text. The active row has **no class**: Roam paints it with an inline `background-color`. Burrow detects it that way and mutes it with `!important` only while the popover carries `burrow-owns-selection`.
+- In `((` Roam's first two rows are "Create as footnote" and "Create as block below", and the second is active by default, so Enter on native creates a block. Pre-select moves Enter to Burrow's original.
+- The popover is a direct child of `<body>`, popper-positioned, `box-sizing: border-box`, `max-height: 300px`. roam-aliases prepends `.rm-aliases` (and adds `alias-container`) inside it.
+- A programmatic `value` set plus one `input` event, with the caret set in the next frame, closes Roam's popup and saves exactly the new string (checked: `x ((6ZtlGN-Np)) ok`).
+- Escape with the popup open closes it and leaves the editor.
+- **Strip placement.** The strip is a portal on `<body>` laid over the top of the popover. A reversible class `burrow-pad-N` on the popover adds `padding-top` for N rows, so no native row is covered and the strip reads as the popover's first section. No node is inserted into Roam's tree.
+- **Ranking bands.** Exact and word-boundary substring matches share one band so inbound refs decide between them; token-wise matches come next, recall (abbreviation, initialism, typo) after, close matches last. Substring hits must start at a word boundary, also in the separator-free form, so `ant man` does not hit `important manual`.
+- **Roam swaps the popover element** on native arrow navigation. A disconnected popover only means "closed" when no replacement exists; otherwise Burrow re-attaches.
+- **Strip admission** is stricter than Thymer's picker, because the strip pre-selects and Enter takes it. Admitted: whole-key, prefix and word-boundary substring matches (also separator-free); exact-word matches in or out of order; initialisms. Left to Roam's rows: prefix-only words in any order (Thymer's 440 tier: on notes `ant man` → "antibiotics … management"), close matches (a word missing), and recall matches with no exact word. Alias rows keep the full forgiving scorer (a one-word typo like `lorinatr` → `lorinator`), since aliases are few and short.
+- **Per-key cost.** A strict pass behind a cheap prefilter (the separator-free key must hold each clause's longest word, or its initials start the query), with the passing set cached per needle set: typing forward scans the cached superset, Backspace hits the cache. Recall runs only when the strip is not full, never for one-word queries, and only over blocks found through a word index (an admitted recall row needs one exact word). Ranking runs in a task posted from `requestAnimationFrame`, so it never delays the paint of the typed character; Enter, Tab, ↑, ↓ and Esc flush it first.
+- **Test harness trap** (Roam, not Burrow): after Escape Roam leaves the block *selected*, and that selection survives a programmatic `setBlockFocusAndSelection`. The next Backspace then deletes the whole block, with Burrow unloaded too. The gates clear the selection (Escape) before focusing, and guard every key that is not aimed at the fixture textarea.
+- **Indexes** are built with `data.async.fast.q` where Roam offers it. svy: 5,304 referenced blocks, 200 ms query; notes: 3,767, 172 ms. Alias pages are found by exact title lookups for the keyword's spellings, then their referring blocks.
+
+## Also noticed
+
+- `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
+- `dive2Pro/roam-aliases` `src/roam.ts` `allBlocks()` pulls `[*]` for every entity in the graph (103k blocks in notes) on first unlinked-alias use. That is a heavy cost on this graph, worth knowing if typing feels slow.
+- `~/system-setup/roam-extension-template` README rule says roam-aliases owns `Aliases::` comma lists. Burrow follows it; keep it in Burrow's README.

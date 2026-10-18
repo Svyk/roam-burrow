@@ -1,0 +1,68 @@
+/* Burrow. Every rule is scoped to Burrow's own nodes, or to Roam's popover
+   only while it carries a Burrow class. Colors are sampled from the popover. */
+.burrow-strip {
+  position: fixed;
+  z-index: 30;
+  box-sizing: border-box;
+  background: var(--burrow-bg, #fff);
+  color: var(--burrow-fg, #182026);
+  border-bottom: 1px solid rgba(16, 22, 26, 0.12);
+  overflow: hidden;
+}
+
+.burrow-strip.burrow-dark {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.burrow-strip[hidden],
+.burrow-hud[hidden] {
+  display: none;
+}
+
+.burrow-row {
+  display: flex;
+  align-items: baseline;
+  box-sizing: border-box;
+  height: 33px;
+  padding: 6px;
+  border-radius: 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.burrow-row:hover {
+  background: rgba(138, 155, 168, 0.15);
+}
+
+.burrow-row.burrow-active {
+  background: var(--burrow-active, rgba(138, 155, 168, 0.3));
+}
+
+.burrow-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.burrow-arrow {
+  opacity: 0.55;
+}
+
+.rm-autocomplete__results.burrow-pad-1 { padding-top: 34px !important; }
+.rm-autocomplete__results.burrow-pad-2 { padding-top: 67px !important; }
+.rm-autocomplete__results.burrow-pad-3 { padding-top: 100px !important; }
+
+.rm-autocomplete__results.burrow-owns-selection .rm-autocomplete__results-scroll > div {
+  background-color: transparent !important;
+}
+
+.burrow-hud {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 30;
+  padding: 2px 6px;
+  font: 11px/16px monospace;
+  opacity: 0.7;
+  pointer-events: none;
+}

@@ -1,0 +1,96 @@
+import { createIndexes } from "./indexes.js";
+import { createLifecycle } from "./lifecycle.js";
+import { createPerf } from "./perf.js";
+import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
+import { createStrip } from "./strip.js";
+
+export const VERSION = "0.1.0";
+
+let activeLifecycle = null;
+
+function idleScheduler(lifecycle) {
+  let pending = null;
+  lifecycle.add(() => { if (pending) pending.cancel(); });
+  return (callback) => {
+    const run = () => { pending = null; if (!lifecycle.disposed) callback(); };
+    if (typeof globalThis.requestIdleCallback === "function") {
+      const id = globalThis.requestIdleCallback(run, { timeout: 4000 });
+      pending = { cancel: () => globalThis.cancelIdleCallback(id) };
+    } else {
+      const id = globalThis.setTimeout(run, 50);
+      pending = { cancel: () => globalThis.clearTimeout(id) };
+    }
+  };
+}
+
+function installPerfHud({ lifecycle, perf, setting }) {
+  const hud = document.createElement("div");
+  hud.className = "burrow-hud";
+  hud.hidden = true;
+  lifecycle.node(hud, document.body);
+  const fmt = (v) => (v == null ? "–" : v.toFixed(1));
+  lifecycle.interval(() => {
+    hud.hidden = !setting("perfHud");
+    if (hud.hidden) return;
+    const s = perf.summary("input");
+    hud.textContent = `burrow ${s.n} keys · p50 ${fmt(s.p50)} ms · p95 ${fmt(s.p95)} ms`;
+  }, 1000);
+}
+
+export async function onload({ extensionAPI, extension }) {
+  if (!extensionAPI) throw new TypeError("Roam did not provide extensionAPI");
+  if (activeLifecycle) await activeLifecycle.dispose();
+
+  const lifecycle = createLifecycle();
+  activeLifecycle = lifecycle;
+  try {
+    const api = globalThis.window?.roamAlphaAPI;
+    const setting = createSettingsReader(extensionAPI);
+    const perf = createPerf();
+    await initializeSettings(extensionAPI);
+    let indexes = null;
+    await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
+      onChange: (id) => { if (id === "aliasKeyword") indexes?.schedule(); },
+    }));
+    if (api && globalThis.document) {
+      indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle) });
+      const strip = createStrip({ setting, indexes, perf, lifecycle, api });
+      installPerfHud({ lifecycle, perf, setting });
+      indexes.schedule();
+      globalThis.window.__BURROW_PERF = perf;
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes };
+      lifecycle.add(() => {
+        delete globalThis.window.__BURROW_PERF;
+        delete globalThis.window.__BURROW;
+      });
+    }
+    await lifecycle.command(extensionAPI.ui.commandPalette, {
+      label: "Burrow: Disable all features",
+      callback: async () => {
+        for (const id of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch"]) {
+          await extensionAPI.settings.set(id, false);
+        }
+      },
+    });
+    console.info(`[burrow] Loaded v${extension?.version || VERSION}`);
+  } catch (error) {
+    if (activeLifecycle === lifecycle) activeLifecycle = null;
+    await lifecycle.dispose().catch((cleanupError) => console.error(cleanupError));
+    throw error;
+  }
+
+  // Roam invokes this cleanup immediately before onunload.
+  return async () => {
+    if (activeLifecycle === lifecycle) activeLifecycle = null;
+    await lifecycle.dispose();
+  };
+}
+
+export async function onunload() {
+  const lifecycle = activeLifecycle;
+  activeLifecycle = null;
+  if (lifecycle) await lifecycle.dispose();
+  console.info("[burrow] Unloaded");
+}
+
+export default { onload, onunload };
