@@ -74,10 +74,18 @@ test("per-key cost stays small on a 6k-block pool", () => {
   const index = buildRefIndex(rows);
   const plan = searchPlan("ant man");
   rankRefs(index, plan);
-  const t0 = performance.now();
-  for (let i = 0; i < 10; i++) rankRefs(index, searchPlan(["an", "ant", "ant m", "ant ma", "ant man"][i % 5]));
-  const per = (performance.now() - t0) / 10;
-  assert.ok(per < 25, `rank took ${per.toFixed(1)} ms per key`);
+  // Process CPU time, not wall time: another process on a loaded machine or
+  // CI runner stretches wall time 4x but this process's CPU time barely moves.
+  // The median of 9 rounds drops the rounds that pay for JIT and GC threads.
+  const rounds = [];
+  for (let r = 0; r < 9; r++) {
+    const c0 = process.cpuUsage();
+    for (let i = 0; i < 10; i++) rankRefs(index, searchPlan(["an", "ant", "ant m", "ant ma", "ant man"][i % 5]));
+    const { user, system } = process.cpuUsage(c0);
+    rounds.push((user + system) / 1000 / 10);
+  }
+  const per = rounds.sort((a, b) => a - b)[4];
+  assert.ok(per < 25, `rank took ${per.toFixed(1)} ms CPU per key (median of 9 rounds: ${rounds.map((x) => x.toFixed(1)).join(", ")})`);
 });
 
 test("close matches (a query word missing) never reach the strip", () => {
