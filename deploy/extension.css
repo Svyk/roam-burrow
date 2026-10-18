@@ -66,3 +66,102 @@
   opacity: 0.7;
   pointer-events: none;
 }
+
+/* Drill preview: a read-only outline over (or beside) Roam's preview area. */
+.burrow-preview {
+  position: fixed;
+  z-index: 30;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 0 8px 8px;
+  border-radius: 3px;
+  background: var(--burrow-bg, #fff);
+  color: var(--burrow-fg, #182026);
+  pointer-events: none;
+}
+
+.burrow-preview.burrow-preview-docked {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.burrow-preview[hidden] {
+  display: none;
+}
+
+.burrow-trail {
+  position: sticky;
+  top: 0;
+  padding: 8px 0 6px;
+  background: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.burrow-crumb {
+  opacity: 0.7;
+}
+
+.burrow-sep {
+  opacity: 0.45;
+}
+
+.burrow-node {
+  display: flex;
+  align-items: baseline;
+  padding: 2px 4px 2px calc(4px + var(--burrow-depth, 0) * 18px);
+  border-radius: 3px;
+  line-height: 20px;
+}
+
+.burrow-bullet {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin: 0 9px 0 2px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  transform: translateY(-2px);
+}
+
+.burrow-body {
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.burrow-node.burrow-h1 .burrow-body { font-size: 1.25em; font-weight: 600; }
+.burrow-node.burrow-h2 .burrow-body { font-size: 1.12em; font-weight: 600; }
+.burrow-node.burrow-h3 .burrow-body { font-weight: 600; }
+
+.burrow-node.burrow-target {
+  background: var(--burrow-highlight, rgba(45, 114, 210, 0.16));
+}
+
+.burrow-preview.burrow-dark .burrow-node.burrow-target {
+  background: var(--burrow-highlight, rgba(72, 175, 240, 0.22));
+}
+
+.burrow-more {
+  opacity: 0.5;
+  font-size: 12px;
+}
+
+.burrow-row .burrow-trail-inline {
+  opacity: 0.55;
+}
+
+.rm-autocomplete__results--expanded.burrow-drill {
+  min-height: 300px;
+}
+
+.rm-autocomplete__results.burrow-drill .rm-autocomplete__preview > * {
+  visibility: hidden;
+}

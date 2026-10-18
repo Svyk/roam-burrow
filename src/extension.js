@@ -1,12 +1,19 @@
 import { createIndexes } from "./indexes.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createPerf } from "./perf.js";
+import { createPickMemory } from "./picks.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 let activeLifecycle = null;
+
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost"];
+
+function safeLocalStorage() {
+  try { return globalThis.localStorage ?? null; } catch { return null; }
+}
 
 function idleScheduler(lifecycle) {
   let pending = null;
@@ -54,11 +61,12 @@ export async function onload({ extensionAPI, extension }) {
     }));
     if (api && globalThis.document) {
       indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle) });
-      const strip = createStrip({ setting, indexes, perf, lifecycle, api });
+      const picks = createPickMemory({ storage: safeLocalStorage(), key: `burrow:picks:${api.graph?.name ?? "graph"}` });
+      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks });
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, picks };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;
@@ -67,7 +75,7 @@ export async function onload({ extensionAPI, extension }) {
     await lifecycle.command(extensionAPI.ui.commandPalette, {
       label: "Burrow: Disable all features",
       callback: async () => {
-        for (const id of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch"]) {
+        for (const id of FEATURES) {
           await extensionAPI.settings.set(id, false);
         }
       },

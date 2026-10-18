@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Every live gate on both graphs, one command, about 9 minutes:
-// byte-for-byte + acceptance + alias rows (live-gate) and the cost budget
-// (perf-gate, 3 interleaved runs per arm, median paired delta). Needs Roam Desktop with CDP on
+// Every live gate on both graphs, one command, about 22 minutes:
+// byte-for-byte + acceptance + alias rows + drill + pick memory (live-gate)
+// and the cost budget for (( typing and for drill typing with the preview
+// open (perf-gate, 3 interleaved runs per arm, median paired delta). Needs Roam Desktop with CDP on
 // :9223 and both windows open (svy unlocked). Never reloads a window.
 //   node tools/gate-all.mjs        (or: npm run gate:live)
 import { spawnSync } from "node:child_process";
@@ -13,6 +14,8 @@ const steps = [
   ["live-gate.mjs", "Readwisenotes", "notes"],
   ["perf-gate.mjs", "Svy", "--runs", "3"],
   ["perf-gate.mjs", "Readwisenotes", "--runs", "3"],
+  ["perf-gate.mjs", "Svy", "--runs", "3", "--drill"],
+  ["perf-gate.mjs", "Readwisenotes", "--runs", "3", "--drill"],
 ];
 let failed = 0;
 const t0 = Date.now();

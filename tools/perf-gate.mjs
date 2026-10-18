@@ -6,16 +6,21 @@
 // Per key: keydown timeStamp -> end of the next frame (a MessageChannel task
 // posted from requestAnimationFrame). Burrow's own handler time comes from
 // window.__BURROW_PERF. Datalog queries and pulls per key must be zero.
-//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--json]
+// --drill types into a drill expression on the fixture's heading tree instead
+// (`[[Burrow/Fixtures#alpha > ` then the query), with the preview open; data
+// fetched by the drill (one pull per node it visits) is reported separately.
+//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
-import { cleanupFixture, guardReport, primeFixture, setupFixture } from "./fixture.mjs";
+import { cleanupFixture, deleteNewPages, guardReport, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
 
 const args = process.argv.slice(2);
 const title = args[0];
 const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
 const runs = Number(flag("--runs", 3));
-const query = flag("--query", "ant man");
+const drill = args.includes("--drill");
+const query = flag("--query", drill ? "never > grand" : "ant man");
+const opener = drill ? "[[Burrow/Fixtures#alpha > " : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
 const c = await connect(title);
@@ -29,7 +34,7 @@ async function setArm(arm) {
     if (dev.module) { await dev.module.default.onunload(); dev.module = null; }
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
-    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch"]) dev.values[f] = true;
+    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost"]) dev.values[f] = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
     style.textContent = css;
@@ -86,6 +91,8 @@ async function endRun() {
       burrowInput: perf ? [...perf.samples.input] : null,
       burrowRender: perf ? [...perf.samples.render] : null,
       queries: perf ? perf.counters.queries : null,
+      drillFetches: perf ? (perf.counters.drillPulls || 0) + (perf.counters.drillQueries || 0) : null,
+      previewShown: Boolean(document.querySelector(".burrow-preview:not([hidden]) .burrow-target")),
       builds: perf ? perf.counters.builds : null,
       popup: Boolean(document.querySelector(".rm-autocomplete__results")),
     };
@@ -98,8 +105,9 @@ const pct = (list, p) => {
   return +s[Math.min(s.length - 1, Math.floor(p * s.length))].toFixed(2);
 };
 
-const report = { window: c.page.title, query, runs, results: [] };
-await setupFixture(c);
+const report = { window: c.page.title, query: opener + query, runs, results: [] };
+await setupFixture(c, { drillTree: drill });
+await snapshotTitles(c);
 try {
   for (let run = 0; run < runs; run++) {
     // Interleave arms so drift in Roam's own cost hits both equally.
@@ -108,28 +116,39 @@ try {
       const start = await startRun();
       if (!start.ok) throw new Error("fixture block not focused");
       process.stderr.write(`run ${run} arm ${arm}\n`);
-      await c.type("((", 60);
+      await c.type(opener, 60);
       await sleep(600);
       for (let i = 0; i < cycles; i++) {
         await c.type(query, 60);
         await sleep(120);
         for (let j = 0; j < query.length; j++) { await c.key("Backspace"); await sleep(60); }
       }
+      // The preview is checked before the last Backspaces close it.
       const r = await endRun();
       r.aborted = await guardReport(c);
       await c.key("Escape");
       await sleep(300);
+      // Roam saved the typed `[[…]]` on Escape; empty the block so a page it
+      // made has no reference left, then delete that page.
+      await c.evaluate(async () => {
+        const g = window.__burrowFixture;
+        await window.roamAlphaAPI.data.block.update({ block: { uid: g.blockUid, string: "" } });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      });
+      r.pages = await deleteNewPages(c);
       report.results.push({
         run, arm, keys: r.keys, strayKeys: r.aborted, popupAtEnd: r.popup, build: loaded.build,
         paintP50: pct(r.latency, 0.5), paintP95: pct(r.latency, 0.95),
         burrowP50: pct(r.burrowInput, 0.5), burrowP95: pct(r.burrowInput, 0.95), burrowMax: pct(r.burrowInput, 1),
         renderP95: pct(r.burrowRender, 0.95), burrowSamples: r.burrowInput?.length ?? 0,
-        queriesDuringRun: r.queries, buildsDuringRun: r.builds,
+        queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
+        pagesDeleted: r.pages?.deleted,
       });
     }
   }
 } catch (error) {
   console.error("perf gate failed:", error);
+  report.error = String(error?.message || error);
   process.exitCode = 1;
 } finally {
   await setArm("gone");
@@ -167,15 +186,23 @@ const verdict = {
   queries: Math.max(...report.summary.queriesPerKey),
   strayKeys: report.results.reduce((n, r) => n + (r.strayKeys?.length || 0), 0),
 };
-verdict.pass = verdict.burrowP95Max <= 4 && verdict.paintP95Delta <= 5 && verdict.queries === 0 && verdict.strayKeys === 0;
+// A run that recorded no keys (or no Burrow samples with Burrow on) measured
+// nothing, so it can never count as a pass.
+verdict.emptyRuns = report.results.filter((r) => !r.keys || (r.arm === "on" && !r.burrowSamples)).length
+  + Math.max(0, runs * 2 - report.results.length);
+verdict.pass = !report.error && verdict.emptyRuns === 0 && verdict.burrowP95Max <= 4 && verdict.paintP95Delta <= 5 && verdict.queries === 0 && verdict.strayKeys === 0;
 report.verdict = verdict;
 if (args.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else {
-  console.log(`cost gate ${title}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)`);
+  console.log(`cost gate ${title}${drill ? " (drill)" : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);
   console.log(`  per-run p95 deltas: ${report.summary.paintP95Deltas.join(" / ")} ms; Burrow-absent paint p50 ${report.summary.paintP50.gone.join(" / ")} ms`);
-  console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}`);
+  console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);
+  if (drill) {
+    const on = report.results.filter((r) => r.arm === "on");
+    console.log(`  drill: ${on.map((r) => r.keys).join(" / ")} keys per run, data fetches ${on.map((r) => r.drillFetches).join(" / ")} per run, preview open at the end: ${on.every((r) => r.previewAtEnd)}`);
+  }
 }
 process.exitCode = process.exitCode || (verdict.pass ? 0 : 1);

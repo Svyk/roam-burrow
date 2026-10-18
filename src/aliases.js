@@ -40,7 +40,7 @@ export function buildAliasIndex(rows, keyword) {
   return { entries, byPage };
 }
 
-export function matchAliases(index, plan, { strict = false, limit = 3, skip } = {}) {
+export function matchAliases(index, plan, { strict = false, limit = 3, skip, picked = null } = {}) {
   if (!index || !plan) return [];
   const hits = [];
   for (const entry of index.entries) {
@@ -52,7 +52,8 @@ export function matchAliases(index, plan, { strict = false, limit = 3, skip } = 
     if (match.score < 0 || match.tier === "close") continue;
     hits.push({ ...entry, score: match.score, level: match.level, tier: match.tier });
   }
-  hits.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
+  const pick = (hit) => picked?.get(`${hit.uid}:${hit.alias}`) || 0;
+  hits.sort((a, b) => pick(b) - pick(a) || b.score - a.score || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
   return hits.slice(0, limit);
 }
 

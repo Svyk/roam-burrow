@@ -1,4 +1,4 @@
-/* Burrow v0.1.0 | MIT | generated; edit src/ */
+/* Burrow v0.2.0 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -169,7 +169,7 @@ function strictMatch(target, plan) {
     else if (target.compact === q.compact) score = 1120;
     else if (target.spaced.startsWith(q.spaced)) score = 980;
     else if (target.compact.startsWith(q.compact)) score = 940;
-    else if (wordIncludes(target.spaced, q.spaced)) score = 840;
+    else if (wordIncludes(target, q)) score = 840;
     else if (compactIncludes(target, q.compact)) score = 800;
     else {
       let at = -1, ordered = true, gap = 0;
@@ -183,7 +183,7 @@ function strictMatch(target, plan) {
         at = next;
       }
       if (ordered) score = 640 - Math.min(120, gap * 8);
-      else if (q.tokens.every((token) => target.tokens.includes(token))) score = 500;
+      else if (q.tokens.every((token) => tokenSet(target).has(token))) score = 500;
       else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) score = 440;
       else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6 && target.tokens.length >= q.compact.length && initialsOf(target).startsWith(q.compact)) score = 380;
     }
@@ -210,22 +210,52 @@ function strictPrefilter(plan) {
   test.initial = initial;
   return test;
 }
-function wordIncludes(haystack, needle) {
-  let from = 0;
-  for (; ; ) {
-    const at = haystack.indexOf(needle, from);
-    if (at < 0) return false;
-    if (at === 0 || haystack[at - 1] === " ") return true;
-    from = at + 1;
-  }
-}
-function compactIncludes(target, needle) {
-  let offset = 0;
-  for (const token of target.tokens) {
-    if (target.compact.startsWith(needle, offset)) return true;
-    offset += token.length;
+function wordIncludes(target, q) {
+  const words = q.tokens;
+  if (!words.length) return false;
+  const last = words.length - 1;
+  for (const i of tokensFrom(target, words[0][0])) {
+    if (i + last >= target.tokens.length) break;
+    let ok = true;
+    for (let k = 0; k <= last && ok; k++) {
+      const t = target.tokens[i + k];
+      ok = k === last ? t.startsWith(words[k]) : t === words[k];
+    }
+    if (ok) return true;
   }
   return false;
+}
+function compactIncludes(target, needle) {
+  if (!needle) return false;
+  for (const i of tokensFrom(target, needle[0])) {
+    let rest = needle;
+    for (let j = i; j < target.tokens.length; j++) {
+      const t = target.tokens[j];
+      if (rest.length <= t.length) {
+        if (t.startsWith(rest)) return true;
+        break;
+      }
+      if (!rest.startsWith(t)) break;
+      rest = rest.slice(t.length);
+    }
+  }
+  return false;
+}
+var NONE = [];
+function tokensFrom(key, ch) {
+  if (!key._byFirst) {
+    key._byFirst = /* @__PURE__ */ new Map();
+    key.tokens.forEach((token, i) => {
+      const list = key._byFirst.get(token[0]);
+      if (list) list.push(i);
+      else key._byFirst.set(token[0], [i]);
+    });
+  }
+  return key._byFirst.get(ch) || NONE;
+}
+function tokenSet(key) {
+  if (!key._set) key._set = new Set(key.tokens);
+  return key._set;
 }
 function recallTokenMatch(qForms, qOrig, tt, isInit) {
   const isNumQ = /^\d+$/.test(qOrig);
@@ -344,7 +374,7 @@ function buildAliasIndex(rows, keyword) {
   }
   return { entries, byPage };
 }
-function matchAliases(index, plan, { strict = false, limit = 3, skip } = {}) {
+function matchAliases(index, plan, { strict = false, limit = 3, skip, picked = null } = {}) {
   if (!index || !plan) return [];
   const hits = [];
   for (const entry of index.entries) {
@@ -353,7 +383,8 @@ function matchAliases(index, plan, { strict = false, limit = 3, skip } = {}) {
     if (match.score < 0 || match.tier === "close") continue;
     hits.push({ ...entry, score: match.score, level: match.level, tier: match.tier });
   }
-  hits.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
+  const pick = (hit) => picked?.get(`${hit.uid}:${hit.alias}`) || 0;
+  hits.sort((a, b) => pick(b) - pick(a) || b.score - a.score || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
   return hits.slice(0, limit);
 }
 function roamAliasesWillList(entry, query) {
@@ -382,7 +413,9 @@ async function buildRefIndexSliced(rows, aliasesByPage, { sliceMs = 8, yieldTo: 
 }
 function startRefIndex(rows) {
   const byUid = /* @__PURE__ */ new Map();
-  for (const [uid, string, refs] of rows || []) byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0 });
+  for (const [uid, string, refs, page] of rows || []) {
+    byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0, page: page ?? null });
+  }
   return { entries: [...byUid.values()], byUid, words: /* @__PURE__ */ new Map(), builtAt: Date.now() };
 }
 function keyEntry(entry, index, aliasesByPage) {
@@ -413,7 +446,7 @@ function keyEntry(entry, index, aliasesByPage) {
     }
   }
 }
-function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true } = {}) {
+function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
   if (!index || !plan) return [];
   const hits = /* @__PURE__ */ new Map();
   const consider = (entry, opts) => {
@@ -448,7 +481,9 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true } 
   }
   for (const hit of hits.values()) hit.quoter = hit.entry.quotes.some((uid) => uid !== hit.entry.uid && hits.has(uid));
   const rows = [...hits.values()];
-  rows.sort((a, b) => rankOf(b.match) - rankOf(a.match) || Number(a.quoter) - Number(b.quoter) || refStep(b.entry.refs) - refStep(a.entry.refs) || Number(b.viaAlias) - Number(a.viaAlias) || b.match.score - a.match.score || a.entry.string.length - b.entry.string.length || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
+  const pick = (hit) => picked?.get(hit.entry.uid) || 0;
+  const onPage = (hit) => Number(currentPage != null && hit.entry.page === currentPage);
+  rows.sort((a, b) => rankOf(b.match) - rankOf(a.match) || pick(b) - pick(a) || Number(a.quoter) - Number(b.quoter) || refStep(b.entry.refs) - refStep(a.entry.refs) || Number(b.viaAlias) - Number(a.viaAlias) || onPage(b) - onPage(a) || b.match.score - a.match.score || a.entry.string.length - b.entry.string.length || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
   return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter }) => ({
     uid: entry.uid,
     string: entry.string,
@@ -457,7 +492,9 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true } 
     tier: match.tier,
     score: match.score,
     viaAlias,
-    quoter
+    quoter,
+    picked: Boolean(picked?.get(entry.uid)),
+    onPage: currentPage != null && entry.page === currentPage
   }));
 }
 var PREFILTER_CACHE = 24;
@@ -492,10 +529,65 @@ function refStep(refs) {
   return Math.floor(Math.log2(1 + refs));
 }
 
+// src/titles.js
+function buildTitleIndex(rows, aliases, withContent = null) {
+  const byRaw = /* @__PURE__ */ new Map();
+  const byLower = /* @__PURE__ */ new Map();
+  const byCompact = /* @__PURE__ */ new Map();
+  const add = (map, key, page) => {
+    const list = map.get(key);
+    if (!list) map.set(key, [page]);
+    else if (!list.some((p) => p.uid === page.uid)) list.push(page);
+  };
+  for (const [title, uid] of rows || []) {
+    if (typeof title !== "string" || !title) continue;
+    if (withContent && /[#>]/.test(title) && !withContent.has(title)) continue;
+    const page = { title, uid };
+    byRaw.set(title, page);
+    add(byLower, title.toLowerCase(), page);
+    const compact = searchKey(title).compact;
+    if (compact) add(byCompact, compact, page);
+  }
+  const aliasLower = /* @__PURE__ */ new Map();
+  const aliasCompact = /* @__PURE__ */ new Map();
+  for (const entry of aliases?.entries || []) {
+    const page = { title: entry.title, uid: entry.uid };
+    add(aliasLower, entry.alias.toLowerCase(), page);
+    if (entry.key?.compact) add(aliasCompact, entry.key.compact, page);
+  }
+  const sorted = [...byLower.keys()].filter((t) => /[#>]/.test(t)).sort();
+  const one = (list) => list?.length === 1 ? list[0] : null;
+  return {
+    size: byRaw.size,
+    // Exact title, then case-insensitive, then separator-insensitive, then
+    // an alias; an ambiguous spelling resolves to nothing.
+    resolve(text) {
+      const raw = String(text ?? "").trim();
+      if (!raw) return null;
+      if (byRaw.has(raw)) return byRaw.get(raw);
+      const lower = raw.toLowerCase();
+      const compact = searchKey(raw).compact;
+      return one(byLower.get(lower)) || one(compact && byCompact.get(compact)) || one(aliasLower.get(lower)) || one(compact && aliasCompact.get(compact)) || null;
+    },
+    hasPrefix(lower) {
+      let lo = 0;
+      let hi = sorted.length;
+      while (lo < hi) {
+        const mid = lo + hi >> 1;
+        if (sorted[mid] < lower) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo < sorted.length && sorted[lo].startsWith(lower);
+    }
+  };
+}
+
 // src/indexes.js
 var TTL_MS = 6e4;
-var REFERENCED_BLOCKS = `[:find ?u ?s (count ?r)
-  :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u]]`;
+var REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
+  :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
+var TITLES = "[:find ?t ?u :where [?p :node/title ?t] [?p :block/uid ?u]]";
+var WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] [?p :block/children ?c]]";
 var ALIAS_PAGES = "[:find [?a ...] :in $ [?t ...] :where [?a :node/title ?t]]";
 var ALIAS_BLOCKS = `[:find ?s ?pt ?pu :in $ [?a ...]
   :where [?b :block/refs ?a] [?b :block/string ?s] [?b :block/page ?p] [?p :node/title ?pt] [?p :block/uid ?pu]]`;
@@ -503,6 +595,7 @@ var yieldTo = () => new Promise((resolve) => setTimeout(resolve, 0));
 function createIndexes({ api, perf, setting, idle }) {
   let aliases = null;
   let refs = null;
+  let titles = null;
   let builtAt = 0;
   let keyword = null;
   let pending = false;
@@ -517,9 +610,15 @@ function createIndexes({ api, perf, setting, idle }) {
     const pageIds = await q(ALIAS_PAGES, keywordTitles(nextKeyword));
     const aliasRows = pageIds?.length ? await q(ALIAS_BLOCKS, pageIds) : [];
     const rows = await q(REFERENCED_BLOCKS);
+    const titleRows = await q(TITLES);
+    const separated = (titleRows || []).map(([t]) => t).filter((t) => /[#>]/.test(t));
+    const withContent = new Set(separated.length ? await q(WITH_CONTENT, separated) : []);
     const t1 = performance.now();
     const nextAliases = buildAliasIndex(aliasRows, nextKeyword);
-    refs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
+    const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
+    await yieldTo();
+    titles = buildTitleIndex(titleRows, nextAliases, withContent);
+    refs = nextRefs;
     aliases = nextAliases;
     keyword = nextKeyword;
     builtAt = Date.now();
@@ -543,6 +642,9 @@ function createIndexes({ api, perf, setting, idle }) {
     },
     get refs() {
       return refs;
+    },
+    get titles() {
+      return titles;
     },
     schedule,
     build,
@@ -673,6 +775,56 @@ function createPerf(size = 512) {
   };
 }
 
+// src/picks.js
+var LIMIT = 200;
+var MIN_QUERY = 2;
+function createPickMemory({ storage, key }) {
+  let picks = null;
+  const load = () => {
+    if (picks) return picks;
+    try {
+      picks = JSON.parse(storage?.getItem(key) || "[]");
+    } catch {
+      picks = [];
+    }
+    if (!Array.isArray(picks)) picks = [];
+    return picks;
+  };
+  const save = () => {
+    try {
+      storage?.setItem(key, JSON.stringify(picks));
+    } catch {
+    }
+  };
+  return {
+    record(kind, query, uid) {
+      const q = searchKey(query).compact;
+      if (q.length < MIN_QUERY || !uid) return;
+      const list = load().filter((p) => !(p.kind === kind && p.q === q && p.uid === uid));
+      list.push({ kind, q, uid, t: Date.now() });
+      picks = list.slice(-LIMIT);
+      save();
+    },
+    // uid -> recency rank (higher is more recent) for picks made with this
+    // query or a longer one that starts with it.
+    lookup(kind, query) {
+      const q = searchKey(query).compact;
+      const found = /* @__PURE__ */ new Map();
+      if (q.length < MIN_QUERY) return found;
+      const list = load();
+      for (let i = 0; i < list.length; i++) {
+        const p = list[i];
+        if (p.kind === kind && p.q.startsWith(q)) found.set(p.uid, i + 1);
+      }
+      return found;
+    },
+    clear() {
+      picks = [];
+      save();
+    }
+  };
+}
+
 // src/settings.js
 var DEFAULTS = Object.freeze({
   aliasPages: true,
@@ -680,6 +832,10 @@ var DEFAULTS = Object.freeze({
   refRanking: true,
   refPreselect: true,
   betterMatch: true,
+  drill: true,
+  drillPreview: true,
+  pickMemory: false,
+  pageBoost: true,
   aliasKeyword: "Aliases",
   aliasLinkFormat: "[alias]([[Page]])",
   perfHud: false
@@ -690,6 +846,10 @@ var SWITCHES = [
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
+  ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
+  ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, highlighted. Drill-down still works without it."],
+  ["pickMemory", "Pick memory", "A Burrow row you picked ranks first the next time you type the same query. Kept in this browser only."],
+  ["pageBoost", "Current page first", "Among equal referenced blocks in ((, blocks on the page you are editing rank first."],
   ["perfHud", "Performance readout", "Shows Burrow's per-key cost (p50/p95) in the corner. Also at window.__BURROW_PERF."]
 ];
 function createSettingsReader(extensionAPI) {
@@ -729,6 +889,354 @@ async function initializeSettings(extensionAPI) {
   for (const [id, value] of Object.entries(DEFAULTS)) {
     if (extensionAPI.settings.get(id) == null) await extensionAPI.settings.set(id, value);
   }
+}
+
+// src/drill.js
+function parseSteps(rest) {
+  if (!rest || rest[0] !== "#" && rest[0] !== ">") return null;
+  let heading = null;
+  let tail = rest;
+  if (rest[0] === "#") {
+    const gt = rest.indexOf(">");
+    heading = (gt < 0 ? rest.slice(1) : rest.slice(1, gt)).trim();
+    tail = gt < 0 ? "" : rest.slice(gt);
+  }
+  const steps = tail ? tail.slice(1).split(">").map((q) => q.trim()) : [];
+  return { heading, steps };
+}
+function parseDrill(query, titles) {
+  const text = String(query ?? "");
+  if (!/[#>]/.test(text) || !titles) return null;
+  const lower = text.trim().toLowerCase();
+  if (titles.hasPrefix(lower)) return null;
+  for (let at = text.length - 1; at > 0; at--) {
+    if (text[at] !== "#" && text[at] !== ">") continue;
+    const title = text.slice(0, at).trim();
+    if (!title) continue;
+    const page = titles.resolve(title);
+    if (!page) continue;
+    const parsed = parseSteps(text.slice(at));
+    if (!parsed) continue;
+    return { page, typedTitle: title, ...parsed };
+  }
+  return null;
+}
+function bestMatch(candidates, query, { strict = false, first } = {}) {
+  if (!candidates.length) return null;
+  const plan = query ? searchPlan(query) : null;
+  let ties = candidates;
+  if (plan) {
+    let bestScore = -1;
+    ties = [];
+    for (const node of candidates) {
+      const match = matchFromKey(nodeKey(node), plan, { strict });
+      if (match.score < 0) continue;
+      if (match.score > bestScore) {
+        bestScore = match.score;
+        ties = [node];
+      } else if (match.score === bestScore) ties.push(node);
+    }
+  }
+  if (!ties.length) return null;
+  return ties.length > 1 && first ? first(ties) : ties[0];
+}
+function nodeKey(node) {
+  if (!node.key) node.key = searchKey(stripRoamMarkup(node.string ?? node.title ?? ""));
+  return node.key;
+}
+function resolveDrill(parsed, source, { strict = false } = {}) {
+  const { page } = parsed;
+  let target = null;
+  let failedAt = null;
+  if (parsed.heading != null) {
+    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first });
+    if (hit) target = hit;
+    else failedAt = 0;
+  }
+  if (failedAt == null) {
+    for (let i = 0; i < parsed.steps.length; i++) {
+      const kids = source.children(target ? target.uid : page.uid) || [];
+      const hit = bestMatch(kids, parsed.steps[i], { strict });
+      if (!hit) {
+        failedAt = i + (parsed.heading != null ? 1 : 0);
+        break;
+      }
+      target = hit;
+    }
+  }
+  return {
+    page,
+    target,
+    failedAt,
+    insertion: target ? `((${target.uid}))` : `[[${page.title}]]`
+  };
+}
+
+// src/pagetree.js
+var TWO_LEVELS = `[:block/uid :node/title :block/string :block/heading :block/order
+  {:block/children [:block/uid :block/string :block/heading :block/order
+    {:block/children [:block/uid :block/string :block/heading :block/order {:block/children [:block/uid]}]}]}]`;
+var UP = "[:block/uid :node/title :block/string :block/heading :block/order {:block/_children ...}]";
+var PAGE_ID = "[:db/id]";
+var HEADINGS = "[:find ?b ?h :in $ ?p :where [?b :block/page ?p] [?b :block/heading ?h]]";
+var HEADING = "[:block/uid :block/string :block/heading :block/order]";
+var FIRST_SCAN_LIMIT = 3e3;
+function createTreeSource({ pull, q, onFetch }) {
+  const nodes = /* @__PURE__ */ new Map();
+  const headingsByPage = /* @__PURE__ */ new Map();
+  const trails = /* @__PURE__ */ new Map();
+  const node = (raw) => {
+    const uid = raw[":block/uid"];
+    let n = nodes.get(uid);
+    if (!n) {
+      n = {
+        uid,
+        string: raw[":block/string"] ?? null,
+        title: raw[":node/title"] ?? null,
+        heading: raw[":block/heading"] || 0,
+        order: raw[":block/order"] ?? 0,
+        kids: null
+      };
+      nodes.set(uid, n);
+    } else if (n.string == null && raw[":block/string"] != null) {
+      n.string = raw[":block/string"];
+      n.heading = raw[":block/heading"] || 0;
+      n.order = raw[":block/order"] ?? n.order;
+    }
+    return n;
+  };
+  const sortKids = (raw) => [...raw[":block/children"] || []].sort((a, b) => (a[":block/order"] ?? 0) - (b[":block/order"] ?? 0));
+  function load(uid) {
+    onFetch?.("pull");
+    const raw = pull(TWO_LEVELS, [":block/uid", uid]);
+    if (!raw) return [];
+    const self = node(raw);
+    self.kids = sortKids(raw).map((child) => {
+      const c = node(child);
+      c.kids = sortKids(child).map((grand) => {
+        const g = node(grand);
+        if (!g.kids && !grand[":block/children"]?.length) g.kids = [];
+        return g;
+      });
+      return c;
+    });
+    return self.kids;
+  }
+  function children(uid) {
+    return nodes.get(uid)?.kids || load(uid);
+  }
+  function twoLevels(uid) {
+    const kids = children(uid);
+    return kids.some((k) => k.kids == null) ? load(uid) : kids;
+  }
+  function headings(pageUid) {
+    if (headingsByPage.has(pageUid)) return headingsByPage.get(pageUid);
+    onFetch?.("query");
+    const page = pull(PAGE_ID, [":block/uid", pageUid]);
+    const rows = page ? q(HEADINGS, page[":db/id"]) || [] : [];
+    const list = [];
+    for (const [eid, heading] of rows) {
+      if (!(heading > 0)) continue;
+      const raw = pull(HEADING, eid);
+      if (raw) list.push(node(raw));
+    }
+    headingsByPage.set(pageUid, list);
+    return list;
+  }
+  function trail(uid) {
+    if (trails.has(uid)) return trails.get(uid);
+    onFetch?.("pull");
+    const raw = pull(UP, [":block/uid", uid]);
+    const chain = [];
+    let at = raw?.[":block/_children"]?.[0];
+    while (at) {
+      chain.unshift(node(at));
+      at = at[":block/_children"]?.[0];
+    }
+    const self = raw ? node(raw) : null;
+    if (self && raw[":block/order"] != null) self.order = raw[":block/order"];
+    trails.set(uid, chain);
+    return chain;
+  }
+  function first(candidates) {
+    const want = new Set(candidates.map((c) => c.uid));
+    const page = trail(candidates[0].uid)[0];
+    if (page) {
+      let seen = 0;
+      const stack = [page.uid];
+      while (stack.length && seen < FIRST_SCAN_LIMIT) {
+        const uid = stack.pop();
+        seen += 1;
+        if (want.has(uid)) return nodes.get(uid);
+        const kids = children(uid);
+        for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i].uid);
+      }
+    }
+    const path = (c) => trail(c.uid).slice(1).map((a) => a.order).concat(nodes.get(c.uid)?.order ?? 0);
+    return [...candidates].sort((a, b) => {
+      const pa = path(a);
+      const pb = path(b);
+      for (let i = 0; i < Math.min(pa.length, pb.length); i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+      return pa.length - pb.length;
+    })[0];
+  }
+  return {
+    children,
+    twoLevels,
+    headings,
+    trail,
+    first,
+    get: (uid) => nodes.get(uid) || null,
+    clear() {
+      nodes.clear();
+      headingsByPage.clear();
+      trails.clear();
+    },
+    get size() {
+      return nodes.size;
+    }
+  };
+}
+
+// src/preview.js
+var SIBLING_WINDOW = 24;
+var CHILD_LIMIT = 16;
+var ITEM_LIMIT = 80;
+var GAP = 4;
+var WIDTH = 400;
+var MAX_HEIGHT = 300;
+var DRILL_CLASS = "burrow-drill";
+function previewModel(result, tree, text) {
+  const { page, target } = result;
+  const trailNodes = target ? tree.trail(target.uid) : [];
+  const parentUid = trailNodes.length ? trailNodes[trailNodes.length - 1].uid : page.uid;
+  const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
+  const items = [];
+  const pushKids = (uid, depth, levels) => {
+    const kids = levels > 1 ? tree.twoLevels(uid) : tree.children(uid);
+    for (const kid of kids.slice(0, CHILD_LIMIT)) {
+      if (items.length >= ITEM_LIMIT) return;
+      items.push({ uid: kid.uid, text: text(kid.string || ""), depth, heading: kid.heading, target: false });
+      if (levels > 1 && kid.kids?.length) pushKids(kid.uid, depth + 1, levels - 1);
+    }
+    if (kids.length > CHILD_LIMIT) items.push({ more: kids.length - CHILD_LIMIT, depth });
+  };
+  if (!target) {
+    pushKids(page.uid, 0, 2);
+    return { key: `page:${page.uid}`, trail, items };
+  }
+  const siblings = tree.children(parentUid);
+  let at = siblings.findIndex((s) => s.uid === target.uid);
+  if (at < 0) at = 0;
+  const from = Math.max(0, Math.min(at - Math.floor(SIBLING_WINDOW / 2), siblings.length - SIBLING_WINDOW));
+  if (from > 0) items.push({ more: from, depth: 0 });
+  for (const sib of siblings.slice(from, from + SIBLING_WINDOW)) {
+    const isTarget = sib.uid === target.uid;
+    items.push({ uid: sib.uid, text: text(sib.string || ""), depth: 0, heading: sib.heading, target: isTarget });
+    if (isTarget) pushKids(target.uid, 1, 2);
+  }
+  if (from + SIBLING_WINDOW < siblings.length) items.push({ more: siblings.length - from - SIBLING_WINDOW, depth: 0 });
+  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), depth: 0, heading: target.heading, target: true });
+  return { key: `node:${target.uid}`, trail, items };
+}
+function createPreview({ doc, win, lifecycle }) {
+  const pane = doc.createElement("div");
+  pane.className = "burrow-preview bp3-elevation-3";
+  pane.hidden = true;
+  pane.setAttribute("aria-hidden", "true");
+  const trailNode = doc.createElement("div");
+  trailNode.className = "burrow-trail";
+  const outline = doc.createElement("div");
+  outline.className = "burrow-outline";
+  pane.append(trailNode, outline);
+  lifecycle.node(pane, doc.body);
+  let shownKey = null;
+  let pop = null;
+  function render(model) {
+    trailNode.replaceChildren();
+    model.trail.forEach((part, i) => {
+      if (i) trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-sep", textContent: " › " }));
+      trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
+    });
+    const rows = model.items.map((item) => {
+      const row = doc.createElement("div");
+      row.className = "burrow-node";
+      row.style.setProperty("--burrow-depth", String(item.depth));
+      if (item.more != null) {
+        row.classList.add("burrow-more");
+        row.textContent = `… ${item.more} more`;
+        return row;
+      }
+      if (item.heading) row.classList.add(`burrow-h${item.heading}`);
+      if (item.target) row.classList.add("burrow-target");
+      const bullet = Object.assign(doc.createElement("span"), { className: "burrow-bullet" });
+      const body = Object.assign(doc.createElement("span"), { className: "burrow-body", textContent: item.text || " " });
+      row.append(bullet, body);
+      return row;
+    });
+    outline.replaceChildren(...rows);
+  }
+  function place() {
+    const native = pop.querySelector(".rm-autocomplete__preview");
+    if (native && pop.classList.contains("rm-autocomplete__results--expanded")) {
+      const r2 = native.getBoundingClientRect();
+      Object.assign(pane.style, {
+        left: `${Math.round(r2.left)}px`,
+        top: `${Math.round(r2.top)}px`,
+        width: `${Math.round(r2.width)}px`,
+        height: `${Math.round(r2.height)}px`,
+        maxHeight: ""
+      });
+      pane.classList.add("burrow-preview-docked");
+      return;
+    }
+    const r = pop.getBoundingClientRect();
+    const height = Math.min(MAX_HEIGHT, pane.scrollHeight || MAX_HEIGHT);
+    let left = r.right + GAP;
+    let top = r.top;
+    if (left + WIDTH > win.innerWidth) {
+      if (r.left - GAP - WIDTH >= 0) left = r.left - GAP - WIDTH;
+      else {
+        left = Math.max(0, Math.min(r.left, win.innerWidth - WIDTH));
+        top = r.bottom + GAP + height <= win.innerHeight ? r.bottom + GAP : Math.max(0, r.top - GAP - height);
+      }
+    }
+    Object.assign(pane.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, width: `${WIDTH}px`, height: "", maxHeight: `${MAX_HEIGHT}px` });
+    pane.classList.remove("burrow-preview-docked");
+  }
+  function scrollToTarget() {
+    const target = outline.querySelector(".burrow-target");
+    if (!target) {
+      pane.scrollTop = 0;
+      return;
+    }
+    const top = target.offsetTop - trailNode.offsetHeight;
+    const bottom = target.offsetTop + target.offsetHeight;
+    if (top < pane.scrollTop) pane.scrollTop = Math.max(0, top - 4);
+    else if (bottom > pane.scrollTop + pane.clientHeight) pane.scrollTop = bottom - pane.clientHeight + 4;
+  }
+  return {
+    node: pane,
+    show(model, popover) {
+      if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
+      pop = popover;
+      pop.classList.add(DRILL_CLASS);
+      const changed = model.key !== shownKey || pane.hidden;
+      if (model.key !== shownKey) {
+        render(model);
+        shownKey = model.key;
+      }
+      pane.hidden = false;
+      place();
+      if (changed) scrollToTarget();
+    },
+    hide() {
+      pane.hidden = true;
+      shownKey = null;
+      if (pop) pop.classList.remove(DRILL_CLASS);
+      pop = null;
+    }
+  };
 }
 
 // src/theme.js
@@ -798,7 +1306,7 @@ var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
 var POPUP_WAIT_FRAMES = 12;
 var valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
-function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, win = window }) {
+function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc = document, win = window }) {
   const st = {
     phase: "IDLE",
     ta: null,
@@ -806,6 +1314,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     uid: null,
     rows: [],
     active: -1,
+    drill: null,
+    pageTitle: null,
     pop: null,
     composing: false,
     ignoreNextInput: false,
@@ -823,29 +1333,55 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
   strip.setAttribute("role", "listbox");
   strip.hidden = true;
   lifecycle.node(strip, doc.body);
-  const anyFeature = () => setting("aliasPages") || setting("refRanking");
+  const preview = createPreview({ doc, win, lifecycle });
+  const fast = api.data?.fast?.q ? (query, ...args) => api.data.fast.q(query, ...args) : (query, ...args) => api.q(query, ...args);
+  const tree = createTreeSource({
+    pull: (pattern, eid) => api.pull(pattern, eid),
+    q: fast,
+    onFetch: (kind) => {
+      perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1;
+    }
+  });
+  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill");
   const isBlockInput = (el) => el?.tagName === "TEXTAREA" && el.classList.contains("rm-block-input");
   function rank(token) {
+    st.drill = null;
+    const recall = setting("betterMatch");
+    if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
+      const parsed = parseDrill(token.query, indexes.titles);
+      if (parsed) {
+        const result = resolveDrill(parsed, tree, { strict: !recall });
+        st.drill = { ...result, key: `${result.page.uid}:${result.target?.uid ?? ""}` };
+        return [drillRow(result)];
+      }
+    }
     const plan = searchPlan(token.query);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
-    const recall = setting("betterMatch");
+    const memory = setting("pickMemory") ? picks : null;
     if (token.kind === "((") {
       if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
-      return rankRefs(indexes.refs, plan, { limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand") }).map((hit) => ({
+      return rankRefs(indexes.refs, plan, {
+        limit: ROW_LIMIT,
+        recall,
+        aliasExpand: setting("aliasExpand"),
+        picked: memory?.lookup("ref", token.query),
+        currentPage: setting("pageBoost") ? st.pageTitle : null
+      }).map((hit) => ({
         kind: "ref",
         key: `ref:${hit.uid}`,
         uid: hit.uid,
         refs: hit.refs,
         level: hit.level,
         text: displayText(hit.string),
-        insertion: `((${hit.uid}))`
+        insertion: `((${hit.uid}))`,
+        pick: hit.uid
       }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
     const format = setting("aliasLinkFormat");
-    return matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity }).map((hit) => ({
+    return matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: memory?.lookup("alias", token.query) }).map((hit) => ({
       kind: "alias",
       key: `alias:${hit.uid}:${hit.alias}`,
       uid: hit.uid,
@@ -853,8 +1389,30 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
       title: hit.title,
       level: hit.level,
       insertion: aliasInsertion(hit, format),
-      seenByRoamAliases: hit.seenByRoamAliases
+      seenByRoamAliases: hit.seenByRoamAliases,
+      pick: `${hit.uid}:${hit.alias}`
     }));
+  }
+  function drillRow(result) {
+    const { page, target } = result;
+    let crumb = page.title;
+    if (target) {
+      const parents = tree.trail(target.uid);
+      if (parents.length > 1) crumb = readableText(parents[parents.length - 1].string);
+    }
+    return {
+      kind: "drill",
+      key: `drill:${result.insertion}`,
+      uid: target?.uid ?? page.uid,
+      level: 3,
+      insertion: result.insertion,
+      crumb: target ? crumb : null,
+      text: target ? readableText(target.string) : page.title
+    };
+  }
+  function readableText(string) {
+    const byUid = indexes.refs?.byUid;
+    return String(string ?? "").replace(/\(\(([\w-]{9})\)\)/g, (m, uid) => byUid?.get(uid)?.string ?? tree.get(uid)?.string ?? m).replace(/^\s*([^:\n`]{1,80})::/, "$1:").replace(/\{\{\[\[(TODO|DONE)\]\]\}\}\s*/g, "").replace(/\[([^\]]*)\]\(\[\[[^\]]*\]\]\)/g, "$1").replace(/#?\[\[([^\]]*)\]\]/g, "$1").replace(/\*\*|\^\^|__|~~/g, "").replace(/\s+/g, " ").trim();
   }
   function displayText(string) {
     const byUid = indexes.refs?.byUid;
@@ -862,6 +1420,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     return stripRoamMarkup(resolved).replace(/\s+/g, " ").trim();
   }
   let roamAliasesSheet = null;
+  let blockHighlight = null;
   const detectRoamAliases = () => {
     for (const sheet of doc.styleSheets) {
       let rules;
@@ -871,10 +1430,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
         continue;
       }
       for (const rule of rules) {
-        if (rule.selectorText?.includes(".rm-aliases")) {
-          roamAliasesSheet = sheet.ownerNode;
-          return;
+        if (!blockHighlight && rule.selectorText === ".block-highlight-blue" && rule.style?.backgroundColor) {
+          blockHighlight = rule.style.backgroundColor;
         }
+        if (!roamAliasesSheet && rule.selectorText?.includes(".rm-aliases")) roamAliasesSheet = sheet.ownerNode;
       }
     }
   };
@@ -895,7 +1454,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
   });
   function visibleRows() {
     if (!st.pop) return [];
-    if (st.token?.kind !== "[[") return st.rows.slice(0, ROW_LIMIT);
+    if (st.token?.kind !== "[[" || st.drill) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = /* @__PURE__ */ new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
       const title = row.getAttribute("title");
@@ -932,10 +1491,23 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const preselect = st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && st.released !== releaseKey();
+    const preselect = (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2) && st.released !== releaseKey();
     if (st.phase === "ARMED" && preselect && st.active < 0) own(0);
     place(rows.length);
     paintActive();
+    showPreview();
+  }
+  let model = null;
+  function showPreview() {
+    if (!st.drill || !setting("drillPreview") || !st.pop) {
+      preview.hide();
+      return;
+    }
+    if (model?.drillKey !== st.drill.key) {
+      model = previewModel(st.drill, tree, readableText);
+      model.drillKey = st.drill.key;
+    }
+    preview.show(model, st.pop);
   }
   function rowNode(row, i) {
     const node = doc.createElement("div");
@@ -947,6 +1519,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     if (row.kind === "alias") {
       text.append(highlight(row.alias), Object.assign(doc.createElement("span"), { className: "burrow-arrow", textContent: " ↳ " }), row.title);
       node.title = `${row.alias} → ${row.title}`;
+    } else if (row.kind === "drill") {
+      if (row.crumb) text.append(Object.assign(doc.createElement("span"), { className: "burrow-trail-inline", textContent: `${row.crumb} › ` }));
+      text.append(row.text);
+      node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
       text.append(highlight(row.text));
       node.title = row.text;
@@ -1004,12 +1580,20 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     const activeRow = [...pop.querySelectorAll(NATIVE_ROWS)].find((row) => row.style.backgroundColor);
     if (activeRow) strip.style.setProperty("--burrow-active", win.getComputedStyle(activeRow).backgroundColor);
     else strip.style.removeProperty("--burrow-active");
-    strip.classList.toggle("burrow-dark", isDarkHost(doc));
+    const dark = isDarkHost(doc);
+    strip.classList.toggle("burrow-dark", dark);
+    for (const name of ["--burrow-bg", "--burrow-fg"]) preview.node.style.setProperty(name, strip.style.getPropertyValue(name));
+    preview.node.style.zIndex = strip.style.zIndex;
+    preview.node.style.font = strip.style.font;
+    if (blockHighlight) preview.node.style.setProperty("--burrow-highlight", dark ? `color-mix(in srgb, ${blockHighlight} 28%, transparent)` : blockHighlight);
+    else preview.node.style.removeProperty("--burrow-highlight");
+    preview.node.classList.toggle("burrow-dark", dark);
   }
   function hideStrip() {
     strip.hidden = true;
+    preview.hide();
     if (st.pop) {
-      st.pop.classList.remove(OWNS, ...PAD_CLASSES);
+      st.pop.classList.remove(OWNS, DRILL_CLASS, ...PAD_CLASSES);
     }
   }
   function attach(pop) {
@@ -1038,7 +1622,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
   function detach() {
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
-    if (st.pop) st.pop.classList.remove(OWNS, ...PAD_CLASSES);
+    preview.hide();
+    if (st.pop) st.pop.classList.remove(OWNS, DRILL_CLASS, ...PAD_CLASSES);
     st.pop = null;
   }
   let frameQueued = false;
@@ -1090,6 +1675,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     st.active = -1;
     st.token = null;
     st.released = null;
+    st.drill = null;
+    model = null;
+    tree.clear();
     shown = [];
     shownQuery = null;
     strip.replaceChildren();
@@ -1115,6 +1703,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     if (!token) return reset("no-token");
     if (st.ta !== ta || st.token?.start !== token.start) {
       st.uid = api.ui.getFocusedBlock?.()?.["block-uid"] ?? null;
+      st.pageTitle = ta.closest?.("[data-page-title]")?.getAttribute("data-page-title") ?? null;
       st.active = -1;
       if (st.phase === "OWNED") st.phase = "ARMED";
     }
@@ -1182,6 +1771,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
       return;
     }
     if (event.shiftKey && key !== "Tab") return;
+    if (shown[st.active]?.kind === "drill" && (key === "ArrowDown" || key === "ArrowUp")) {
+      consume(event);
+      return;
+    }
     switch (key) {
       case "ArrowDown":
         if (st.active < count - 1) st.active += 1;
@@ -1236,6 +1829,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
     valueSetter.call(ta, next);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     st.ignoreNextInput = false;
+    if (row.pick && setting("pickMemory")) picks?.record(row.kind, token.query, row.pick);
     reset("committed");
     debug.commits += 1;
     trace({ ev: "commit", row: row.key });
@@ -1295,15 +1889,23 @@ function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, w
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
   lifecycle.add(() => reset("unload"));
-  return { state: st, debug, reset };
+  return { state: st, debug, reset, tree };
 }
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // src/extension.js
-var VERSION = "0.1.0";
+var VERSION = "0.2.0";
 var activeLifecycle = null;
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost"];
+function safeLocalStorage() {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
 function idleScheduler(lifecycle) {
   let pending = null;
   lifecycle.add(() => {
@@ -1354,11 +1956,12 @@ async function onload({ extensionAPI, extension }) {
     }));
     if (api && globalThis.document) {
       indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle) });
-      const strip = createStrip({ setting, indexes, perf, lifecycle, api });
+      const picks = createPickMemory({ storage: safeLocalStorage(), key: `burrow:picks:${api.graph?.name ?? "graph"}` });
+      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks });
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, picks };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;
@@ -1367,7 +1970,7 @@ async function onload({ extensionAPI, extension }) {
     await lifecycle.command(extensionAPI.ui.commandPalette, {
       label: "Burrow: Disable all features",
       callback: async () => {
-        for (const id of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch"]) {
+        for (const id of FEATURES) {
           await extensionAPI.settings.set(id, false);
         }
       }

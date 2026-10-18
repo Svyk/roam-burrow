@@ -181,7 +181,7 @@ function strictMatch(target, plan) {
     else if (target.compact === q.compact) score = 1120;
     else if (target.spaced.startsWith(q.spaced)) score = 980;
     else if (target.compact.startsWith(q.compact)) score = 940;
-    else if (wordIncludes(target.spaced, q.spaced)) score = 840;
+    else if (wordIncludes(target, q)) score = 840;
     else if (compactIncludes(target, q.compact)) score = 800;
     else {
       let at = -1, ordered = true, gap = 0;
@@ -192,7 +192,7 @@ function strictMatch(target, plan) {
         at = next;
       }
       if (ordered) score = 640 - Math.min(120, gap * 8);
-      else if (q.tokens.every((token) => target.tokens.includes(token))) score = 500;
+      else if (q.tokens.every((token) => tokenSet(target).has(token))) score = 500;
       else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) score = 440;
       else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6
           && target.tokens.length >= q.compact.length
@@ -231,26 +231,61 @@ export function strictPrefilter(plan) {
 }
 
 // Burrow change from Thymer: a spaced substring must start on a word
-// boundary, so "ant man" does not hit "important manual" (spec §3).
-function wordIncludes(haystack, needle) {
-  let from = 0;
-  for (;;) {
-    const at = haystack.indexOf(needle, from);
-    if (at < 0) return false;
-    if (at === 0 || haystack[at - 1] === " ") return true;
-    from = at + 1;
+// boundary, so "ant man" does not hit "important manual" (spec §3). Both
+// checks walk only the target tokens that start with the needle's first
+// letter: long blocks are scored on every keystroke, and a text scan for a
+// short needle like "ant" stops inside every "important" and "want".
+function wordIncludes(target, q) {
+  const words = q.tokens;
+  if (!words.length) return false;
+  const last = words.length - 1;
+  for (const i of tokensFrom(target, words[0][0])) {
+    if (i + last >= target.tokens.length) break;
+    let ok = true;
+    for (let k = 0; k <= last && ok; k++) {
+      const t = target.tokens[i + k];
+      ok = k === last ? t.startsWith(words[k]) : t === words[k];
+    }
+    if (ok) return true;
   }
+  return false;
 }
 
 // Same boundary rule for the separator-free form: the hit must start where a
 // target token starts ("antman" hits "ant man", not "important manual").
 function compactIncludes(target, needle) {
-  let offset = 0;
-  for (const token of target.tokens) {
-    if (target.compact.startsWith(needle, offset)) return true;
-    offset += token.length;
+  if (!needle) return false;
+  for (const i of tokensFrom(target, needle[0])) {
+    let rest = needle;
+    for (let j = i; j < target.tokens.length; j++) {
+      const t = target.tokens[j];
+      if (rest.length <= t.length) {
+        if (t.startsWith(rest)) return true;
+        break;
+      }
+      if (!rest.startsWith(t)) break;
+      rest = rest.slice(t.length);
+    }
   }
   return false;
+}
+
+const NONE = [];
+function tokensFrom(key, ch) {
+  if (!key._byFirst) {
+    key._byFirst = new Map();
+    key.tokens.forEach((token, i) => {
+      const list = key._byFirst.get(token[0]);
+      if (list) list.push(i);
+      else key._byFirst.set(token[0], [i]);
+    });
+  }
+  return key._byFirst.get(ch) || NONE;
+}
+
+function tokenSet(key) {
+  if (!key._set) key._set = new Set(key.tokens);
+  return key._set;
 }
 
 function recallTokenMatch(qForms, qOrig, tt, isInit) {

@@ -7,7 +7,8 @@ const PAGE_REF = /\[\[([^[\]]+)\]\]|#([^\s[\]#,]+)/g;
 // paragraphs that dominates the per-key cost, so it only runs on short blocks.
 const RECALL_MAX_TOKENS = 40;
 
-// rows: [uid, string, inboundRefCount] for blocks that other blocks reference.
+// rows: [uid, string, inboundRefCount, pageTitle] for blocks that other
+// blocks reference.
 // aliasesByPage: Map(pageTitle -> [alias]) for alias query expansion.
 export function buildRefIndex(rows, aliasesByPage = new Map()) {
   const index = startRefIndex(rows);
@@ -31,7 +32,9 @@ export async function buildRefIndexSliced(rows, aliasesByPage, { sliceMs = 8, yi
 
 function startRefIndex(rows) {
   const byUid = new Map();
-  for (const [uid, string, refs] of rows || []) byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0 });
+  for (const [uid, string, refs, page] of rows || []) {
+    byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0, page: page ?? null });
+  }
   return { entries: [...byUid.values()], byUid, words: new Map(), builtAt: Date.now() };
 }
 
@@ -68,11 +71,13 @@ function keyEntry(entry, index, aliasesByPage) {
   }
 }
 
-// Ranking (spec §3): match band, originals before quoters, inbound refs in
-// log2 steps, alias hit, score, shorter text, uid. Pass 1 is strict only;
+// Ranking (spec §3): match band, a row picked before for this query (pick
+// memory, most recent first), originals before quoters, inbound refs in log2
+// steps, alias hit, on the page being edited, score, shorter text, uid.
+// Pass 1 is strict only;
 // recall (typos, abbreviations) runs only when the strip is not yet full,
 // because recall rows rank below every strict row.
-export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true } = {}) {
+export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
   if (!index || !plan) return [];
   const hits = new Map();
   const consider = (entry, opts) => {
@@ -111,15 +116,20 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
   }
   for (const hit of hits.values()) hit.quoter = hit.entry.quotes.some((uid) => uid !== hit.entry.uid && hits.has(uid));
   const rows = [...hits.values()];
+  const pick = (hit) => picked?.get(hit.entry.uid) || 0;
+  const onPage = (hit) => Number(currentPage != null && hit.entry.page === currentPage);
   rows.sort((a, b) => rankOf(b.match) - rankOf(a.match)
+    || pick(b) - pick(a)
     || Number(a.quoter) - Number(b.quoter)
     || refStep(b.entry.refs) - refStep(a.entry.refs)
     || Number(b.viaAlias) - Number(a.viaAlias)
+    || onPage(b) - onPage(a)
     || b.match.score - a.match.score
     || a.entry.string.length - b.entry.string.length
     || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
   return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter }) => ({
     uid: entry.uid, string: entry.string, refs: entry.refs, level: match.level, tier: match.tier, score: match.score, viaAlias, quoter,
+    picked: Boolean(picked?.get(entry.uid)), onPage: currentPage != null && entry.page === currentPage,
   }));
 }
 

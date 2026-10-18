@@ -6,6 +6,10 @@ export const DEFAULTS = Object.freeze({
   refRanking: true,
   refPreselect: true,
   betterMatch: true,
+  drill: true,
+  drillPreview: true,
+  pickMemory: false,
+  pageBoost: true,
   aliasKeyword: "Aliases",
   aliasLinkFormat: "[alias]([[Page]])",
   perfHud: false,
@@ -17,6 +21,10 @@ const SWITCHES = [
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
+  ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
+  ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, highlighted. Drill-down still works without it."],
+  ["pickMemory", "Pick memory", "A Burrow row you picked ranks first the next time you type the same query. Kept in this browser only."],
+  ["pageBoost", "Current page first", "Among equal referenced blocks in ((, blocks on the page you are editing rank first."],
   ["perfHud", "Performance readout", "Shows Burrow's per-key cost (p50/p95) in the corner. Also at window.__BURROW_PERF."],
 ];
 

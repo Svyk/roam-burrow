@@ -1,4 +1,7 @@
 import { aliasInsertion, matchAliases, roamAliasesWillList } from "./aliases.js";
+import { parseDrill, resolveDrill } from "./drill.js";
+import { createTreeSource } from "./pagetree.js";
+import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { rankRefs } from "./refindex.js";
 import { searchPlan, stripRoamMarkup } from "./search.js";
 import { isDarkHost } from "./theme.js";
@@ -19,9 +22,12 @@ const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaEleme
 //   ARMED - strip shown, Roam's popup holds selection, no key consumed except
 //           ↑ from Roam's first row, which moves selection into the strip.
 //   OWNED - a strip row is active; Burrow consumes ↑ ↓ Enter Tab only.
-export function createStrip({ setting, indexes, perf, lifecycle, api, doc = document, win = window }) {
+// Drill (spec §5) is OWNED with one row, the block the expression resolves
+// to: Enter and Tab insert it, ↑ and ↓ do nothing (no arrow keys in the
+// preview), Esc passes through. Deleting the `#` or `>` ends drill mode.
+export function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc = document, win = window }) {
   const st = {
-    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1,
+    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
   };
   const debug = { lastFailure: null, commits: 0, trace: [] };
@@ -35,23 +41,43 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
   strip.setAttribute("role", "listbox");
   strip.hidden = true;
   lifecycle.node(strip, doc.body);
+  const preview = createPreview({ doc, win, lifecycle });
+  const fast = api.data?.fast?.q ? (query, ...args) => api.data.fast.q(query, ...args) : (query, ...args) => api.q(query, ...args);
+  const tree = createTreeSource({
+    pull: (pattern, eid) => api.pull(pattern, eid),
+    q: fast,
+    onFetch: (kind) => { perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1; },
+  });
 
-  const anyFeature = () => setting("aliasPages") || setting("refRanking");
+  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill");
   const isBlockInput = (el) => el?.tagName === "TEXTAREA" && el.classList.contains("rm-block-input");
 
   // ---- ranking (the per-key cost) ----
 
   function rank(token) {
+    st.drill = null;
+    const recall = setting("betterMatch");
+    if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
+      const parsed = parseDrill(token.query, indexes.titles);
+      if (parsed) {
+        const result = resolveDrill(parsed, tree, { strict: !recall });
+        st.drill = { ...result, key: `${result.page.uid}:${result.target?.uid ?? ""}` };
+        return [drillRow(result)];
+      }
+    }
     const plan = searchPlan(token.query);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
-    const recall = setting("betterMatch");
+    const memory = setting("pickMemory") ? picks : null;
     if (token.kind === "((") {
       if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
-      return rankRefs(indexes.refs, plan, { limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand") })
+      return rankRefs(indexes.refs, plan, {
+        limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
+        picked: memory?.lookup("ref", token.query), currentPage: setting("pageBoost") ? st.pageTitle : null,
+      })
         .map((hit) => ({
           kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level,
-          text: displayText(hit.string), insertion: `((${hit.uid}))`,
+          text: displayText(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
         }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
@@ -59,11 +85,40 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     const format = setting("aliasLinkFormat");
     // No cut here: visibleRows drops rows Roam or roam-aliases already show,
     // and a cut before that could hide a row nobody else lists.
-    return matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity })
+    return matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: memory?.lookup("alias", token.query) })
       .map((hit) => ({
         kind: "alias", key: `alias:${hit.uid}:${hit.alias}`, uid: hit.uid, alias: hit.alias, title: hit.title,
         level: hit.level, insertion: aliasInsertion(hit, format), seenByRoamAliases: hit.seenByRoamAliases,
+        pick: `${hit.uid}:${hit.alias}`,
       }));
+  }
+
+  function drillRow(result) {
+    const { page, target } = result;
+    let crumb = page.title;
+    if (target) {
+      const parents = tree.trail(target.uid);
+      if (parents.length > 1) crumb = readableText(parents[parents.length - 1].string);
+    }
+    return {
+      kind: "drill", key: `drill:${result.insertion}`, uid: target?.uid ?? page.uid, level: 3, insertion: result.insertion,
+      crumb: target ? crumb : null, text: target ? readableText(target.string) : page.title,
+    };
+  }
+
+  // Block text as a reader sees it, for the drill row and the preview:
+  // links keep their words, markup goes.
+  function readableText(string) {
+    const byUid = indexes.refs?.byUid;
+    return String(string ?? "")
+      .replace(/\(\(([\w-]{9})\)\)/g, (m, uid) => byUid?.get(uid)?.string ?? tree.get(uid)?.string ?? m)
+      .replace(/^\s*([^:\n`]{1,80})::/, "$1:")
+      .replace(/\{\{\[\[(TODO|DONE)\]\]\}\}\s*/g, "")
+      .replace(/\[([^\]]*)\]\(\[\[[^\]]*\]\]\)/g, "$1")
+      .replace(/#?\[\[([^\]]*)\]\]/g, "$1")
+      .replace(/\*\*|\^\^|__|~~/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function displayText(string) {
@@ -77,13 +132,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
   // trusted only while that node is still in the document, so disabling
   // roam-aliases brings Burrow's rows back) or by a `.rm-aliases` node it
   // has put in the current popover.
+  // The same idle pass reads Roam's block-highlight color for the preview.
   let roamAliasesSheet = null;
+  let blockHighlight = null;
   const detectRoamAliases = () => {
     for (const sheet of doc.styleSheets) {
       let rules;
       try { rules = sheet.cssRules; } catch { continue; }
       for (const rule of rules) {
-        if (rule.selectorText?.includes(".rm-aliases")) { roamAliasesSheet = sheet.ownerNode; return; }
+        if (!blockHighlight && rule.selectorText === ".block-highlight-blue" && rule.style?.backgroundColor) {
+          blockHighlight = rule.style.backgroundColor;
+        }
+        if (!roamAliasesSheet && rule.selectorText?.includes(".rm-aliases")) roamAliasesSheet = sheet.ownerNode;
       }
     }
   };
@@ -100,7 +160,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
 
   function visibleRows() {
     if (!st.pop) return [];
-    if (st.token?.kind !== "[[") return st.rows.slice(0, ROW_LIMIT);
+    if (st.token?.kind !== "[[" || st.drill) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
       const title = row.getAttribute("title");
@@ -139,11 +199,22 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const preselect = st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2
+    const preselect = (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2))
       && st.released !== releaseKey();
     if (st.phase === "ARMED" && preselect && st.active < 0) own(0);
     place(rows.length);
     paintActive();
+    showPreview();
+  }
+
+  let model = null;
+  function showPreview() {
+    if (!st.drill || !setting("drillPreview") || !st.pop) { preview.hide(); return; }
+    if (model?.drillKey !== st.drill.key) {
+      model = previewModel(st.drill, tree, readableText);
+      model.drillKey = st.drill.key;
+    }
+    preview.show(model, st.pop);
   }
 
   function rowNode(row, i) {
@@ -156,6 +227,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     if (row.kind === "alias") {
       text.append(highlight(row.alias), Object.assign(doc.createElement("span"), { className: "burrow-arrow", textContent: " ↳ " }), row.title);
       node.title = `${row.alias} → ${row.title}`;
+    } else if (row.kind === "drill") {
+      if (row.crumb) text.append(Object.assign(doc.createElement("span"), { className: "burrow-trail-inline", textContent: `${row.crumb} › ` }));
+      text.append(row.text);
+      node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
       text.append(highlight(row.text));
       node.title = row.text;
@@ -216,13 +291,24 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     const activeRow = [...pop.querySelectorAll(NATIVE_ROWS)].find((row) => row.style.backgroundColor);
     if (activeRow) strip.style.setProperty("--burrow-active", win.getComputedStyle(activeRow).backgroundColor);
     else strip.style.removeProperty("--burrow-active");
-    strip.classList.toggle("burrow-dark", isDarkHost(doc));
+    const dark = isDarkHost(doc);
+    strip.classList.toggle("burrow-dark", dark);
+    for (const name of ["--burrow-bg", "--burrow-fg"]) preview.node.style.setProperty(name, strip.style.getPropertyValue(name));
+    preview.node.style.zIndex = strip.style.zIndex;
+    preview.node.style.font = strip.style.font;
+    // Roam's block highlight, as Roam paints a selected block. A dark theme
+    // can make it an opaque light blue under light text, so there it is
+    // diluted to keep the text readable.
+    if (blockHighlight) preview.node.style.setProperty("--burrow-highlight", dark ? `color-mix(in srgb, ${blockHighlight} 28%, transparent)` : blockHighlight);
+    else preview.node.style.removeProperty("--burrow-highlight");
+    preview.node.classList.toggle("burrow-dark", dark);
   }
 
   function hideStrip() {
     strip.hidden = true;
+    preview.hide();
     if (st.pop) {
-      st.pop.classList.remove(OWNS, ...PAD_CLASSES);
+      st.pop.classList.remove(OWNS, DRILL_CLASS, ...PAD_CLASSES);
     }
   }
 
@@ -255,7 +341,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
   function detach() {
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
-    if (st.pop) st.pop.classList.remove(OWNS, ...PAD_CLASSES);
+    preview.hide();
+    if (st.pop) st.pop.classList.remove(OWNS, DRILL_CLASS, ...PAD_CLASSES);
     st.pop = null;
   }
 
@@ -313,6 +400,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     st.active = -1;
     st.token = null;
     st.released = null;
+    st.drill = null;
+    model = null;
+    tree.clear();
     shown = [];
     shownQuery = null;
     strip.replaceChildren();
@@ -344,6 +434,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     if (!token) return reset("no-token");
     if (st.ta !== ta || st.token?.start !== token.start) {
       st.uid = api.ui.getFocusedBlock?.()?.["block-uid"] ?? null;
+      st.pageTitle = ta.closest?.("[data-page-title]")?.getAttribute("data-page-title") ?? null;
       st.active = -1;
       if (st.phase === "OWNED") st.phase = "ARMED";
     }
@@ -404,6 +495,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     }
     // OWNED
     if (event.shiftKey && key !== "Tab") return;
+    if (shown[st.active]?.kind === "drill" && (key === "ArrowDown" || key === "ArrowUp")) {
+      consume(event);
+      return;
+    }
     switch (key) {
       case "ArrowDown":
         if (st.active < count - 1) st.active += 1;
@@ -461,6 +556,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
     valueSetter.call(ta, next);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     st.ignoreNextInput = false;
+    if (row.pick && setting("pickMemory")) picks?.record(row.kind, token.query, row.pick);
     reset("committed");
     debug.commits += 1;
     trace({ ev: "commit", row: row.key });
@@ -523,7 +619,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, doc = docu
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
   lifecycle.add(() => reset("unload"));
 
-  return { state: st, debug, reset };
+  return { state: st, debug, reset, tree };
 }
 
 function escapeRe(s) {

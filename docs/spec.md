@@ -155,6 +155,7 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `drill` | switch | on | `title#heading > child` in `[[` |
 | `drillPreview` | switch | on | Highlighted preview for drill (drill still works without it) |
 | `pickMemory` | switch | off | Phase 2: learn from picks |
+| `pageBoost` | switch | on | Phase 2: blocks on the page being edited first among equals in `((` |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
 | `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
 | `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
@@ -207,6 +208,18 @@ Findings from the live capture (§8 step 0) that the code relies on:
 - **Per-key cost.** A strict pass behind a cheap prefilter (the separator-free key must hold each clause's longest word, or its initials start the query), with the passing set cached per needle set: typing forward scans the cached superset, Backspace hits the cache. Recall runs only when the strip is not full, never for one-word queries, and only over blocks found through a word index (an admitted recall row needs one exact word). Ranking runs in a task posted from `requestAnimationFrame`, so it never delays the paint of the typed character; Enter, Tab, ↑, ↓ and Esc flush it first.
 - **Test harness trap** (Roam, not Burrow): after Escape Roam leaves the block *selected*, and that selection survives a programmatic `setBlockFocusAndSelection`. The next Backspace then deletes the whole block, with Burrow unloaded too. The gates clear the selection (Escape) before focusing, and guard every key that is not aimed at the fixture textarea.
 - **Indexes** are built with `data.async.fast.q` where Roam offers it. svy: 5,304 referenced blocks, 200 ms query; notes: 3,767, 172 ms. Alias pages are found by exact title lookups for the keyword's spellings, then their referring blocks.
+
+## 11. Phase 2 build notes (BRW-3)
+
+Findings from the live work on notes and svy that the drill code relies on. Where they differ from §5, this section wins.
+
+- **Roam's preview is off until Ctrl-O** and Roam remembers the choice. Open, the popover gets `--expanded` (`--expanded-left` near the right edge) and `.rm-autocomplete__preview` is as tall as the popover; with a drill expression the results show "No pages found.", so the popover is 67 px tall. While drill is on, a reversible `burrow-drill` class hides the preview's children and gives the expanded popover `min-height: 300px`; Burrow's pane lies over the preview's rect. With the preview closed, the pane sits beside the popover (right, then left, then below or above), never over it.
+- **No whole-page pull.** `PhD/Cronobacter & Spore Control in PIF` (28,570 blocks) takes 377 ms to pull whole, and `data.async.pull` blocks the main thread just as long. A pull of one block with two levels of children takes 1.9 ms there, an upward `{:block/_children ...}` pull 0.2 ms. The tree source pulls per visited node (children and grandchildren, grandchildren with child uids so leaves need no pull) and keeps everything until the popup closes.
+- **Headings by page eid.** A datalog query that joins `:block/string` or filters `(> ?h 0)` costs 20–40 ms even on small pages. `[:find ?b ?h :in $ ?p :where [?b :block/page ?p] [?b :block/heading ?h]]` with the page eid costs 2–18 ms; the strings then come from one pull per heading. svy stores `:block/heading 0` on 17k blocks, so `0` is filtered in JS. Ties go to outline order through a DFS from the page that stops at the first candidate.
+- **Escape makes pages.** Esc closes the popup and leaves the editor; Roam saves `[[X#h > q]]` and creates an empty page `X#h > q`. Enter in Roam's own popup does the same (checked with Burrow absent: every drill case whose text still held `#` or `>` created that page). Burrow keeps Esc as Roam's (§5), so the gate compares pages per case against Burrow absent; Burrow's own commits create none. Because of these pages, a title holding `#` or `>` counts (for "stay native" and as a drill page) only when the page has child blocks.
+- **Keys in drill.** Drill is OWNED with one row: Enter and Tab commit, ↑ and ↓ are consumed and do nothing (no arrow keys in the preview, and ↓ to Roam's "No pages found." row would let Enter create the page), Esc passes through, a caret move or a refused commit hands the key to Roam.
+- **Pick memory** sits right after the match band (before originals-over-quoters), so a pick can reorder equal matches but never lift a weaker band. It is stored in `localStorage` under `burrow:picks:<graph>`, at most 200 picks. **Current page** sits after the alias boost, before the raw score; the page comes from the editing block's `data-page-title`.
+- **Cost on svy with the preview open** (`perf-gate --drill`, 3 interleaved runs, 234 keys each): Burrow JS p95 1.4–1.5 ms per key, one-time max 9 ms when the first `#` resolves; input-to-paint median p95 delta −0.1 ms against Burrow absent; 7 data reads per run, 0 index queries per key.
 
 ## Also noticed
 
