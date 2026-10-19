@@ -642,6 +642,33 @@ const WRITE_CASES = [
     },
   },
   {
+    name: "alias create: an IME composition goes into the field", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:zq", "ime", "wait:200", "snap", "Enter"], on: `${SEED}[zq你]([[${FIXTURE_PAGE} Empty]])`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid), kids: await childUids(fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a] = r.snaps;
+      if (a?.prompt?.input !== "zq你") return `field ${JSON.stringify(a?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (JSON.stringify(r.read.children) !== JSON.stringify(["Aliases:: zq你"])) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid, ...r.read.kids) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: an IME composition replaces the seeded text, Esc writes nothing", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "ime", "wait:200", "snap", "Escape", "snap", "Escape"], on: `${SEED}[[${FIXTURE_PAGE} Empty]]`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a, b] = r.snaps;
+      if (a?.prompt?.input !== "你") return `field ${JSON.stringify(a?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (b?.prompt !== null || !b.popup) return `after Esc prompt ${JSON.stringify(b?.prompt)} popup ${b?.popup}`;
+      if (r.read.children.length) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
     name: "alias delete: Alt+Backspace, Enter removes only that alias", query: CHIPS_Q, settings: WRITE_SETTINGS, mayCreatePage: true,
     keys: ["alt+ArrowDown", "ArrowRight", "alt+Backspace", "snap", "Enter", "wait:300", "snap", "Escape", "Escape"], on: `${SEED}[[${CHIP_ALIASES[0].slice(0, 10)}]]`,
     read: async () => ({ alias: await aliasBlockString(c, fx.chipsUid) }),

@@ -1,5 +1,6 @@
 import { aliasInsertion, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
+import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
 import { hintsKey, keyLabel, renderHints } from "./hints.js";
 import { createTreeSource } from "./pagetree.js";
@@ -751,6 +752,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.auto = false;
     st.chip = -1;
     st.scope = null;
+    if (st.prompt?.compose) composer.restore(st.prompt, st.ta);
     st.prompt = null;
     promptRows = [];
     cancelRowPreview();
@@ -810,6 +812,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function onInput(event) {
     const ta = event.target;
     if (!isBlockInput(ta)) return;
+    if (st.prompt && composer.input(event)) return;
     if (st.ignoreNextInput) { st.ignoreNextInput = false; return; }
     if (st.prompt) st.prompt = null;
     if (st.phase === "SCOPE") exitScope();
@@ -837,6 +840,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function onKeyDown(event) {
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    if (st.prompt && composer.key(event)) return;
     if (event.isComposing || st.composing || event.keyCode === 229) return;
     const ta = event.target;
     if (ta !== st.ta || !anyFeature()) { reset("foreign-key"); return; }
@@ -969,10 +973,17 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   let promptRows = [];
   const promptNode = doc.createElement("div");
   promptNode.className = "burrow-row burrow-prompt";
+  const composer = createPromptComposer({
+    prompt: () => st.prompt,
+    textarea: () => st.ta,
+    setValue: (ta, value) => valueSetter.call(ta, value),
+    render: () => renderPrompt(),
+  });
   function renderPrompt() {
     const p = st.prompt;
     const input = Object.assign(doc.createElement("span"), { className: "burrow-prompt-input", textContent: p.saving ? `${p.text} …` : p.text });
     input.classList.toggle("burrow-fresh", p.fresh && Boolean(p.text));
+    if (p.compose?.text) input.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-compose", textContent: p.compose.text }));
     promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
     if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error }));
     if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
@@ -1020,8 +1031,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     let result;
     try { result = await addAliasToPage(api, { pageUid: p.page.uid, keyword: setting("aliasKeyword") || "Aliases", alias: check.alias }); }
     catch (error) { result = { ok: false, error: String(error?.message || error) }; }
-    if (st.prompt !== p) return;                            // blur, Esc, composition: closed meanwhile
+    if (st.prompt !== p) return;                            // blur, Esc: closed meanwhile
     if (!result.ok) { p.saving = false; p.error = result.error; renderPrompt(); return; }
+    composer.restore(p, st.ta);                             // a composition started while saving
     st.prompt = null;
     promptRows = [];
     debug.lastWrite = { kind: "add", at: Date.now(), ...result };
@@ -1357,6 +1369,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function onCompositionStart(event) {
     if (!isBlockInput(event.target)) return;
+    if (st.prompt && composer.start(event)) return;
     st.composing = true;
     pendingTa = null;
     reset("composition");
@@ -1364,6 +1377,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function onCompositionEnd(event) {
     if (!isBlockInput(event.target)) return;
+    if (st.prompt && composer.end(event)) return;
     st.composing = false;
     if (anyFeature()) evaluate(event.target);
   }
@@ -1388,7 +1402,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.event(win, "keydown", guarded("keydown", onKeyDown), true);
   lifecycle.event(win, "input", guarded("input", onInput), true);
   lifecycle.event(win, "compositionstart", guarded("compositionstart", onCompositionStart), true);
+  lifecycle.event(win, "compositionupdate", guarded("compositionupdate", (event) => { if (st.prompt) composer.update(event); }), true);
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
+  lifecycle.event(win, "beforeinput", guarded("beforeinput", (event) => { if (st.prompt) composer.input(event); }), true);
+  lifecycle.event(win, "keyup", guarded("keyup", (event) => { if (st.prompt) composer.key(event); }), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
   lifecycle.event(win, "paste", guarded("paste", onPaste), true);
   lifecycle.event(chipsNode, "wheel", guarded("wheel", onChipsWheel), { passive: false });

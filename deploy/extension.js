@@ -349,7 +349,7 @@ function isPrecise(match) {
 // src/aliases.js
 function parseAliasBlock(string, keyword = "Aliases") {
   const kw = String(keyword || "Aliases").trim();
-  const text = String(string || "");
+  const text = String(string || "").split("\n")[0];
   const head = text.slice(0, kw.length + 2);
   if (head.toLowerCase() !== `${kw.toLowerCase()}::`) return [];
   return text.slice(kw.length + 2).split(",").map((value) => value.trim().replace(/^#?\[\[(.*)\]\]$/, "$1").replace(/^#/, "").trim()).filter(Boolean);
@@ -1014,6 +1014,7 @@ function validAlias(text) {
   const alias = String(text ?? "").trim();
   if (!alias) return { ok: false, reason: "type an alias" };
   if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
+  if (alias.startsWith("#")) return { ok: false, reason: "no # at the start: Roam reads it as a tag" };
   if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
   return { ok: true, alias };
 }
@@ -1021,23 +1022,29 @@ function isAliasBlock(string, keyword) {
   const kw = kwOf(keyword);
   return String(string).slice(0, kw.length + 2).toLowerCase() === `${kw.toLowerCase()}::`;
 }
+var splitFirst = (string) => {
+  const at = string.indexOf("\n");
+  return at < 0 ? [string, ""] : [string.slice(0, at), string.slice(at)];
+};
 var holds = (string, keyword, alias) => parseAliasBlock(string, keyword).some((a) => a.toLowerCase() === alias.toLowerCase());
 function appendAlias(string, keyword, alias) {
   if (!isAliasBlock(string, keyword)) return null;
   if (holds(string, keyword, alias)) return { string, changed: false };
+  const [line, rest] = splitFirst(string);
   const at = kwOf(keyword).length + 2;
-  if (!string.slice(at).trim()) return { string: `${string.slice(0, at)} ${alias}`, changed: true };
-  return { string: `${string.trimEnd()}, ${alias}`, changed: true };
+  if (!line.slice(at).trim()) return { string: `${line.slice(0, at)} ${alias}${rest}`, changed: true };
+  return { string: `${line.trimEnd()}, ${alias}${rest}`, changed: true };
 }
 function removeAlias(string, keyword, alias) {
   if (!isAliasBlock(string, keyword)) return null;
+  const [line, rest] = splitFirst(string);
   const at = kwOf(keyword).length + 2;
-  const parts = string.slice(at).split(",");
+  const parts = line.slice(at).split(",");
   let index = parts.findIndex((part) => clean(part) === alias);
   if (index < 0) index = parts.findIndex((part) => clean(part).toLowerCase() === alias.toLowerCase());
   if (index < 0) return null;
   parts.splice(index, 1);
-  return string.slice(0, at) + parts.join(",");
+  return line.slice(0, at) + parts.join(",") + rest;
 }
 function findAliasBlocks(api, pageUid, keyword) {
   const attrIds = api.q("[:find [?a ...] :in $ [?t ...] :where [?a :node/title ?t]]", keywordTitles(keyword));
@@ -1089,6 +1096,65 @@ async function deleteAliasFromPage(api, { pageUid, keyword, alias }) {
   } catch (error) {
     return { ok: false, error: message(error) };
   }
+}
+
+// src/compose.js
+var firstLine = (data) => String(data ?? "").split(/\r?\n/)[0];
+function createPromptComposer({ prompt, textarea, setValue, render }) {
+  const open = (event) => {
+    const p = prompt();
+    return p?.kind === "add" && event.target === textarea() ? p : null;
+  };
+  function start(event) {
+    const p = open(event);
+    if (!p) return false;
+    const ta = event.target;
+    if (p.fresh) {
+      p.text = "";
+      p.fresh = false;
+    }
+    p.error = null;
+    p.compose = { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd, text: "" };
+    render();
+    return true;
+  }
+  function update(event) {
+    const p = open(event);
+    if (!p?.compose) return false;
+    p.compose.text = firstLine(event.data);
+    render();
+    return true;
+  }
+  function end(event) {
+    const p = open(event);
+    if (!p?.compose) return false;
+    restore(p, event.target);
+    p.text += firstLine(event.data);
+    render();
+    return true;
+  }
+  function restore(p, ta) {
+    const c = p.compose;
+    if (!c) return;
+    p.compose = null;
+    if (ta.value !== c.value) setValue(ta, c.value);
+    try {
+      ta.setSelectionRange(c.start, c.end);
+    } catch {
+    }
+  }
+  function key(event) {
+    const p = open(event);
+    if (!p || !(p.compose || event.isComposing || event.keyCode === 229 || event.key === "Dead")) return false;
+    event.stopImmediatePropagation();
+    return true;
+  }
+  function input(event) {
+    if (!open(event)?.compose) return false;
+    event.stopImmediatePropagation();
+    return true;
+  }
+  return { start, update, end, restore, key, input };
 }
 
 // src/ordinal.js
@@ -2417,6 +2483,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.auto = false;
     st.chip = -1;
     st.scope = null;
+    if (st.prompt?.compose) composer.restore(st.prompt, st.ta);
     st.prompt = null;
     promptRows = [];
     cancelRowPreview();
@@ -2472,6 +2539,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function onInput(event) {
     const ta = event.target;
     if (!isBlockInput(ta)) return;
+    if (st.prompt && composer.input(event)) return;
     if (st.ignoreNextInput) {
       st.ignoreNextInput = false;
       return;
@@ -2499,6 +2567,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function onKeyDown(event) {
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    if (st.prompt && composer.key(event)) return;
     if (event.isComposing || st.composing || event.keyCode === 229) return;
     const ta = event.target;
     if (ta !== st.ta || !anyFeature()) {
@@ -2638,10 +2707,17 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   let promptRows = [];
   const promptNode = doc.createElement("div");
   promptNode.className = "burrow-row burrow-prompt";
+  const composer = createPromptComposer({
+    prompt: () => st.prompt,
+    textarea: () => st.ta,
+    setValue: (ta, value) => valueSetter.call(ta, value),
+    render: () => renderPrompt()
+  });
   function renderPrompt() {
     const p = st.prompt;
     const input = Object.assign(doc.createElement("span"), { className: "burrow-prompt-input", textContent: p.saving ? `${p.text} …` : p.text });
     input.classList.toggle("burrow-fresh", p.fresh && Boolean(p.text));
+    if (p.compose?.text) input.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-compose", textContent: p.compose.text }));
     promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
     if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error }));
     if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
@@ -2725,6 +2801,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       renderPrompt();
       return;
     }
+    composer.restore(p, st.ta);
     st.prompt = null;
     promptRows = [];
     debug.lastWrite = { kind: "add", at: Date.now(), ...result };
@@ -3073,12 +3150,14 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   function onCompositionStart(event) {
     if (!isBlockInput(event.target)) return;
+    if (st.prompt && composer.start(event)) return;
     st.composing = true;
     pendingTa = null;
     reset("composition");
   }
   function onCompositionEnd(event) {
     if (!isBlockInput(event.target)) return;
+    if (st.prompt && composer.end(event)) return;
     st.composing = false;
     if (anyFeature()) evaluate(event.target);
   }
@@ -3103,7 +3182,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   lifecycle.event(win, "keydown", guarded("keydown", onKeyDown), true);
   lifecycle.event(win, "input", guarded("input", onInput), true);
   lifecycle.event(win, "compositionstart", guarded("compositionstart", onCompositionStart), true);
+  lifecycle.event(win, "compositionupdate", guarded("compositionupdate", (event) => {
+    if (st.prompt) composer.update(event);
+  }), true);
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
+  lifecycle.event(win, "beforeinput", guarded("beforeinput", (event) => {
+    if (st.prompt) composer.input(event);
+  }), true);
+  lifecycle.event(win, "keyup", guarded("keyup", (event) => {
+    if (st.prompt) composer.key(event);
+  }), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
   lifecycle.event(win, "paste", guarded("paste", onPaste), true);
   lifecycle.event(chipsNode, "wheel", guarded("wheel", onChipsWheel), { passive: false });

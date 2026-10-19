@@ -235,6 +235,7 @@
 .burrow-prompt-label { opacity: 0.6; margin-right: 6px; flex: none; }
 .burrow-prompt-input { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid rgba(138, 155, 168, 0.6); }
 .burrow-prompt-input.burrow-fresh { background: rgba(45, 114, 210, 0.25); }
+.burrow-prompt-compose { text-decoration: underline; }
 .burrow-prompt-input::after { content: ""; display: inline-block; width: 1px; height: 1em; margin-left: 1px; vertical-align: text-bottom; background: currentColor; }
 .burrow-prompt-error { flex: none; margin-left: 8px; opacity: 0.8; color: #db3737; }
 .burrow-strip.burrow-dark .burrow-prompt-error, .burrow-chips .burrow-prompt-error { color: #ff7373; }

@@ -34,7 +34,7 @@ Burrow takes keys only while one of its rows is selected, on Tab over a row it c
 
 In the alias chips: ←/→ (or ↑/↓) move, Enter inserts with that alias, Tab drills into the page, Alt+Backspace asks to delete that alias (when alias deletion is on; Enter deletes, Esc keeps), Esc or ⌥↑ goes back to the rows.
 
-In the alias field (⌥A): type the name (the typed query is there, selected, so the first key replaces it), Backspace deletes, paste works, Enter saves the alias and inserts the link, Esc goes back to the picker. The block keeps exactly the `[[…` you typed until Enter.
+In the alias field (⌥A): type the name (the typed query is there, selected, so the first key replaces it), Backspace deletes, paste and IME or dead-key input (⌥E then E for é) work, Enter saves the alias and inserts the link, Esc goes back to the picker. The block keeps exactly the `[[…` you typed until Enter.
 
 While drilled in (Tab), Burrow holds the keyboard and the block keeps exactly the `[[…` you typed:
 
@@ -70,7 +70,7 @@ Every feature has its own switch under **Settings → Burrow**: alias rows, alia
 
 ## Working with roam-aliases
 
-Burrow reads the roam-aliases convention and leaves `Aliases::` blocks to roam-aliases, unless you turn on **Create aliases** or **Delete aliases**: then ⌥A appends one name to the page's alias block (creating `Aliases:: name` as the page's first block when it has none) and Alt+Backspace on a chip removes one name, keeping every other byte of the block. With **Alias rows with their page** on, Burrow lists aliases in Roam's list (keyboard and mouse) and hides roam-aliases' rows for pages it already shows, so no alias appears twice; rows Burrow does not show stay in roam-aliases' column, which **Keep panes apart** lays out above Roam's list instead of over it. With that switch off, Burrow leaves aliases roam-aliases lists to its column, as in 0.2.0. Both write the same `[alias]([[Page]])` text.
+Burrow reads the roam-aliases convention and leaves `Aliases::` blocks to roam-aliases, unless you turn on **Create aliases** or **Delete aliases**: then ⌥A appends one name to the page's alias block (creating `Aliases:: name` as the page's first block when it has none) and Alt+Backspace on a chip removes one name, keeping every other byte of the block. Aliases are the comma list on the block's first line; a second line is left alone. With **Alias rows with their page** on, Burrow lists aliases in Roam's list (keyboard and mouse) and hides roam-aliases' rows for pages it already shows, so no alias appears twice; rows Burrow does not show stay in roam-aliases' column, which **Keep panes apart** lays out above Roam's list instead of over it. With that switch off, Burrow leaves aliases roam-aliases lists to its column, as in 0.2.0. Both write the same `[alias]([[Page]])` text.
 
 ## Cost
 
