@@ -1,4 +1,4 @@
-/* Burrow v0.3.0 | MIT | generated; edit src/ */
+/* Burrow v0.4.0 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -857,6 +857,62 @@ function createPickMemory({ storage, key }) {
   };
 }
 
+// src/refsearch.js
+function insertOpener(value, caret) {
+  return { value: value.slice(0, caret) + "(())" + value.slice(caret), caret: caret + 2 };
+}
+function parseInputId(id) {
+  const match = /^block-input-(.+)-([A-Za-z0-9_-]{9})$/.exec(String(id ?? ""));
+  return match ? { windowId: match[1], uid: match[2] } : null;
+}
+function isRefSearchHotkey(event) {
+  return event.code === "Digit9" && Boolean(event.altKey) && Boolean(event.shiftKey) && !event.ctrlKey && !event.metaKey;
+}
+function createRefSearch({ api, doc = document, win = window, lifecycle, setting }) {
+  let last = null;
+  const isEditor = (node) => Boolean(node?.matches?.("textarea.rm-block-input"));
+  lifecycle.event(doc, "focusin", (event) => {
+    if (!isEditor(event.target)) return;
+    const parsed = parseInputId(event.target.id);
+    if (parsed) last = { id: event.target.id, ...parsed };
+  }, true);
+  lifecycle.event(doc, "focusout", (event) => {
+    if (!isEditor(event.target)) return;
+    const parsed = parseInputId(event.target.id);
+    if (parsed) last = { id: event.target.id, ...parsed, caret: event.target.selectionEnd, at: Date.now() };
+  }, true);
+  const nextFrame = () => new Promise((resolve) => win.requestAnimationFrame ? win.requestAnimationFrame(resolve) : setTimeout(resolve, 16));
+  async function open() {
+    let ta = isEditor(doc.activeElement) ? doc.activeElement : null;
+    if (!ta) {
+      if (!last || last.at == null || Date.now() - last.at > 6e4) return false;
+      await api.ui.setBlockFocusAndSelection({
+        location: { "block-uid": last.uid, "window-id": last.windowId },
+        selection: { start: last.caret }
+      });
+      const until = Date.now() + 1e3;
+      while (Date.now() < until && !(isEditor(doc.activeElement) && doc.activeElement.id.endsWith(last.uid))) await nextFrame();
+      if (!(isEditor(doc.activeElement) && doc.activeElement.id.endsWith(last.uid))) return false;
+      ta = doc.activeElement;
+    }
+    const { value, caret } = insertOpener(ta.value, ta.selectionEnd);
+    Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement?.prototype ?? HTMLTextAreaElement.prototype, "value").set.call(ta, value);
+    ta.setSelectionRange(caret, caret);
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+  lifecycle.event(win, "keydown", (event) => {
+    if (!setting("refSearchHotkey") || !isRefSearchHotkey(event) || event.isComposing) return;
+    const target = event.target;
+    if (!isEditor(target) || target.selectionStart !== target.selectionEnd) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    open();
+  }, true);
+  return { open, last: () => last };
+}
+
 // src/settings.js
 var DEFAULTS = Object.freeze({
   aliasPages: true,
@@ -874,6 +930,14 @@ var DEFAULTS = Object.freeze({
   keyHints: true,
   pickMemory: false,
   pageBoost: true,
+  rowPreview: true,
+  aliasCreate: false,
+  aliasDelete: false,
+  drillOrdinals: true,
+  drillEmpty: true,
+  drillCap: true,
+  refSearch: true,
+  refSearchHotkey: false,
   aliasKeyword: "Aliases",
   aliasLinkFormat: "[alias]([[Page]])",
   perfHud: false
@@ -883,7 +947,7 @@ var SWITCHES = [
   ["aliasExpand", "Alias expansion in ((", "In ((, an alias also finds referenced blocks that link to its page."],
   ["aliasInline", "Alias rows with their page", "One row per page an alias matches, alias ↳ Page with its reference count, also when roam-aliases is installed: its Aliases column folds into these rows instead of lying beside or over Roam's list. Off: Burrow leaves aliases that roam-aliases lists to its column."],
   ["aliasPreselect", "Pre-select the alias row", "When an alias starts with what you typed and no page has exactly that title, its row starts selected, so Enter inserts it."],
-  ["aliasChips", "Alias chips", "Under a selected alias row, the page's other aliases as chips. ⌥↓ moves into them, ←/→ picks one, Enter inserts the page shown as that alias, Esc goes back to the rows."],
+  ["aliasChips", "Alias chips", "Under a selected alias row, the page's other aliases as chips. ⌥↓ moves into them, ←/→ picks one (the line also scrolls with the mouse wheel or trackpad, and a chip shows its full alias when selected or hovered), Enter inserts the page shown as that alias, Esc goes back to the rows."],
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
@@ -891,7 +955,15 @@ var SWITCHES = [
   ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
   ["tabDrill", "Tab drills in", "Tab on the highlighted page, or on a referenced block with children, lists its blocks in place under a breadcrumb. Type to filter, ↑/↓ to move, Enter inserts the block's ((uid)), Tab goes one level deeper, Shift+Tab or Backspace on an empty filter goes back, Esc returns to the results. With nothing to drill into, Tab does what Roam does."],
   ["paneLayout", "Keep panes apart", "Roam's preview, roam-aliases' column and the result list each get their own space in the picker; nothing is drawn over anything else."],
-  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys Burrow adds."],
+  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys Burrow adds, RefX style: ⌥A alias · ⌥↓ pick alias · ⇥/> drill · ⇧⇥ back · ⌃O preview · ↵ insert."],
+  ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
+  ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],
+  ["aliasDelete", "Delete aliases from the chips (writes to your graph)", "Alt+Backspace on the selected alias chip asks to confirm; Enter removes only that alias from the page's alias block, Esc keeps it. Off by default."],
+  ["drillOrdinals", "Ordinal matching in drill-down", "While drilled in, typing 1, 2, (b) or iii ranks blocks that start with that number or letter first."],
+  ["drillEmpty", "Hide empty blocks in drill-down", "Empty blocks without children are left out of the drill list; empty blocks with children show as (empty) ▸ and stay drillable."],
+  ["drillCap", "Long levels in slices", "A drill level lists 50 blocks and a +N more row; selecting it lists the next 50, so huge pages open fast."],
+  ["refSearch", "Block reference search command", "Adds Burrow: block reference search to the command palette: it opens (( at the caret of the block you are editing. Bind your own key in Roam's Settings → Hotkeys, or use the switch below."],
+  ["refSearchHotkey", "Alt+Shift+9 opens block reference search", "While editing a block, Alt+Shift+9 (⌥⇧9) opens (( at the caret. Off by default; Roam has no default use for this key."],
   ["pickMemory", "Pick memory", "A Burrow row you picked ranks first the next time you type the same query. Kept in this browser only."],
   ["pageBoost", "Current page first", "Among equal referenced blocks in ((, blocks on the page you are editing rank first."],
   ["perfHud", "Performance readout", "Shows Burrow's per-key cost (p50/p95) in the corner. Also at window.__BURROW_PERF."]
@@ -935,6 +1007,108 @@ async function initializeSettings(extensionAPI) {
   }
 }
 
+// src/aliasedit.js
+var kwOf = (keyword) => String(keyword || "Aliases").trim();
+var clean = (value) => value.trim().replace(/^#?\[\[(.*)\]\]$/, "$1").replace(/^#/, "").trim();
+function validAlias(text) {
+  const alias = String(text ?? "").trim();
+  if (!alias) return { ok: false, reason: "type an alias" };
+  if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
+  if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
+  return { ok: true, alias };
+}
+function isAliasBlock(string, keyword) {
+  const kw = kwOf(keyword);
+  return String(string).slice(0, kw.length + 2).toLowerCase() === `${kw.toLowerCase()}::`;
+}
+var holds = (string, keyword, alias) => parseAliasBlock(string, keyword).some((a) => a.toLowerCase() === alias.toLowerCase());
+function appendAlias(string, keyword, alias) {
+  if (!isAliasBlock(string, keyword)) return null;
+  if (holds(string, keyword, alias)) return { string, changed: false };
+  const at = kwOf(keyword).length + 2;
+  if (!string.slice(at).trim()) return { string: `${string.slice(0, at)} ${alias}`, changed: true };
+  return { string: `${string.trimEnd()}, ${alias}`, changed: true };
+}
+function removeAlias(string, keyword, alias) {
+  if (!isAliasBlock(string, keyword)) return null;
+  const at = kwOf(keyword).length + 2;
+  const parts = string.slice(at).split(",");
+  let index = parts.findIndex((part) => clean(part) === alias);
+  if (index < 0) index = parts.findIndex((part) => clean(part).toLowerCase() === alias.toLowerCase());
+  if (index < 0) return null;
+  parts.splice(index, 1);
+  return string.slice(0, at) + parts.join(",");
+}
+function findAliasBlocks(api, pageUid, keyword) {
+  const attrIds = api.q("[:find [?a ...] :in $ [?t ...] :where [?a :node/title ?t]]", keywordTitles(keyword));
+  if (!attrIds?.length) return [];
+  const rows = api.q("[:find ?u ?s :in $ ?pu [?a ...] :where [?p :block/uid ?pu] [?b :block/page ?p] [?b :block/refs ?a] [?b :block/string ?s] [?b :block/uid ?u]]", pageUid, attrIds) || [];
+  const blocks = rows.filter(([, string]) => isAliasBlock(string, keyword));
+  if (!blocks.length) return [];
+  const page = api.pull("[{:block/children [:block/uid]}]", [":block/uid", pageUid]);
+  const topUids = new Set((page?.[":block/children"] || []).map((child) => child[":block/uid"]));
+  return blocks.map(([uid, string]) => ({ uid, string, top: topUids.has(uid) })).sort((a, b) => Number(b.top) - Number(a.top) || (a.uid < b.uid ? -1 : a.uid > b.uid ? 1 : 0));
+}
+var freshString = (api, uid) => api.pull("[:block/string]", [":block/uid", uid])?.[":block/string"] ?? "";
+var message = (error) => String(error?.message || error);
+async function addAliasToPage(api, { pageUid, keyword, alias }) {
+  try {
+    const kw = kwOf(keyword);
+    const blocks = findAliasBlocks(api, pageUid, kw);
+    const held = blocks.find((block) => holds(block.string, kw, alias));
+    if (held) return { ok: true, changed: false, blockUid: held.uid };
+    if (blocks.length) {
+      const uid2 = blocks[0].uid;
+      const before = freshString(api, uid2);
+      const result = appendAlias(before, kw, alias);
+      if (!result) return { ok: false, error: "alias block changed" };
+      if (!result.changed) return { ok: true, changed: false, blockUid: uid2 };
+      await api.data.block.update({ block: { uid: uid2, string: result.string } });
+      return { ok: true, changed: true, created: false, blockUid: uid2, before, after: result.string };
+    }
+    const uid = api.util.generateUID();
+    const after = `${kw}:: ${alias}`;
+    await api.data.block.create({ location: { "parent-uid": pageUid, order: 0 }, block: { string: after, uid } });
+    return { ok: true, changed: true, created: true, blockUid: uid, before: null, after };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+async function deleteAliasFromPage(api, { pageUid, keyword, alias }) {
+  const missing = { ok: false, error: "alias not found on the page" };
+  try {
+    const blocks = findAliasBlocks(api, pageUid, keyword);
+    const has = (block, test) => parseAliasBlock(block.string, keyword).some(test);
+    const target = blocks.find((block) => has(block, (a) => a === alias)) || blocks.find((block) => has(block, (a) => a.toLowerCase() === alias.toLowerCase()));
+    if (!target) return missing;
+    const before = freshString(api, target.uid);
+    const after = removeAlias(before, keyword, alias);
+    if (after == null) return missing;
+    await api.data.block.update({ block: { uid: target.uid, string: after } });
+    return { ok: true, blockUid: target.uid, before, after };
+  } catch (error) {
+    return { ok: false, error: message(error) };
+  }
+}
+
+// src/ordinal.js
+var ROMAN = /^(?=[ivx])x{0,3}(ix|iv|v?i{0,3})$/;
+function ordinalQuery(query) {
+  let q = String(query ?? "").trim().toLowerCase();
+  if (q.startsWith("(")) q = q.slice(1);
+  if (q.endsWith(")") || q.endsWith(".")) q = q.slice(0, -1);
+  if (/^\d{1,3}$/.test(q) || /^[a-z]$/.test(q) || ROMAN.test(q)) return q;
+  return null;
+}
+function startsWithOrdinal(text, token) {
+  if (!token) return false;
+  const t = String(text ?? "").trimStart().toLowerCase();
+  const tok = String(token).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`^\\(${tok}\\)(\\s|$)`).test(t)) return true;
+  if (new RegExp(`^${tok}[.):](\\s|$)`).test(t)) return true;
+  return /^\d+$/.test(token) && new RegExp(`^${tok}(\\s|$)`).test(t);
+}
+
 // src/drill.js
 function parseSteps(rest) {
   if (!rest || rest[0] !== "#" && rest[0] !== ">") return null;
@@ -965,14 +1139,25 @@ function parseDrill(query, titles) {
   }
   return null;
 }
-function bestMatch(candidates, query, { strict = false, first } = {}) {
-  if (!candidates.length) return null;
+function bestMatch(candidates, query, { strict = false, first, ordinals = false, hideEmpty = false } = {}) {
+  const plain = (node) => stripRoamMarkup(node.string ?? "").trim();
+  let list = candidates;
+  if (hideEmpty) {
+    list = candidates.filter((node) => plain(node) || node.kids?.length);
+    if (!String(query ?? "").trim()) list = [list.find((node) => plain(node)) ?? list[0]].filter(Boolean);
+  }
+  if (!list.length) return null;
+  const token = ordinals ? ordinalQuery(query) : null;
+  if (token) {
+    const ords = list.filter((node) => startsWithOrdinal(plain(node), token));
+    if (ords.length) return ords.length > 1 && first ? first(ords) : ords[0];
+  }
   const plan = query ? searchPlan(query) : null;
-  let ties = candidates;
+  let ties = list;
   if (plan) {
     let bestScore = -1;
     ties = [];
-    for (const node of candidates) {
+    for (const node of list) {
       const match = matchFromKey(nodeKey(node), plan, { strict });
       if (match.score < 0) continue;
       if (match.score > bestScore) {
@@ -988,19 +1173,19 @@ function nodeKey(node) {
   if (!node.key) node.key = searchKey(stripRoamMarkup(node.string ?? node.title ?? ""));
   return node.key;
 }
-function resolveDrill(parsed, source, { strict = false } = {}) {
+function resolveDrill(parsed, source, { strict = false, ordinals = false, hideEmpty = false } = {}) {
   const { page } = parsed;
   let target = null;
   let failedAt = null;
   if (parsed.heading != null) {
-    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first });
+    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first, ordinals, hideEmpty });
     if (hit) target = hit;
     else failedAt = 0;
   }
   if (failedAt == null) {
     for (let i = 0; i < parsed.steps.length; i++) {
       const kids = source.children(target ? target.uid : page.uid) || [];
-      const hit = bestMatch(kids, parsed.steps[i], { strict });
+      const hit = bestMatch(kids, parsed.steps[i], { strict, ordinals, hideEmpty });
       if (!hit) {
         failedAt = i + (parsed.heading != null ? 1 : 0);
         break;
@@ -1014,6 +1199,33 @@ function resolveDrill(parsed, source, { strict = false } = {}) {
     failedAt,
     insertion: target ? `((${target.uid}))` : `[[${page.title}]]`
   };
+}
+
+// src/hints.js
+var IS_MAC = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
+var NAMED = {
+  altA: ["⌥A", "Alt+A"],
+  altDown: ["⌥↓", "Alt+↓"],
+  altBackspace: ["⌥⌫", "Alt+⌫"],
+  ctrlO: ["⌃O", "Ctrl+O"]
+};
+function keyLabel(name, mac = IS_MAC) {
+  const pair = NAMED[name];
+  return pair ? pair[mac ? 0 : 1] : name;
+}
+function hintsKey(items) {
+  return items.map(([keys, label]) => `${keys}\0${label}`).join("");
+}
+function renderHints(doc, node, items) {
+  const span = (className, textContent) => Object.assign(doc.createElement("span"), { className, textContent });
+  const parts = [];
+  items.forEach(([keys, label], i) => {
+    if (i) parts.push(span("burrow-hint-sep", " · "));
+    const item = span("burrow-hint", "");
+    item.append(span("burrow-hint-key", keys), ` ${label}`);
+    parts.push(item);
+  });
+  node.replaceChildren(...parts);
 }
 
 // src/pagetree.js
@@ -1208,7 +1420,7 @@ function createPreview({ doc, win, lifecycle }) {
       row.style.setProperty("--burrow-depth", String(item.depth));
       if (item.more != null) {
         row.classList.add("burrow-more");
-        row.textContent = `… ${item.more} more`;
+        row.textContent = `+${item.more} more`;
         return row;
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
@@ -1289,18 +1501,33 @@ function createPreview({ doc, win, lifecycle }) {
 }
 
 // src/scope.js
-function scopeRows(nodes, query, { strict = false, text = (s) => s } = {}) {
-  const row = (node) => ({ uid: node.uid, text: text(node.string ?? ""), heading: node.heading || 0, drillable: Boolean(node.kids?.length), node });
+function scopeRows(nodes, query, { strict = false, text = (s) => s, ordinals = false, hideEmpty = false } = {}) {
+  const row = (node, ord = false) => {
+    const shown = text(node.string ?? "");
+    return { uid: node.uid, text: shown, empty: !shown.trim(), ord, heading: node.heading || 0, drillable: Boolean(node.kids?.length), node };
+  };
+  const kept = hideEmpty ? nodes.filter((node) => text(node.string ?? "").trim() || node.kids?.length) : nodes;
   const plan = String(query ?? "").trim() ? searchPlan(query) : null;
-  if (!plan) return nodes.map(row);
+  if (!plan) return kept.map((node) => row(node));
+  const token = ordinals ? ordinalQuery(query) : null;
   const hits = [];
-  nodes.forEach((node, index) => {
+  kept.forEach((node, index) => {
+    const ord = Boolean(token) && startsWithOrdinal(text(node.string ?? ""), token);
     const match = matchFromKey(nodeKey(node), plan, { strict });
-    if (match.score < 0 || match.tier === "close") return;
-    hits.push({ node, index, score: match.score });
+    if (!ord && (match.score < 0 || match.tier === "close")) return;
+    hits.push({ node, index, ord, score: match.score });
   });
-  hits.sort((a, b) => b.score - a.score || a.index - b.index);
-  return hits.map((hit) => row(hit.node));
+  hits.sort((a, b) => Number(b.ord) - Number(a.ord) || b.score - a.score || a.index - b.index);
+  return hits.map((hit) => row(hit.node, hit.ord));
+}
+var CAP = 50;
+function capRows(rows, limit) {
+  if (limit === Infinity || limit >= rows.length) return rows;
+  return [...rows.slice(0, limit), { more: rows.length - limit, key: "more", uid: null, text: "", drillable: false }];
+}
+function firstReal(rows) {
+  const at = rows.findIndex((row) => !row.empty && row.more == null);
+  return at < 0 ? 0 : at;
 }
 
 // src/scopeview.js
@@ -1336,7 +1563,8 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
   }
   function renderList(scope) {
     const level = scope.levels[scope.levels.length - 1];
-    const key = `${level.uid}\0${level.query}\0${scope.rows.map((r) => r.uid).join(",")}`;
+    const more = scope.rows.reduce((sum, r) => sum + (r.more ?? 0), 0);
+    const key = `${level.uid}\0${level.query}\0${more}\0${scope.rows.map((r) => r.uid).join(",")}`;
     if (key === listKey) return;
     listKey = key;
     if (!scope.rows.length) {
@@ -1351,31 +1579,39 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     list.replaceChildren(...scope.rows.map((row, i) => {
       const item = doc.createElement("div");
       item.className = "burrow-row";
-      if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       item.setAttribute("role", "option");
       item.dataset.index = String(i);
+      if (row.more != null) {
+        item.classList.add("burrow-more-row");
+        item.textContent = `+${row.more} more`;
+        return item;
+      }
+      if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
       if (row.text) text.append(highlight(row.text, level.query));
-      else text.append(span("burrow-empty", "(empty)"));
+      else if (row.drillable) {
+        item.classList.add("burrow-empty-row");
+        text.append(span("burrow-empty", "(empty) ▸"));
+      } else text.append(span("burrow-empty", "(empty)"));
       item.append(text);
-      if (row.drillable) item.append(span("burrow-drill-mark", "›"));
+      if (row.drillable && row.text) item.append(span("burrow-drill-mark", "›"));
       return item;
     }));
   }
-  function renderHints(scope, on) {
+  let hintsShown = null;
+  function renderHints2(scope, on) {
     hintsLine.hidden = !on;
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
-    const items = [["↵", "insert"]];
-    if (scope.rows[level.active]?.drillable) items.push(["⇥", "drill"]);
-    items.push(["⇧⇥", "back"], ["esc", "results"]);
-    hintsLine.replaceChildren(...items.map(([keys, label]) => {
-      const item = doc.createElement("span");
-      item.className = "burrow-hint";
-      item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
-      return item;
-    }));
+    const active = scope.rows[level.active];
+    const items = [];
+    if (active?.drillable) items.push(["⇥/>", "drill"]);
+    items.push(["⇧⇥", "back"], [keyLabel("ctrlO"), "preview"], ["↵", active?.more != null ? "more" : "insert"], ["esc", "results"]);
+    const key = hintsKey(items);
+    if (key === hintsShown) return;
+    hintsShown = key;
+    renderHints(doc, hintsLine, items);
   }
   function paintActive(scope, hintsOn) {
     const level = scope.levels[scope.levels.length - 1];
@@ -1385,7 +1621,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       item.setAttribute("aria-selected", String(on));
       if (on) item.scrollIntoView?.({ block: "nearest" });
     });
-    renderHints(scope, hintsOn);
+    renderHints2(scope, hintsOn);
   }
   function place(anchor, popRect, taRect) {
     const above = popRect.top + popRect.height / 2 < taRect.top;
@@ -1412,6 +1648,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     hide() {
       node.hidden = true;
       listKey = null;
+      hintsShown = null;
     }
   };
 }
@@ -1483,6 +1720,7 @@ var FOLD_ALIASES = "burrow-fold-aliases";
 var LAYOUT = "burrow-layout";
 var SCOPE_OPEN = "burrow-scope-open";
 var FOLDED = "data-burrow-folded";
+var EXPANDED = "rm-autocomplete__results--expanded";
 var HINTS_HEIGHT = 22;
 var CHIPS_INSET = 8;
 var ROW_LIMIT = 3;
@@ -1510,9 +1748,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     observers: [],
     auto: false,
     chip: -1,
-    scope: null
+    scope: null,
+    prompt: null
   };
-  const debug = { lastFailure: null, commits: 0, trace: [] };
+  const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
     debug.trace.push({ t: Math.round(performance.now()), ...event });
     if (debug.trace.length > 60) debug.trace.shift();
@@ -1547,7 +1786,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
       const parsed = parseDrill(token.query, indexes.titles);
       if (parsed) {
-        const result = resolveDrill(parsed, tree, { strict: !recall });
+        const result = resolveDrill(parsed, tree, { strict: !recall, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") });
         st.drill = { ...result, key: `${result.page.uid}:${result.target?.uid ?? ""}` };
         return [drillRow(result)];
       }
@@ -1692,6 +1931,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       placeScope();
       return;
     }
+    if (st.prompt?.kind === "add") {
+      renderPrompt();
+      return;
+    }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
     const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
@@ -1748,15 +1991,57 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     return indexes.titles?.resolve(query)?.title.toLowerCase() === text;
   }
   let model = null;
+  let rowPreviewKey = null;
+  let rowPreviewId = null;
+  function cancelRowPreview() {
+    if (rowPreviewId != null) {
+      (win.cancelIdleCallback || win.clearTimeout).call(win, rowPreviewId);
+      rowPreviewId = null;
+    }
+    rowPreviewKey = null;
+  }
   function showPreview() {
-    if (!st.drill || !setting("drillPreview") || !st.pop) {
-      preview.hide();
+    if (st.drill && setting("drillPreview") && st.pop) {
+      cancelRowPreview();
+      if (model?.drillKey !== st.drill.key) {
+        model = previewModel(st.drill, tree, readableText);
+        model.drillKey = st.drill.key;
+      }
+      preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
       return;
     }
-    if (model?.drillKey !== st.drill.key) {
-      model = previewModel(st.drill, tree, readableText);
-      model.drillKey = st.drill.key;
+    const row = st.phase === "OWNED" && !st.prompt ? shown[st.active] : null;
+    if (row && (row.kind === "alias" || row.kind === "ref") && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
+      if (rowPreviewKey === row.key) {
+        if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+        return;
+      }
+      cancelRowPreview();
+      preview.hide();
+      rowPreviewKey = row.key;
+      const run = () => {
+        rowPreviewId = null;
+        perf.time("preview", () => drawRowPreview(row));
+      };
+      rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 150 }) : win.setTimeout(run, 50);
+      return;
     }
+    cancelRowPreview();
+    preview.hide();
+  }
+  function drawRowPreview(row) {
+    if (st.phase !== "OWNED" || st.prompt || shown[st.active]?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
+    let page;
+    let target = null;
+    if (row.kind === "alias") page = { uid: row.uid, title: row.title };
+    else {
+      const first = tree.trail(row.uid)[0];
+      if (!first) return;
+      page = { uid: first.uid, title: first.title };
+      target = tree.get(row.uid);
+    }
+    model = previewModel({ page, target }, tree, readableText);
+    model.drillKey = `row:${row.key}`;
     preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
   }
   function rowNode(row, i) {
@@ -1818,6 +2103,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.pop?.classList.toggle(OWNS, st.phase === "OWNED");
     paintChips();
     layoutPop();
+    showPreview();
   }
   let chipsFor = null;
   let chipsScrolled = false;
@@ -1831,19 +2117,27 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       chipsScrolled = false;
       chipsNode.remove();
     } else {
-      const key = `${row.key}\0${row.aliases.join("\0")}`;
+      const confirm = st.prompt?.kind === "delete" ? st.prompt : null;
+      const key = confirm ? `confirm\0${row.key}\0${confirm.alias}\0${confirm.saving}\0${confirm.error ?? ""}` : `${row.key}\0${row.aliases.join("\0")}`;
       if (key !== chipsFor) {
         chipsFor = key;
-        chipsNode.replaceChildren(
-          Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
-          ...row.aliases.map((alias, i) => {
-            const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias });
-            chip.dataset.index = String(i);
-            return chip;
-          })
-        );
+        chipsNode.classList.toggle("burrow-confirm", Boolean(confirm));
+        if (confirm) {
+          const text = confirm.saving ? `deleting “${confirm.alias}”…` : `delete alias “${confirm.alias}” from ${confirm.page.title}?`;
+          chipsNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-confirm-text", textContent: text }));
+          if (confirm.error) chipsNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: confirm.error }));
+        } else {
+          chipsNode.replaceChildren(
+            Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
+            ...row.aliases.map((alias, i) => {
+              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: alias });
+              chip.dataset.index = String(i);
+              return chip;
+            })
+          );
+        }
       }
-      chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
+      if (!confirm) chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
       const rowNode2 = strip.querySelectorAll(".burrow-row")[st.active];
       if (rowNode2 && chipsNode.previousElementSibling !== rowNode2) rowNode2.after(chipsNode);
       revealChip();
@@ -1851,6 +2145,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     setPad(shown.length, show);
   }
   function revealChip() {
+    if (st.prompt?.kind === "delete") return;
     if (st.chip <= 0) {
       if (chipsScrolled) chipsNode.scrollLeft = 0;
       chipsScrolled = false;
@@ -1927,6 +2222,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     strip.hidden = true;
     chipsNode.remove();
     chipsFor = null;
+    cancelRowPreview();
     preview.hide();
     st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
@@ -1942,6 +2238,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     chipsNode.remove();
     chipsFor = null;
     hints.hidden = true;
+    cancelRowPreview();
     preview.hide();
     clearPopover();
   }
@@ -1975,10 +2272,19 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   function hintList() {
     if (st.phase === "SCOPE") return [];
+    if (st.prompt?.kind === "add") return [["↵", "save alias"], ["esc", "cancel"]];
+    if (st.prompt?.kind === "delete") return [["↵", "delete"], ["esc", "keep"]];
     const row = shown[st.active];
+    if (chipsAvailable(row) && st.chip >= 0) {
+      return [["←→", "alias"], ...setting("aliasDelete") ? [[keyLabel("altBackspace"), "delete"]] : [], ["↵", "insert"], ["esc", "rows"]];
+    }
     const list = [];
-    if (setting("tabDrill") && (st.token?.kind === "[[" || st.phase === "OWNED" && row?.kind === "ref")) list.push(["⇥", "drill in"]);
-    if (chipsAvailable(row)) list.push(...st.chip >= 0 ? [["←→", "alias"], ["↵", "insert"], ["esc", "rows"]] : [["⌥↓", "aliases"]]);
+    if (setting("aliasCreate") && st.token?.kind === "[[" && aliasSource()) list.push([keyLabel("altA"), "alias"]);
+    if (chipsAvailable(row)) list.push([keyLabel("altDown"), "pick alias"]);
+    if (setting("tabDrill") && st.token?.kind === "[[") list.push(["⇥/>", "drill"]);
+    else if (setting("tabDrill") && st.phase === "OWNED" && row?.kind === "ref") list.push(["⇥", "drill"]);
+    if (!list.length) return [];
+    list.push([keyLabel("ctrlO"), "preview"], ["↵", "insert"]);
     return list;
   }
   let hintsFor = null;
@@ -1991,15 +2297,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       hintsFor = null;
       pop.classList.remove(PAD_BOTTOM);
     } else {
-      const key = list.map((hint) => hint.join(" ")).join("|");
+      const key = hintsKey(list);
       if (key !== hintsFor) {
         hintsFor = key;
-        hints.replaceChildren(...list.map(([keys, label]) => {
-          const item = doc.createElement("span");
-          item.className = "burrow-hint";
-          item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
-          return item;
-        }));
+        renderHints(doc, hints, list);
       }
       pop.classList.add(PAD_BOTTOM);
     }
@@ -2040,6 +2341,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function detach() {
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
+    cancelRowPreview();
     preview.hide();
     hints.hidden = true;
     hintsFor = null;
@@ -2099,6 +2401,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.auto = false;
     st.chip = -1;
     st.scope = null;
+    st.prompt = null;
+    cancelRowPreview();
     model = null;
     scopeModel = null;
     tree.clear();
@@ -2155,6 +2459,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       st.ignoreNextInput = false;
       return;
     }
+    if (st.prompt) st.prompt = null;
     if (st.phase === "SCOPE") exitScope();
     if (!anyFeature()) {
       if (st.phase !== "IDLE") reset("off");
@@ -2175,7 +2480,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   const ACTION_KEYS = /* @__PURE__ */ new Set(["Enter", "Tab", "ArrowUp", "ArrowDown", "Escape"]);
   function onKeyDown(event) {
-    if (pendingTa && ACTION_KEYS.has(event.key) && event.target === pendingTa) flush();
+    if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
     if (event.isComposing || st.composing || event.keyCode === 229) return;
     const ta = event.target;
@@ -2184,11 +2489,23 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       return;
     }
     if (ta.selectionStart !== ta.selectionEnd) return;
+    if (st.prompt) {
+      promptKey(event);
+      return;
+    }
     const count = shown.length;
     const key = event.key;
     if (st.phase === "SCOPE") {
       scopeKey(event);
       return;
+    }
+    if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
+      const page = aliasSource();
+      if (page) {
+        openPrompt(page);
+        consume(event);
+        return;
+      }
     }
     if (st.phase === "OWNED" && chipKey(event)) return;
     if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -2266,7 +2583,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     const last = row.aliases.length - 1;
     if (plain && (key === "ArrowLeft" || key === "ArrowUp")) st.chip = Math.max(0, st.chip - 1);
     else if (plain && (key === "ArrowRight" || key === "ArrowDown")) st.chip = Math.min(last, st.chip + 1);
-    else if (key === "ArrowUp" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey || key === "Escape" && plain) st.chip = -1;
+    else if (key === "Backspace" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && setting("aliasDelete")) {
+      st.prompt = { kind: "delete", page: { uid: row.uid, title: row.title }, alias: row.aliases[st.chip], saving: false, error: null };
+      trace({ ev: "confirm-delete", alias: st.prompt.alias });
+    } else if (key === "ArrowUp" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey || key === "Escape" && plain) st.chip = -1;
     else if (plain && (key === "Enter" || key === "Tab")) {
       if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, st.chip), event)) return true;
       if (!commit(chipRow(row, st.chip))) reset("commit-refused");
@@ -2280,6 +2600,166 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     paintActive();
     consume(event);
     return true;
+  }
+  const isAltA = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyA";
+  function aliasSource() {
+    if (st.phase === "OWNED") {
+      const row = shown[st.active];
+      return row?.kind === "alias" ? { uid: row.uid, title: row.title } : null;
+    }
+    const native = armedSource();
+    return native ? { uid: native.page.uid, title: native.page.title } : null;
+  }
+  function openPrompt(page) {
+    st.prompt = { kind: "add", page, text: st.token.query.trim(), fresh: true, saving: false, error: null };
+    st.auto = false;
+    st.chip = -1;
+    trace({ ev: "prompt", uid: page.uid });
+    render();
+  }
+  const promptNode = doc.createElement("div");
+  promptNode.className = "burrow-row burrow-prompt";
+  function renderPrompt() {
+    const p = st.prompt;
+    const input = Object.assign(doc.createElement("span"), { className: "burrow-prompt-input", textContent: p.saving ? `${p.text} …` : p.text });
+    input.classList.toggle("burrow-fresh", p.fresh && Boolean(p.text));
+    promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
+    if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error }));
+    if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
+    shown = [];
+    shownQuery = null;
+    chipsFor = null;
+    chipsNode.remove();
+    cancelRowPreview();
+    preview.hide();
+    strip.hidden = false;
+    setPad(1, false);
+    layoutPop();
+  }
+  function promptKey(event) {
+    const p = st.prompt;
+    const key = event.key;
+    if (key === "Shift" || key === "Alt" || key === "Meta" || key === "Control" || key === "CapsLock") return;
+    if (p.kind === "delete") {
+      consume(event);
+      if (p.saving) return;
+      if (key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        confirmDelete();
+        return;
+      }
+      st.prompt = null;
+      paintActive();
+      return;
+    }
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && key.toLowerCase() === "v") return;
+    consume(event);
+    if (p.saving) return;
+    if (key === "Escape") {
+      st.prompt = null;
+      render();
+      return;
+    }
+    if (key === "Enter") {
+      savePrompt();
+      return;
+    }
+    if (mod) {
+      if (key.toLowerCase() === "a") p.fresh = true;
+      renderPrompt();
+      return;
+    }
+    if (key === "Backspace") {
+      p.text = p.fresh ? "" : [...p.text].slice(0, -1).join("");
+      p.fresh = false;
+      p.error = null;
+    } else if (key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End") p.fresh = false;
+    else if (key.length === 1 || [...key].length === 1) {
+      p.text = p.fresh ? key : p.text + key;
+      p.fresh = false;
+      p.error = null;
+    }
+    renderPrompt();
+  }
+  async function savePrompt() {
+    const p = st.prompt;
+    const check = validAlias(p.text);
+    if (!check.ok) {
+      p.error = check.reason;
+      renderPrompt();
+      return;
+    }
+    p.saving = true;
+    p.error = null;
+    renderPrompt();
+    let result;
+    try {
+      result = await addAliasToPage(api, { pageUid: p.page.uid, keyword: setting("aliasKeyword") || "Aliases", alias: check.alias });
+    } catch (error) {
+      result = { ok: false, error: String(error?.message || error) };
+    }
+    if (st.prompt !== p) return;
+    if (!result.ok) {
+      p.saving = false;
+      p.error = result.error;
+      renderPrompt();
+      return;
+    }
+    st.prompt = null;
+    debug.lastWrite = { kind: "add", at: Date.now(), ...result };
+    trace({ ev: "alias-added", uid: p.page.uid, block: result.blockUid });
+    indexes.schedule();
+    const row = { kind: "alias", key: `alias-new:${p.page.uid}`, insertion: aliasInsertion({ alias: check.alias, title: p.page.title }, setting("aliasLinkFormat")), pick: null };
+    if (!commit(row)) reset("commit-refused");
+  }
+  async function confirmDelete() {
+    const p = st.prompt;
+    p.saving = true;
+    p.error = null;
+    paintActive();
+    let result;
+    try {
+      result = await deleteAliasFromPage(api, { pageUid: p.page.uid, keyword: setting("aliasKeyword") || "Aliases", alias: p.alias });
+    } catch (error) {
+      result = { ok: false, error: String(error?.message || error) };
+    }
+    if (st.prompt !== p) return;
+    if (!result.ok) {
+      p.saving = false;
+      p.error = result.error;
+      paintActive();
+      return;
+    }
+    st.prompt = null;
+    debug.lastWrite = { kind: "delete", at: Date.now(), ...result };
+    trace({ ev: "alias-deleted", alias: p.alias, block: result.blockUid });
+    for (const r of /* @__PURE__ */ new Set([...st.rows, ...shown])) {
+      if (r.kind === "alias" && r.uid === p.page.uid) r.aliases = r.aliases.filter((a) => a !== p.alias);
+    }
+    const row = shown[st.active];
+    st.chip = chipsAvailable(row) ? Math.min(st.chip, row.aliases.length - 1) : -1;
+    chipsFor = null;
+    indexes.schedule();
+    paintActive();
+  }
+  function onPaste(event) {
+    const p = st.prompt;
+    if (p?.kind !== "add" || event.target !== st.ta) return;
+    consume(event);
+    if (p.saving) return;
+    const text = (event.clipboardData?.getData("text/plain") ?? "").split(/\r?\n/)[0];
+    p.text = p.fresh ? text : p.text + text;
+    p.fresh = false;
+    p.error = null;
+    renderPrompt();
+  }
+  function onChipsWheel(event) {
+    if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    const max = chipsNode.scrollWidth - chipsNode.clientWidth;
+    if (max <= 0) return;
+    const step = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+    chipsNode.scrollLeft = Math.max(0, Math.min(max, chipsNode.scrollLeft + step));
+    event.preventDefault();
   }
   function chipRow(row, index) {
     const alias = row.aliases[index];
@@ -2311,8 +2791,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (!tree.children(source.uid).length) return false;
     st.scope = {
       rootLabel: st.token.kind === "[[" ? "Pages" : "Blocks",
-      levels: [{ ...source, query: "", active: 0 }],
+      levels: [{ ...source, query: "", active: 0, limit: setting("drillCap") ? CAP : Infinity }],
       rows: [],
+      all: [],
+      preview: setting("drillPreview"),
       returnTo: { phase: st.phase, active: st.active, chip: st.chip }
     };
     st.phase = "SCOPE";
@@ -2321,6 +2803,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     trace({ ev: "scope-enter", uid: source.uid });
     strip.hidden = true;
     chipsNode.remove();
+    cancelRowPreview();
     preview.hide();
     st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
@@ -2347,8 +2830,24 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   const scopeLevel = () => st.scope.levels[st.scope.levels.length - 1];
   function scopeRefresh(keepActive) {
     const level = scopeLevel();
-    st.scope.rows = scopeRows(tree.twoLevels(level.uid), level.query, { strict: !setting("betterMatch"), text: readableText });
-    level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1)) : 0;
+    level.limit ?? (level.limit = setting("drillCap") ? CAP : Infinity);
+    st.scope.all = scopeRows(tree.twoLevels(level.uid), level.query, {
+      strict: !setting("betterMatch"),
+      text: readableText,
+      ordinals: setting("drillOrdinals"),
+      hideEmpty: setting("drillEmpty")
+    });
+    st.scope.rows = capRows(st.scope.all, level.limit);
+    level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1)) : level.query ? 0 : firstReal(st.scope.rows);
+    scopePanel.show(st.scope, setting("keyHints"));
+    placeScope();
+  }
+  function scopeMore() {
+    const level = scopeLevel();
+    const at = level.limit;
+    level.limit += CAP;
+    st.scope.rows = capRows(st.scope.all, level.limit);
+    level.active = Math.min(at, st.scope.rows.length - 1);
     scopePanel.show(st.scope, setting("keyHints"));
     placeScope();
   }
@@ -2365,12 +2864,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   function showScopePreview() {
     const level = scopeLevel();
-    if (!setting("drillPreview")) {
+    if (!st.scope.preview) {
       scopePreview.hide();
       return;
     }
     const row = st.scope.rows[level.active];
-    const target = row ? row.node : level.page?.uid === level.uid ? null : tree.get(level.uid);
+    const target = row && row.more == null ? row.node : level.page?.uid === level.uid ? null : tree.get(level.uid);
     const first = tree.trail(level.uid)[0];
     const page = level.page || (first ? { uid: first.uid, title: first.title } : null);
     if (!page) {
@@ -2393,8 +2892,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function scopeDeeper() {
     const level = scopeLevel();
     const row = st.scope.rows[level.active];
-    if (!row?.drillable) return;
-    st.scope.levels.push({ uid: row.uid, label: row.text || "(empty)", page: level.page, insertion: `((${row.uid}))`, query: "", active: 0 });
+    if (!row?.drillable || row.more != null) return;
+    st.scope.levels.push({
+      uid: row.uid,
+      label: row.text || "(empty)",
+      page: level.page,
+      insertion: `((${row.uid}))`,
+      query: "",
+      active: 0,
+      limit: setting("drillCap") ? CAP : Infinity
+    });
     scopeRefresh(false);
   }
   function scopeBack(toLevel = st.scope.levels.length - 2) {
@@ -2408,10 +2915,24 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function scopeCommit() {
     const level = scopeLevel();
     const row = st.scope.rows[level.active];
+    if (row?.more != null) {
+      scopeMore();
+      return true;
+    }
+    if (row?.empty && row.drillable) {
+      scopeDeeper();
+      return true;
+    }
     return commit(row ? { kind: "scope", key: `scope:${row.uid}`, insertion: `((${row.uid}))` } : { kind: "scope", key: `scope:${level.uid}`, insertion: level.insertion });
   }
   function scopeKey(event) {
     const key = event.key;
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.code === "KeyO") {
+      st.scope.preview = !st.scope.preview;
+      consume(event);
+      showScopePreview();
+      return;
+    }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const level = scopeLevel();
     if (key === "Tab") {
@@ -2444,6 +2965,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       consume(event);
       if (level.query) {
         level.query = [...level.query].slice(0, -1).join("");
+        level.limit = setting("drillCap") ? CAP : Infinity;
         scopeRefresh(false);
       } else scopeBack();
       return;
@@ -2455,6 +2977,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
         return;
       }
       level.query += key;
+      level.limit = setting("drillCap") ? CAP : Infinity;
       scopeRefresh(false);
     }
   }
@@ -2496,6 +3019,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function onStripMouseDown(event) {
     event.preventDefault();
     event.stopPropagation();
+    if (st.prompt) return;
     const chip = event.target.closest?.(".burrow-chip");
     if (chip) {
       const row2 = shown[st.active];
@@ -2519,8 +3043,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     }
     const row = event.target.closest?.(".burrow-row");
     if (!row) return;
-    scopeLevel().active = Number(row.dataset.index);
-    if (!scopeCommit()) reset("click-refused");
+    const level = scopeLevel();
+    level.active = Number(row.dataset.index);
+    const clicked = st.scope.rows[level.active];
+    if (clicked?.more != null) scopeMore();
+    else if (clicked?.empty && clicked.drillable) scopeDeeper();
+    else if (!scopeCommit()) reset("click-refused");
   }
   function onCompositionStart(event) {
     if (!isBlockInput(event.target)) return;
@@ -2556,6 +3084,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   lifecycle.event(win, "compositionstart", guarded("compositionstart", onCompositionStart), true);
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
+  lifecycle.event(win, "paste", guarded("paste", onPaste), true);
+  lifecycle.event(chipsNode, "wheel", guarded("wheel", onChipsWheel), { passive: false });
+  lifecycle.event(chipsNode, "scroll", () => {
+    chipsScrolled = chipsNode.scrollLeft > 0;
+  }, { passive: true });
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
   lifecycle.add(() => reset("unload"));
@@ -2566,9 +3099,9 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.3.0";
+var VERSION = "0.4.0";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;
@@ -2619,19 +3152,47 @@ async function onload({ extensionAPI, extension }) {
     const perf = createPerf();
     await initializeSettings(extensionAPI);
     let indexes = null;
+    let refSearch = null;
+    let added = false;
+    const commandApi = extensionAPI.ui.commandPalette;
+    const refLabel = "Burrow: block reference search";
+    const syncRefCommand = async (on = setting("refSearch")) => {
+      if (lifecycle.disposed) return;
+      if (on && !added) {
+        added = true;
+        await commandApi.addCommand({ label: refLabel, callback: () => refSearch?.open() });
+      } else if (!on && added) {
+        added = false;
+        await commandApi.removeCommand({ label: refLabel });
+      }
+    };
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
-      onChange: (id) => {
+      onChange: (id, event) => {
         if (id === "aliasKeyword") indexes?.schedule();
+        if (id !== "refSearch") return;
+        const value = typeof event === "boolean" ? event : event?.target?.checked;
+        if (typeof value === "boolean") void syncRefCommand(value);
+        else lifecycle.timeout(() => {
+          void syncRefCommand();
+        }, 0);
       }
     }));
+    lifecycle.add(async () => {
+      if (added) {
+        added = false;
+        await commandApi.removeCommand({ label: refLabel });
+      }
+    });
+    await syncRefCommand();
     if (api && globalThis.document) {
       indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle) });
       const picks = createPickMemory({ storage: safeLocalStorage(), key: `burrow:picks:${api.graph?.name ?? "graph"}` });
       const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks });
+      refSearch = createRefSearch({ api, lifecycle, setting });
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, picks };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, picks, refSearch };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;
@@ -2643,6 +3204,7 @@ async function onload({ extensionAPI, extension }) {
         for (const id of FEATURES) {
           await extensionAPI.settings.set(id, false);
         }
+        await syncRefCommand();
       }
     });
     console.info(`[burrow] Loaded v${extension?.version || VERSION}`);

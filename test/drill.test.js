@@ -194,3 +194,37 @@ test("preview model: trail, siblings, highlighted target and two levels of child
   assert.deepEqual(top.trail, ["Page"]);
   assert.equal(top.items.some((i) => i.target), false, "an unresolved drill highlights nothing");
 });
+
+test("bestMatch: ordinal steps pick the numbered block first", () => {
+  const kids = () => [
+    { uid: "n", string: "intro mentions 2 things" },
+    { uid: "a", string: "1. mix" },
+    { uid: "b", string: "2. bake" },
+    { uid: "p", string: "(b) cool" },
+    { uid: "r", string: "iii. serve" },
+  ];
+  assert.equal(bestMatch(kids(), "2", { ordinals: true }).uid, "b");
+  assert.equal(bestMatch(kids(), "(b)", { ordinals: true }).uid, "p");
+  assert.equal(bestMatch(kids(), "iii", { ordinals: true }).uid, "r");
+  const second = bestMatch([{ uid: "x", string: "2. a" }, { uid: "y", string: "2. b" }], "2", { ordinals: true, first: (list) => list[1] });
+  assert.equal(second.uid, "y");
+});
+
+test("resolveDrill passes ordinals and hideEmpty to every step", () => {
+  const tree = { P: [{ uid: "s", string: "Steps", kids: [{}] }], s: [{ uid: "e", string: "" }, { uid: "i", string: "intro 2" }, { uid: "t", string: "2. bake" }] };
+  const source = { headings: (uid) => tree[uid], children: (uid) => tree[uid] || [] };
+  const parsed = { page: { uid: "P", title: "P" }, heading: "Steps", steps: ["2"] };
+  assert.equal(resolveDrill(parsed, source, { ordinals: true }).target.uid, "t");
+});
+
+test("bestMatch: hideEmpty skips empty leaves and blank queries prefer real text", () => {
+  const list = [{ uid: "e", string: "" }, { uid: "ek", string: " ", kids: [{}] }, { uid: "t", string: "text" }];
+  assert.equal(bestMatch(list, "", { hideEmpty: true }).uid, "t");
+  assert.equal(bestMatch(list, "", {}).uid, "e");
+  assert.equal(bestMatch([{ uid: "e", string: "" }, { uid: "ek", string: "", kids: [{}] }], "", { hideEmpty: true }).uid, "ek");
+  assert.equal(bestMatch([{ uid: "e", string: "" }], "", { hideEmpty: true }), null);
+  const parsed = { page: { uid: "P", title: "P" }, heading: null, steps: [""] };
+  const tree = { P: [{ uid: "e", string: "" }, { uid: "t", string: "real" }] };
+  const source = { headings: () => [], children: (uid) => tree[uid] || [] };
+  assert.equal(resolveDrill(parsed, source, { hideEmpty: true }).target.uid, "t");
+});

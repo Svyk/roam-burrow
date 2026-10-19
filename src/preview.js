@@ -72,7 +72,7 @@ export function createPreview({ doc, win, lifecycle }) {
       row.style.setProperty("--burrow-depth", String(item.depth));
       if (item.more != null) {
         row.classList.add("burrow-more");
-        row.textContent = `… ${item.more} more`;
+        row.textContent = `+${item.more} more`;
         return row;
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
