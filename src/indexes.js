@@ -1,4 +1,4 @@
-import { buildAliasIndex, keywordTitles } from "./aliases.js";
+import { buildAliasIndex, keywordTitles, setAliasRefs } from "./aliases.js";
 import { buildRefIndexSliced } from "./refindex.js";
 import { buildTitleIndex } from "./titles.js";
 
@@ -11,6 +11,7 @@ const WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] 
 const ALIAS_PAGES = "[:find [?a ...] :in $ [?t ...] :where [?a :node/title ?t]]";
 const ALIAS_BLOCKS = `[:find ?s ?pt ?pu :in $ [?a ...]
   :where [?b :block/refs ?a] [?b :block/string ?s] [?b :block/page ?p] [?p :node/title ?pt] [?p :block/uid ?pu]]`;
+const ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p]]";
 
 // Both indexes are built at idle and refreshed lazily when a popup opens and
 // they are older than the TTL. Nothing here runs on a keystroke.
@@ -37,12 +38,15 @@ export function createIndexes({ api, perf, setting, idle }) {
     const nextKeyword = setting("aliasKeyword") || "Aliases";
     const pageIds = await q(ALIAS_PAGES, keywordTitles(nextKeyword));
     const aliasRows = pageIds?.length ? await q(ALIAS_BLOCKS, pageIds) : [];
+    const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
+    const aliasRefRows = aliasUids.length ? await q(ALIAS_REFS, aliasUids) : [];
     const rows = await q(REFERENCED_BLOCKS);
     const titleRows = await q(TITLES);
     const separated = (titleRows || []).map(([t]) => t).filter((t) => /[#>]/.test(t));
     const withContent = new Set(separated.length ? await q(WITH_CONTENT, separated) : []);
     const t1 = performance.now();
     const nextAliases = buildAliasIndex(aliasRows, nextKeyword);
+    setAliasRefs(nextAliases, aliasRefRows);
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);

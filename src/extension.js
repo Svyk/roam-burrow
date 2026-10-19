@@ -5,11 +5,11 @@ import { createPickMemory } from "./picks.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 let activeLifecycle = null;
 
-const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost"];
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"];
 
 function safeLocalStorage() {
   try { return globalThis.localStorage ?? null; } catch { return null; }
