@@ -1362,16 +1362,18 @@ var GAP = 4;
 var WIDTH = 400;
 var MAX_HEIGHT = 300;
 var DRILL_CLASS = "burrow-drill";
-function previewModel(result, tree, text) {
+function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const { page, target } = result;
   const trailNodes = target ? tree.trail(target.uid) : [];
   const parentUid = trailNodes.length ? trailNodes[trailNodes.length - 1].uid : page.uid;
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
+  const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
   const pushKids = (uid, depth, levels) => {
     const kids = levels > 1 ? tree.twoLevels(uid) : tree.children(uid);
     for (const kid of kids.slice(0, CHILD_LIMIT)) {
       if (items.length >= ITEM_LIMIT) return;
+      if (emptyLeaf(kid)) continue;
       items.push({ uid: kid.uid, text: text(kid.string || ""), depth, heading: kid.heading, target: false });
       if (levels > 1 && kid.kids?.length) pushKids(kid.uid, depth + 1, levels - 1);
     }
@@ -1388,6 +1390,7 @@ function previewModel(result, tree, text) {
   if (from > 0) items.push({ more: from, depth: 0 });
   for (const sib of siblings.slice(from, from + SIBLING_WINDOW)) {
     const isTarget = sib.uid === target.uid;
+    if (!isTarget && emptyLeaf(sib)) continue;
     items.push({ uid: sib.uid, text: text(sib.string || ""), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
@@ -2000,18 +2003,23 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     }
     rowPreviewKey = null;
   }
+  function previewTarget() {
+    if (st.prompt) return { kind: "alias", key: `page:${st.prompt.page.uid}`, uid: st.prompt.page.uid, title: st.prompt.page.title };
+    const row = st.phase === "OWNED" ? shown[st.active] : null;
+    return row?.kind === "alias" || row?.kind === "ref" ? row : null;
+  }
   function showPreview() {
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree, readableText);
+        model = previewModel(st.drill, tree, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
       }
       preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
       return;
     }
-    const row = st.phase === "OWNED" && !st.prompt ? shown[st.active] : null;
-    if (row && (row.kind === "alias" || row.kind === "ref") && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
+    const row = previewTarget();
+    if (row && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
       if (rowPreviewKey === row.key) {
         if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
         return;
@@ -2030,7 +2038,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     preview.hide();
   }
   function drawRowPreview(row) {
-    if (st.phase !== "OWNED" || st.prompt || shown[st.active]?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
+    if (previewTarget()?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
     let page;
     let target = null;
     if (row.kind === "alias") page = { uid: row.uid, title: row.title };
@@ -2040,7 +2048,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    model = previewModel({ page, target }, tree, readableText);
+    model = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
     model.drillKey = `row:${row.key}`;
     preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
   }
@@ -2107,6 +2115,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   let chipsFor = null;
   let chipsScrolled = false;
+  let revealedChip = -1;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
   function paintChips() {
     const row = shown[st.active];
@@ -2114,7 +2123,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (!show) {
       st.chip = -1;
       chipsFor = null;
+      chipsNode.scrollLeft = 0;
       chipsScrolled = false;
+      revealedChip = -1;
       chipsNode.remove();
     } else {
       const confirm = st.prompt?.kind === "delete" ? st.prompt : null;
@@ -2127,6 +2138,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
           chipsNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-confirm-text", textContent: text }));
           if (confirm.error) chipsNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: confirm.error }));
         } else {
+          chipsNode.scrollLeft = 0;
+          chipsScrolled = false;
+          revealedChip = -1;
           chipsNode.replaceChildren(
             Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
             ...row.aliases.map((alias, i) => {
@@ -2146,6 +2160,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   function revealChip() {
     if (st.prompt?.kind === "delete") return;
+    if (st.chip === revealedChip) return;
+    revealedChip = st.chip;
     if (st.chip <= 0) {
       if (chipsScrolled) chipsNode.scrollLeft = 0;
       chipsScrolled = false;
@@ -2402,6 +2418,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.chip = -1;
     st.scope = null;
     st.prompt = null;
+    promptRows = [];
     cancelRowPreview();
     model = null;
     scopeModel = null;
@@ -2615,8 +2632,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.auto = false;
     st.chip = -1;
     trace({ ev: "prompt", uid: page.uid });
+    promptRows = shown.slice();
     render();
   }
+  let promptRows = [];
   const promptNode = doc.createElement("div");
   promptNode.className = "burrow-row burrow-prompt";
   function renderPrompt() {
@@ -2630,11 +2649,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     shownQuery = null;
     chipsFor = null;
     chipsNode.remove();
-    cancelRowPreview();
-    preview.hide();
     strip.hidden = false;
+    syncPanes(promptRows);
     setPad(1, false);
     layoutPop();
+    showPreview();
   }
   function promptKey(event) {
     const p = st.prompt;
@@ -2657,6 +2676,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (p.saving) return;
     if (key === "Escape") {
       st.prompt = null;
+      promptRows = [];
       render();
       return;
     }
@@ -2706,6 +2726,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       return;
     }
     st.prompt = null;
+    promptRows = [];
     debug.lastWrite = { kind: "add", at: Date.now(), ...result };
     trace({ ev: "alias-added", uid: p.page.uid, block: result.blockUid });
     indexes.schedule();
@@ -2878,7 +2899,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     }
     const key = `${page.uid}:${target?.uid ?? ""}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree, readableText);
+      scopeModel = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });

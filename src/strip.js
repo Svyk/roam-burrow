@@ -290,18 +290,26 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     rowPreviewKey = null;
   }
 
+  // What the row preview shows: the page an alias prompt is about, else the
+  // selected Burrow alias or referenced row.
+  function previewTarget() {
+    if (st.prompt) return { kind: "alias", key: `page:${st.prompt.page.uid}`, uid: st.prompt.page.uid, title: st.prompt.page.title };
+    const row = st.phase === "OWNED" ? shown[st.active] : null;
+    return row?.kind === "alias" || row?.kind === "ref" ? row : null;
+  }
+
   function showPreview() {
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree, readableText);
+        model = previewModel(st.drill, tree, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
       }
       preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
       return;
     }
-    const row = st.phase === "OWNED" && !st.prompt ? shown[st.active] : null;
-    if (row && (row.kind === "alias" || row.kind === "ref") && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
+    const row = previewTarget();
+    if (row && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
       if (rowPreviewKey === row.key) {
         if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
         return;
@@ -320,7 +328,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   }
 
   function drawRowPreview(row) {
-    if (st.phase !== "OWNED" || st.prompt || shown[st.active]?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
+    if (previewTarget()?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
     let page;
     let target = null;
     if (row.kind === "alias") page = { uid: row.uid, title: row.title };
@@ -330,7 +338,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    model = previewModel({ page, target }, tree, readableText);
+    model = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
     model.drillKey = `row:${row.key}`;
     preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
   }
@@ -400,6 +408,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // is rebuilt when the active row changes; rows keep the class-only path.
   let chipsFor = null;
   let chipsScrolled = false;
+  let revealedChip = -1;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
 
   function paintChips() {
@@ -408,7 +417,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!show) {
       st.chip = -1;
       chipsFor = null;
+      chipsNode.scrollLeft = 0;
       chipsScrolled = false;
+      revealedChip = -1;
       chipsNode.remove();
     } else {
       const confirm = st.prompt?.kind === "delete" ? st.prompt : null;
@@ -423,6 +434,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
           chipsNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-confirm-text", textContent: text }));
           if (confirm.error) chipsNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: confirm.error }));
         } else {
+          chipsNode.scrollLeft = 0;
+          chipsScrolled = false;
+          revealedChip = -1;
           chipsNode.replaceChildren(
             Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
             ...row.aliases.map((alias, i) => {
@@ -446,6 +460,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // Layout is read only in chip mode, never while typing.
   function revealChip() {
     if (st.prompt?.kind === "delete") return;
+    // Only a chip key moves the line; a render leaves the user's wheel scroll alone.
+    if (st.chip === revealedChip) return;
+    revealedChip = st.chip;
     if (st.chip <= 0) {
       if (chipsScrolled) chipsNode.scrollLeft = 0;
       chipsScrolled = false;
@@ -735,6 +752,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.chip = -1;
     st.scope = null;
     st.prompt = null;
+    promptRows = [];
     cancelRowPreview();
     model = null;
     scopeModel = null;
@@ -944,9 +962,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.auto = false;
     st.chip = -1;
     trace({ ev: "prompt", uid: page.uid });
+    promptRows = shown.slice();
     render();
   }
 
+  let promptRows = [];
   const promptNode = doc.createElement("div");
   promptNode.className = "burrow-row burrow-prompt";
   function renderPrompt() {
@@ -960,11 +980,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     shownQuery = null;
     chipsFor = null;
     chipsNode.remove();
-    cancelRowPreview();
-    preview.hide();
     strip.hidden = false;
+    syncPanes(promptRows);
     setPad(1, false);
     layoutPop();
+    showPreview();
   }
 
   function promptKey(event) {
@@ -983,7 +1003,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (mod && key.toLowerCase() === "v") return;          // the paste event below takes it
     consume(event);
     if (p.saving) return;
-    if (key === "Escape") { st.prompt = null; render(); return; }
+    if (key === "Escape") { st.prompt = null; promptRows = []; render(); return; }
     if (key === "Enter") { savePrompt(); return; }
     if (mod) { if (key.toLowerCase() === "a") p.fresh = true; renderPrompt(); return; }
     if (key === "Backspace") { p.text = p.fresh ? "" : [...p.text].slice(0, -1).join(""); p.fresh = false; p.error = null; }
@@ -1003,6 +1023,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (st.prompt !== p) return;                            // blur, Esc, composition: closed meanwhile
     if (!result.ok) { p.saving = false; p.error = result.error; renderPrompt(); return; }
     st.prompt = null;
+    promptRows = [];
     debug.lastWrite = { kind: "add", at: Date.now(), ...result };
     trace({ ev: "alias-added", uid: p.page.uid, block: result.blockUid });
     indexes.schedule();
@@ -1178,7 +1199,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!page) { scopePreview.hide(); return; }
     const key = `${page.uid}:${target?.uid ?? ""}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree, readableText);
+      scopeModel = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });
