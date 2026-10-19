@@ -3,9 +3,11 @@
 // Roam Desktop window over CDP and runs onload with an in-memory extensionAPI.
 // Not an install path (that is the GitHub Pages URL). Nothing persists: a
 // window reload drops it. Never reload the svy window (encrypted graph).
+// An installed Burrow is parked on load and put back on unload.
 //   node tools/dev-load.mjs <window-title-prefix> [load|unload|status] [key=value ...]
 import { readFile } from "node:fs/promises";
 import { connect } from "./cdp.mjs";
+import { parkInstalled, unparkInstalled } from "./installed.mjs";
 
 const [title = "Readwisenotes", action = "load", ...pairs] = process.argv.slice(2);
 const settings = Object.fromEntries(pairs.map((p) => {
@@ -15,15 +17,36 @@ const settings = Object.fromEntries(pairs.map((p) => {
 const root = new URL("..", import.meta.url);
 const c = await connect(title);
 try {
-  const result = await c.evaluate(async ({ action, code, css, settings }) => {
+  console.log(JSON.stringify(await run(), null, 1));
+} finally {
+  c.close();
+}
+
+async function run() {
+  if (action === "status") {
+    return c.evaluate(() => ({
+      loaded: Boolean(window.__burrowDev?.module),
+      version: window.__BURROW?.version ?? null,
+      parked: window.__burrowParked ? window.__burrowParked.inst.version : null,
+    }));
+  }
+  await c.evaluate(async () => {
     const dev = window.__burrowDev || (window.__burrowDev = { values: {} });
     if (dev.module) {
       await dev.module.default.onunload();
       dev.module = null;
       document.getElementById("burrow-dev-css")?.remove();
     }
-    if (action === "unload") return { unloaded: true, leftovers: document.querySelectorAll(".burrow-strip, .burrow-hud").length };
-    if (action === "status") return { loaded: false };
+  });
+  if (action === "unload") {
+    const installed = await unparkInstalled(c);
+    const nodes = await c.evaluate(() => document.querySelectorAll(".burrow-strip, .burrow-hud").length);
+    return { unloaded: true, installed, nodes };
+  }
+  const installed = await parkInstalled(c);
+  if (installed.error) throw new Error(installed.error);
+  const result = await c.evaluate(async ({ code, css, settings }) => {
+    const dev = window.__burrowDev;
     Object.assign(dev.values, settings);
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
@@ -52,12 +75,9 @@ try {
       buildQuery: perf?.samples.buildQuery, buildKeys: perf?.samples.buildKeys,
     };
   }, {
-    action,
     code: await readFile(new URL("extension.js", root), "utf8"),
     css: await readFile(new URL("extension.css", root), "utf8"),
     settings,
   });
-  console.log(JSON.stringify(result, null, 1));
-} finally {
-  c.close();
+  return { installed, ...result };
 }

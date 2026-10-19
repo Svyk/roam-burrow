@@ -20,6 +20,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 - Burrow's rows, chips and hint line pad Roam's list column only, so Roam's preview keeps its full height.
 - Burrow tracks every open `[[` / `((` token (layout, fold, hints and Tab need the popup even without rows of its own); still no data read per keystroke.
+- Dev tools: `tools/dev-load.mjs` and the live and perf gates park an installed Burrow in memory while they run and put it back afterwards, so they work in a window that has the Depot build installed. `dev-load.mjs status` no longer unloads the dev build.
 
 ## [0.2.0] - 2026-10-17
 

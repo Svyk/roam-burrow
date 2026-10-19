@@ -75,7 +75,7 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm run check   # build, secret scan, syntax check, tests, generated-artifact drift
 ```
 
-`src/` is the source; `extension.js`, `extension.css` and `deploy/` are generated and committed together with it. `tools/` holds the live gates that drive Roam Desktop over CDP (port 9223), on a scratch `Burrow/Fixtures` page they create and remove. They need both Roam windows open (svy unlocked) and never reload a window.
+`src/` is the source; `extension.js`, `extension.css` and `deploy/` are generated and committed together with it. `tools/` holds the live gates that drive Roam Desktop over CDP (port 9223), on a scratch `Burrow/Fixtures` page they create and remove. They need both Roam windows open (svy unlocked) and never reload a window. When a window already has Burrow installed (svy runs the Depot URL build), the gates and `tools/dev-load.mjs` park it in memory while they run: its handlers go idle and its nodes and stylesheet come out. The gates put it back when they finish, also after a failure; after `dev-load.mjs <window> load`, run `dev-load.mjs <window> unload`.
 
 ```bash
 npm run gate:live                            # everything below, both graphs, about 22 minutes, PASS/FAIL summary

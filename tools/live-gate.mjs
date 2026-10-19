@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Live gates for Burrow on Roam Desktop over CDP (:9223). Keys are trusted
 // CDP input events into one block on a `Burrow/Fixtures` page opened in the
-// right sidebar. Requires the build to be loaded with tools/dev-load.mjs.
+// right sidebar. The gate loads the build itself per arm; an installed Burrow
+// is parked for the run and put back afterwards.
 //
 //   node tools/live-gate.mjs <window-title-prefix> <graph-config> [--keep]
 //
@@ -14,6 +15,7 @@
 // pages the run creates are deleted afterwards.
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
+import { parkInstalled, unparkInstalled } from "./installed.mjs";
 import { FIXTURE_PAGE, cleanupFixture, guardReport, primeFixture, setupFixture } from "./fixture.mjs";
 
 const CONFIGS = {
@@ -597,11 +599,22 @@ async function runOverlap() {
 // ---- main ----
 
 const report = { window: c.page.title, config: configName, arms: {}, failures: [] };
-// Start from a fresh module, never one left by an earlier dev-load.
-await setArm("gone");
+// Start from a fresh module, never one left by an earlier dev-load, and park
+// an installed Burrow before the leftover checks (setArm's, and the one below).
+await c.evaluate(async () => {
+  const dev = window.__burrowDev;
+  if (dev?.module) { await dev.module.default.onunload(); dev.module = null; }
+  document.getElementById("burrow-dev-css")?.remove();
+});
+report.installed = await parkInstalled(c);
+if (report.installed.error) throw new Error(report.installed.error);
+await setArm("gone").catch(async (error) => { await unparkInstalled(c); throw error; });
 const leaks = await c.evaluate(() => document.querySelectorAll(".burrow-strip").length);
-if (leaks) throw new Error(`${leaks} Burrow strip node(s) from a leaked instance; reload this window first`);
-const fx = await setupFixture(c, { drillTree: true });
+if (leaks) {
+  await unparkInstalled(c);
+  throw new Error(`${leaks} Burrow strip node(s) from a leaked instance; reload this window first`);
+}
+const fx = await setupFixture(c, { drillTree: true }).catch(async (error) => { await unparkInstalled(c); throw error; });
 report.fixture = fx;
 try {
   const cases = only ? CASES.filter((k) => k.name === only) : CASES;
@@ -729,15 +742,21 @@ try {
   report.qBody = qBody;
   }
 } finally {
-  await setArm("gone");
-  report.cleanup = await cleanupFixture(c, { keep });
-  c.close();
+  try {
+    await setArm("gone");
+    report.cleanup = await cleanupFixture(c, { keep });
+  } finally {
+    report.restored = await unparkInstalled(c);
+    c.close();
+  }
 }
+if (report.installed.parked && !report.restored?.restored) report.failures.push(`installed Burrow ${report.installed.version} not restored`);
 if (flags.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else if (!only) {
   const caseCount = Object.values(report.arms).reduce((n, a) => n + Object.keys(a).length, 0);
   console.log(`live gate ${configName}: ${report.failures.length ? "FAIL" : "PASS"}`);
+  console.log(`  installed Burrow: ${report.installed.parked ? `parked ${report.installed.version} for the run, restored: ${report.restored?.restored ? "yes" : "no"}` : "none in this window"}`);
   console.log(`  acceptance ${q} -> ((${config.ref.uid})) first and selected: ${report.acceptance?.pass ? "yes" : "no"}`);
   console.log(`  byte-for-byte: ${caseCount} case runs (on / off / gone / drilloff), ${DRILL_CASES.length} of them drill cases; retyped after a Roam key drop: ${retypes}`);
   const drillPages = (arm, commits) => DRILL_CASES.filter((k) => Boolean(k.on) === commits)
