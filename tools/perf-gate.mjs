@@ -9,10 +9,12 @@
 // --drill types into a drill expression on the fixture's heading tree instead
 // (`[[Burrow/Fixtures#alpha > ` then the query), with the preview open; data
 // fetched by the drill (one pull per node it visits) is reported separately.
+// An installed Burrow is parked for the run and put back afterwards.
 //   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
-import { cleanupFixture, deleteNewPages, guardReport, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { parkInstalled, unparkInstalled } from "./installed.mjs";
+import { FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
 
 const args = process.argv.slice(2);
 const title = args[0];
@@ -20,7 +22,7 @@ const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ?
 const runs = Number(flag("--runs", 3));
 const drill = args.includes("--drill");
 const query = flag("--query", drill ? "never > grand" : "ant man");
-const opener = drill ? "[[Burrow/Fixtures#alpha > " : "((";
+const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
 const c = await connect(title);
@@ -34,7 +36,7 @@ async function setArm(arm) {
     if (dev.module) { await dev.module.default.onunload(); dev.module = null; }
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
-    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost"]) dev.values[f] = true;
+    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"]) dev.values[f] = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
     style.textContent = css;
@@ -106,8 +108,10 @@ const pct = (list, p) => {
 };
 
 const report = { window: c.page.title, query: opener + query, runs, results: [] };
-await setupFixture(c, { drillTree: drill });
-await snapshotTitles(c);
+await setArm("gone");
+report.installed = await parkInstalled(c);
+if (report.installed.error) throw new Error(report.installed.error);
+await setupFixture(c, { drillTree: drill }).then(() => snapshotTitles(c)).catch(async (error) => { await unparkInstalled(c); throw error; });
 try {
   for (let run = 0; run < runs; run++) {
     // Interleave arms so drift in Roam's own cost hits both equally.
@@ -151,10 +155,16 @@ try {
   report.error = String(error?.message || error);
   process.exitCode = 1;
 } finally {
-  await setArm("gone");
-  report.cleanup = await cleanupFixture(c);
-  c.close();
+  try {
+    await setArm("gone");
+    report.cleanup = await cleanupFixture(c);
+  } finally {
+    report.restored = await unparkInstalled(c);
+    c.close();
+  }
 }
+const notRestored = report.installed.parked && !report.restored?.restored;
+if (notRestored) process.exitCode = 1;
 const by = (arm, key) => report.results.filter((r) => r.arm === arm).map((r) => r[key]);
 report.summary = {
   paintP50: { gone: by("gone", "paintP50"), on: by("on", "paintP50") },
@@ -200,6 +210,7 @@ if (args.includes("--json")) {
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);
   console.log(`  per-run p95 deltas: ${report.summary.paintP95Deltas.join(" / ")} ms; Burrow-absent paint p50 ${report.summary.paintP50.gone.join(" / ")} ms`);
   console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);
+  console.log(`  ${notRestored ? `installed Burrow ${report.installed.version} not restored` : report.installed.parked ? `installed Burrow: parked ${report.installed.version} for the run, restored` : "installed Burrow: none in this window"}`);
   if (drill) {
     const on = report.results.filter((r) => r.arm === "on");
     console.log(`  drill: ${on.map((r) => r.keys).join(" / ")} keys per run, data fetches ${on.map((r) => r.drillFetches).join(" / ")} per run, preview open at the end: ${on.every((r) => r.previewAtEnd)}`);

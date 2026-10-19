@@ -85,9 +85,9 @@ export function createPreview({ doc, win, lifecycle }) {
     outline.replaceChildren(...rows);
   }
 
-  function place() {
+  function place(avoid, beside) {
     const native = pop.querySelector(".rm-autocomplete__preview");
-    if (native && pop.classList.contains("rm-autocomplete__results--expanded")) {
+    if (!beside && native && pop.classList.contains("rm-autocomplete__results--expanded")) {
       const r = native.getBoundingClientRect();
       Object.assign(pane.style, { left: `${Math.round(r.left)}px`, top: `${Math.round(r.top)}px`,
         width: `${Math.round(r.width)}px`, height: `${Math.round(r.height)}px`, maxHeight: "" });
@@ -96,7 +96,7 @@ export function createPreview({ doc, win, lifecycle }) {
     }
     // Beside the popover where Roam's own preview would open: right, then
     // left, then below or above it, never over it.
-    const r = pop.getBoundingClientRect();
+    const r = beside || pop.getBoundingClientRect();
     const height = Math.min(MAX_HEIGHT, pane.scrollHeight || MAX_HEIGHT);
     let left = r.right + GAP;
     let top = r.top;
@@ -104,7 +104,12 @@ export function createPreview({ doc, win, lifecycle }) {
       if (r.left - GAP - WIDTH >= 0) left = r.left - GAP - WIDTH;
       else {
         left = Math.max(0, Math.min(r.left, win.innerWidth - WIDTH));
-        top = r.bottom + GAP + height <= win.innerHeight ? r.bottom + GAP : Math.max(0, r.top - GAP - height);
+        const below = r.bottom + GAP;
+        const above = Math.max(0, r.top - GAP - height);
+        const hits = (y) => avoid && left < avoid.right && left + WIDTH > avoid.left && y < avoid.bottom && y + height > avoid.top;
+        if (below + height <= win.innerHeight && !hits(below)) top = below;
+        else if (!hits(above)) top = above;
+        else top = below + height <= win.innerHeight ? below : above;
       }
     }
     Object.assign(pane.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, width: `${WIDTH}px`, height: "", maxHeight: `${MAX_HEIGHT}px` });
@@ -122,14 +127,14 @@ export function createPreview({ doc, win, lifecycle }) {
 
   return {
     node: pane,
-    show(model, popover) {
+    show(model, popover, { avoid = null, beside = null } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
-      pop.classList.add(DRILL_CLASS);
+      if (!beside) pop.classList.add(DRILL_CLASS);
       const changed = model.key !== shownKey || pane.hidden;
       if (model.key !== shownKey) { render(model); shownKey = model.key; }
       pane.hidden = false;
-      place();
+      place(avoid, beside);
       if (changed) scrollToTarget();
     },
     hide() {

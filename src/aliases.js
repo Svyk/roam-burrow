@@ -26,18 +26,45 @@ export function keywordTitles(keyword = "Aliases") {
 export function buildAliasIndex(rows, keyword) {
   const entries = [];
   const byPage = new Map();
+  const pageAliases = new Map();
   const exact = `${String(keyword || "Aliases").trim()}::`;
   for (const [string, title, uid] of rows || []) {
     // roam-aliases reads only the exact-case keyword; Burrow reads any case.
     const seenByRoamAliases = String(string).startsWith(exact);
     for (const alias of parseAliasBlock(string, keyword)) {
       if (alias.toLowerCase() === String(title).toLowerCase()) continue;
-      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases });
+      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases, refs: null });
       if (!byPage.has(title)) byPage.set(title, []);
       byPage.get(title).push(alias);
+      if (!pageAliases.has(uid)) pageAliases.set(uid, []);
+      if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage };
+  return { entries, byPage, pageAliases, refsByPage: new Map() };
+}
+
+// rows: [[pageUid, count], ...]. Counts are read at idle, never per key.
+export function setAliasRefs(index, rows) {
+  const refsByPage = new Map(rows || []);
+  for (const entry of index.entries) entry.refs = refsByPage.get(entry.uid) ?? null;
+  index.refsByPage = refsByPage;
+}
+
+// hits: matchAliases output, best first. One row per page: its best alias,
+// plus every alias the page has, for the chips.
+export function groupAliasHits(hits, index) {
+  const seen = new Set();
+  const rows = [];
+  for (const hit of hits) {
+    if (seen.has(hit.uid)) continue;
+    seen.add(hit.uid);
+    rows.push({
+      uid: hit.uid, title: hit.title, alias: hit.alias, level: hit.level, score: hit.score, tier: hit.tier,
+      refs: hit.refs ?? null, seenByRoamAliases: hit.seenByRoamAliases,
+      aliases: index.pageAliases?.get(hit.uid) || [hit.alias],
+    });
+  }
+  return rows;
 }
 
 export function matchAliases(index, plan, { strict = false, limit = 3, skip, picked = null } = {}) {

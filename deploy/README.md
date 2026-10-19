@@ -1,8 +1,11 @@
 # Burrow
 
-A Roam Research extension that adds to Roam's own `[[` page search and `((` block search. It never replaces them: Roam's rows stay where they are, and Burrow shows at most three rows of its own at the top of Roam's popup.
+A Roam Research extension that adds to Roam's own `[[` page search and `((` block search. It never replaces them: Roam's rows stay where they are, and Burrow shows at most three rows of its own at the top of Roam's list.
 
-- **Alias rows in `[[`.** Type a page alias and the page shows up as `alias ↳ Page Title`. Picking it inserts `[alias]([[Page Title]])`, the same text roam-aliases writes. Aliases come from `Aliases:: a, b` blocks, read without case.
+- **Alias rows in `[[`.** Type a page alias and the page shows up as one row, `alias ↳ Page Title` with its reference count. Picking it inserts `[alias]([[Page Title]])`, the same text roam-aliases writes. Aliases come from `Aliases:: a, b` blocks, read without case. When an alias starts with what you typed and no page has exactly that title, the row starts selected, so Enter takes it.
+- **Alias chips.** Under the selected alias row, all of the page's aliases as chips (`aliases: Lori  lori  lorinator`). ⌥↓ moves into them, ←/→ picks one (the line scrolls to it when they don't all fit), Enter inserts the page shown as that alias.
+- **Tab drills in.** Tab on the highlighted page (Roam's row or Burrow's) lists its blocks in place under a breadcrumb (`Pages › Lori Boyd`), with a preview of the highlighted block beside the list. Type to filter, Enter inserts the block's `((uid))`, Tab goes deeper, Shift+Tab goes back. A referenced block in `((` drills the same way. With nothing to drill into, Tab is Roam's.
+- **One popup, no overlap.** roam-aliases' Aliases column folds into Burrow's rows; when it stays (aliases Burrow does not show), it gets its own band above Roam's list. Roam's preview keeps its own column. A key-hint line at the bottom names the keys Burrow adds.
 - **Referenced blocks first in `((`.** Blocks that other blocks already reference are ranked: the original before the blocks that quote it, then by inbound refs. The top original starts selected, so Enter inserts it.
 - **Alias expansion in `((`.** An alias also finds referenced blocks that link to its page.
 - **Forgiving matching.** `ant man` finds `[[Ant-Man]]`, `EMP 26` finds `EMP26-002-BHP`, `mcu` finds `Marvel Cinematic Universe`, small typos are forgiven. Numbers never fuzz.
@@ -14,16 +17,33 @@ The look follows Roam's popup: its colors, font and ref counts, light and dark. 
 
 ## Keyboard
 
-Burrow only takes keys while one of its rows is selected.
+Burrow takes keys only while one of its rows is selected, on Tab over a row it can drill into, and while drilled in.
 
 | Key | Burrow row selected | Roam row selected |
 |---|---|---|
 | ↑ | previous Burrow row | from Roam's first row: Burrow's last row |
 | ↓ | next Burrow row; past the last, back to Roam | Roam |
-| Enter / Tab | insert the Burrow row | Roam |
+| Enter | insert the Burrow row | Roam |
+| Tab | drill into its children; nothing to drill into: insert the row | `[[`: drill into the page; nothing to drill into: Roam |
+| ⌥↓ | alias row: move into its chips | Roam |
 | Esc | hand selection back to Roam; Roam closes the popup | Roam |
 
-While a drill-down is on (the text before `#` or `>` is a page title or alias), Burrow's one row is selected: Enter and Tab insert it, ↑ and ↓ do nothing, Esc goes to Roam. Delete the `#` or `>` and Roam's search is back.
+In the alias chips: ←/→ (or ↑/↓) move, Enter inserts with that alias, Tab drills into the page, Esc or ⌥↑ goes back to the rows.
+
+While drilled in (Tab), Burrow holds the keyboard and the block keeps exactly the `[[…` you typed:
+
+| Key | Does |
+|---|---|
+| letters, space | filter the blocks of this level (shown in the breadcrumb, never typed into the block) |
+| ↑ / ↓ | move |
+| Enter | insert the highlighted block's `((uid))` in place of the whole `[[…]]`; with no block left, insert the level itself |
+| Tab or `>` | one level deeper (rows with children carry a `›`) |
+| Shift+Tab | one level back; from the first level, back to the results |
+| Backspace | delete a filter character; on an empty filter, one level back |
+| Esc | back to the results (a second Esc is Roam's) |
+| ← → Home End | leave the drill, the caret moves as usual |
+
+While a drill-down is on (the text before `#` or `>` is a page title or alias), Burrow's one row is selected: Enter inserts it, Tab drills into its children (or inserts it when it has none), ↑ and ↓ do nothing, Esc goes to Roam. Delete the `#` or `>` and Roam's search is back.
 
 Burrow writes only the `((…))` or `[[…]]` you are typing, and only if the text before the caret is still exactly what it ranked. Otherwise the key goes to Roam as if Burrow were not installed.
 
@@ -34,18 +54,19 @@ Burrow writes only the `((…))` or `[[…]]` you are typing, and only if the te
 - Titles that contain `#` or `>` stay Roam's: when a page with content is named like the text you are typing (`C#`, `a > b`), Burrow stays out of the way.
 - The preview lies over Roam's own preview area when that is open (Ctrl-O), and beside the popup otherwise. It is read-only text.
 - Esc leaves the text as you typed it. Roam then makes a page of that name when it saves the block, exactly as it would without Burrow; Burrow ignores such empty pages.
+- Tab on the resolved block lists its children (the Tab drill above); on a block without children it inserts it.
 
 ## Settings
 
-Every feature has its own switch under **Settings → Burrow**: alias rows, alias expansion, referenced-first ranking, pre-select, forgiving matching, drill-down, drill-down preview, pick memory (off by default, kept in this browser only), current page first, and a performance readout. **Alias attribute** should match roam-aliases' Keyword (default `Aliases`). **Alias link format** picks `[alias]([[Page]])` or `[[Page]]`. The command palette has **Burrow: Disable all features**.
+Every feature has its own switch under **Settings → Burrow**: alias rows, alias rows with their page, alias pre-select, alias chips, alias expansion, referenced-first ranking, pre-select, forgiving matching, drill-down, drill-down preview, Tab drill, keep panes apart, key hints, pick memory (off by default, kept in this browser only), current page first, and a performance readout. **Alias attribute** should match roam-aliases' Keyword (default `Aliases`). **Alias link format** picks `[alias]([[Page]])` or `[[Page]]`. The command palette has **Burrow: Disable all features**.
 
 ## Working with roam-aliases
 
-Burrow reads the roam-aliases convention and never edits `Aliases::` blocks; roam-aliases owns those comma lists. When roam-aliases already lists an alias in the popup, Burrow does not draw a second row for it.
+Burrow reads the roam-aliases convention and never edits `Aliases::` blocks; roam-aliases owns those comma lists. With **Alias rows with their page** on, Burrow lists aliases in Roam's list (keyboard and mouse) and hides roam-aliases' rows for pages it already shows, so no alias appears twice; rows Burrow does not show stay in roam-aliases' column, which **Keep panes apart** lays out above Roam's list instead of over it. With that switch off, Burrow leaves aliases roam-aliases lists to its column, as in 0.2.0. Both write the same `[alias]([[Page]])` text.
 
 ## Cost
 
-Burrow builds its indexes once at idle (datalog queries for referenced blocks, alias blocks and page titles) and refreshes them at most once a minute, when a popup opens. A keystroke runs only a JavaScript match over the in-memory index: no queries, no pulls. A drill-down reads the page lazily: one small pull the first time it reaches a block (that block, its children and grandchildren), one heading lookup per page, all kept until the popup closes. The match runs right after the frame that shows the typed character, so it never delays that paint. `window.__BURROW_PERF.summary()` reports p50/p95 per key.
+Burrow builds its indexes once at idle (datalog queries for referenced blocks, alias blocks and page titles) and refreshes them at most once a minute, when a popup opens. A keystroke runs only a JavaScript match over the in-memory index: no queries, no pulls. A drill-down reads the page lazily: one small pull the first time it reaches a block (that block, its children and grandchildren), one heading lookup per page, all kept until the popup closes. A Tab drill reads the same way: one pull per level it opens. Alias reference counts are one more idle query. The match runs right after the frame that shows the typed character, so it never delays that paint. `window.__BURROW_PERF.summary()` reports p50/p95 per key.
 
 ## Development
 
@@ -54,12 +75,13 @@ npm ci --ignore-scripts --no-audit --no-fund
 npm run check   # build, secret scan, syntax check, tests, generated-artifact drift
 ```
 
-`src/` is the source; `extension.js`, `extension.css` and `deploy/` are generated and committed together with it. `tools/` holds the live gates that drive Roam Desktop over CDP (port 9223), on a scratch `Burrow/Fixtures` page they create and remove. They need both Roam windows open (svy unlocked) and never reload a window.
+`src/` is the source; `extension.js`, `extension.css` and `deploy/` are generated and committed together with it. `tools/` holds the live gates that drive Roam Desktop over CDP (port 9223), on a scratch `Burrow/Fixtures` page they create and remove. They need both Roam windows open (svy unlocked) and never reload a window. When a window already has Burrow installed (svy runs the Depot URL build), the gates and `tools/dev-load.mjs` park it in memory while they run: its handlers go idle and its nodes and stylesheet come out. The gates put it back when they finish, also after a failure; after `dev-load.mjs <window> load`, run `dev-load.mjs <window> unload`.
 
 ```bash
 npm run gate:live                            # everything below, both graphs, about 22 minutes, PASS/FAIL summary
 node tools/live-gate.mjs Svy svy             # about 4 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases, alias rows, pick memory, fast typing
 node tools/live-gate.mjs Readwisenotes notes # about 4 min
+node tools/live-gate.mjs Svy svy --only "alias chips: ⌥↓, ←, Enter"   # one case and its verdict, about 30 s
 node tools/perf-gate.mjs Svy --runs 3        # about 3 min: per-key cost and input-to-paint, Burrow on vs absent
 node tools/perf-gate.mjs Svy --runs 3 --drill # the same while typing a drill-down with the preview open
 ```

@@ -59,7 +59,7 @@ export function bestMatch(candidates, query, { strict = false, first } = {}) {
   return ties.length > 1 && first ? first(ties) : ties[0];
 }
 
-function nodeKey(node) {
+export function nodeKey(node) {
   if (!node.key) node.key = searchKey(stripRoamMarkup(node.string ?? node.title ?? ""));
   return node.key;
 }

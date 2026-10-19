@@ -1,4 +1,4 @@
-/* Burrow v0.2.0 | MIT | generated; edit src/ */
+/* Burrow v0.3.0 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -362,17 +362,45 @@ function keywordTitles(keyword = "Aliases") {
 function buildAliasIndex(rows, keyword) {
   const entries = [];
   const byPage = /* @__PURE__ */ new Map();
+  const pageAliases = /* @__PURE__ */ new Map();
   const exact = `${String(keyword || "Aliases").trim()}::`;
   for (const [string, title, uid] of rows || []) {
     const seenByRoamAliases = String(string).startsWith(exact);
     for (const alias of parseAliasBlock(string, keyword)) {
       if (alias.toLowerCase() === String(title).toLowerCase()) continue;
-      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases });
+      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases, refs: null });
       if (!byPage.has(title)) byPage.set(title, []);
       byPage.get(title).push(alias);
+      if (!pageAliases.has(uid)) pageAliases.set(uid, []);
+      if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage };
+  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map() };
+}
+function setAliasRefs(index, rows) {
+  const refsByPage = new Map(rows || []);
+  for (const entry of index.entries) entry.refs = refsByPage.get(entry.uid) ?? null;
+  index.refsByPage = refsByPage;
+}
+function groupAliasHits(hits, index) {
+  const seen = /* @__PURE__ */ new Set();
+  const rows = [];
+  for (const hit of hits) {
+    if (seen.has(hit.uid)) continue;
+    seen.add(hit.uid);
+    rows.push({
+      uid: hit.uid,
+      title: hit.title,
+      alias: hit.alias,
+      level: hit.level,
+      score: hit.score,
+      tier: hit.tier,
+      refs: hit.refs ?? null,
+      seenByRoamAliases: hit.seenByRoamAliases,
+      aliases: index.pageAliases?.get(hit.uid) || [hit.alias]
+    });
+  }
+  return rows;
 }
 function matchAliases(index, plan, { strict = false, limit = 3, skip, picked = null } = {}) {
   if (!index || !plan) return [];
@@ -591,6 +619,7 @@ var WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] [?
 var ALIAS_PAGES = "[:find [?a ...] :in $ [?t ...] :where [?a :node/title ?t]]";
 var ALIAS_BLOCKS = `[:find ?s ?pt ?pu :in $ [?a ...]
   :where [?b :block/refs ?a] [?b :block/string ?s] [?b :block/page ?p] [?p :node/title ?pt] [?p :block/uid ?pu]]`;
+var ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p]]";
 var yieldTo = () => new Promise((resolve) => setTimeout(resolve, 0));
 function createIndexes({ api, perf, setting, idle }) {
   let aliases = null;
@@ -609,12 +638,15 @@ function createIndexes({ api, perf, setting, idle }) {
     const nextKeyword = setting("aliasKeyword") || "Aliases";
     const pageIds = await q(ALIAS_PAGES, keywordTitles(nextKeyword));
     const aliasRows = pageIds?.length ? await q(ALIAS_BLOCKS, pageIds) : [];
+    const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
+    const aliasRefRows = aliasUids.length ? await q(ALIAS_REFS, aliasUids) : [];
     const rows = await q(REFERENCED_BLOCKS);
     const titleRows = await q(TITLES);
     const separated = (titleRows || []).map(([t]) => t).filter((t) => /[#>]/.test(t));
     const withContent = new Set(separated.length ? await q(WITH_CONTENT, separated) : []);
     const t1 = performance.now();
     const nextAliases = buildAliasIndex(aliasRows, nextKeyword);
+    setAliasRefs(nextAliases, aliasRefRows);
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
@@ -829,11 +861,17 @@ function createPickMemory({ storage, key }) {
 var DEFAULTS = Object.freeze({
   aliasPages: true,
   aliasExpand: true,
+  aliasInline: true,
+  aliasPreselect: true,
+  aliasChips: true,
   refRanking: true,
   refPreselect: true,
   betterMatch: true,
   drill: true,
   drillPreview: true,
+  tabDrill: true,
+  paneLayout: true,
+  keyHints: true,
   pickMemory: false,
   pageBoost: true,
   aliasKeyword: "Aliases",
@@ -841,13 +879,19 @@ var DEFAULTS = Object.freeze({
   perfHud: false
 });
 var SWITCHES = [
-  ["aliasPages", "Alias rows in [[", "Typing a page alias in [[ shows the page. Hidden for aliases that roam-aliases already lists."],
+  ["aliasPages", "Alias rows in [[", "Typing a page alias in [[ shows the page. With Alias rows with their page off, aliases roam-aliases already lists are left to its column."],
   ["aliasExpand", "Alias expansion in ((", "In ((, an alias also finds referenced blocks that link to its page."],
+  ["aliasInline", "Alias rows with their page", "One row per page an alias matches, alias ↳ Page with its reference count, also when roam-aliases is installed: its Aliases column folds into these rows instead of lying beside or over Roam's list. Off: Burrow leaves aliases that roam-aliases lists to its column."],
+  ["aliasPreselect", "Pre-select the alias row", "When an alias starts with what you typed and no page has exactly that title, its row starts selected, so Enter inserts it."],
+  ["aliasChips", "Alias chips", "Under a selected alias row, the page's other aliases as chips. ⌥↓ moves into them, ←/→ picks one, Enter inserts the page shown as that alias, Esc goes back to the rows."],
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
   ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
-  ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, highlighted. Drill-down still works without it."],
+  ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
+  ["tabDrill", "Tab drills in", "Tab on the highlighted page, or on a referenced block with children, lists its blocks in place under a breadcrumb. Type to filter, ↑/↓ to move, Enter inserts the block's ((uid)), Tab goes one level deeper, Shift+Tab or Backspace on an empty filter goes back, Esc returns to the results. With nothing to drill into, Tab does what Roam does."],
+  ["paneLayout", "Keep panes apart", "Roam's preview, roam-aliases' column and the result list each get their own space in the picker; nothing is drawn over anything else."],
+  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys Burrow adds."],
   ["pickMemory", "Pick memory", "A Burrow row you picked ranks first the next time you type the same query. Kept in this browser only."],
   ["pageBoost", "Current page first", "Among equal referenced blocks in ((, blocks on the page you are editing rank first."],
   ["perfHud", "Performance readout", "Shows Burrow's per-key cost (p50/p95) in the corner. Also at window.__BURROW_PERF."]
@@ -1176,9 +1220,9 @@ function createPreview({ doc, win, lifecycle }) {
     });
     outline.replaceChildren(...rows);
   }
-  function place() {
+  function place(avoid, beside) {
     const native = pop.querySelector(".rm-autocomplete__preview");
-    if (native && pop.classList.contains("rm-autocomplete__results--expanded")) {
+    if (!beside && native && pop.classList.contains("rm-autocomplete__results--expanded")) {
       const r2 = native.getBoundingClientRect();
       Object.assign(pane.style, {
         left: `${Math.round(r2.left)}px`,
@@ -1190,7 +1234,7 @@ function createPreview({ doc, win, lifecycle }) {
       pane.classList.add("burrow-preview-docked");
       return;
     }
-    const r = pop.getBoundingClientRect();
+    const r = beside || pop.getBoundingClientRect();
     const height = Math.min(MAX_HEIGHT, pane.scrollHeight || MAX_HEIGHT);
     let left = r.right + GAP;
     let top = r.top;
@@ -1198,7 +1242,12 @@ function createPreview({ doc, win, lifecycle }) {
       if (r.left - GAP - WIDTH >= 0) left = r.left - GAP - WIDTH;
       else {
         left = Math.max(0, Math.min(r.left, win.innerWidth - WIDTH));
-        top = r.bottom + GAP + height <= win.innerHeight ? r.bottom + GAP : Math.max(0, r.top - GAP - height);
+        const below = r.bottom + GAP;
+        const above = Math.max(0, r.top - GAP - height);
+        const hits = (y) => avoid && left < avoid.right && left + WIDTH > avoid.left && y < avoid.bottom && y + height > avoid.top;
+        if (below + height <= win.innerHeight && !hits(below)) top = below;
+        else if (!hits(above)) top = above;
+        else top = below + height <= win.innerHeight ? below : above;
       }
     }
     Object.assign(pane.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, width: `${WIDTH}px`, height: "", maxHeight: `${MAX_HEIGHT}px` });
@@ -1217,17 +1266,17 @@ function createPreview({ doc, win, lifecycle }) {
   }
   return {
     node: pane,
-    show(model, popover) {
+    show(model, popover, { avoid = null, beside = null } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
-      pop.classList.add(DRILL_CLASS);
+      if (!beside) pop.classList.add(DRILL_CLASS);
       const changed = model.key !== shownKey || pane.hidden;
       if (model.key !== shownKey) {
         render(model);
         shownKey = model.key;
       }
       pane.hidden = false;
-      place();
+      place(avoid, beside);
       if (changed) scrollToTarget();
     },
     hide() {
@@ -1235,6 +1284,134 @@ function createPreview({ doc, win, lifecycle }) {
       shownKey = null;
       if (pop) pop.classList.remove(DRILL_CLASS);
       pop = null;
+    }
+  };
+}
+
+// src/scope.js
+function scopeRows(nodes, query, { strict = false, text = (s) => s } = {}) {
+  const row = (node) => ({ uid: node.uid, text: text(node.string ?? ""), heading: node.heading || 0, drillable: Boolean(node.kids?.length), node });
+  const plan = String(query ?? "").trim() ? searchPlan(query) : null;
+  if (!plan) return nodes.map(row);
+  const hits = [];
+  nodes.forEach((node, index) => {
+    const match = matchFromKey(nodeKey(node), plan, { strict });
+    if (match.score < 0 || match.tier === "close") return;
+    hits.push({ node, index, score: match.score });
+  });
+  hits.sort((a, b) => b.score - a.score || a.index - b.index);
+  return hits.map((hit) => row(hit.node));
+}
+
+// src/scopeview.js
+var MAX_LABEL = 40;
+function createScopePanel({ doc, win, lifecycle, highlight }) {
+  const node = doc.createElement("div");
+  node.className = "burrow-scope bp3-elevation-3";
+  node.setAttribute("role", "listbox");
+  node.hidden = true;
+  const crumb = doc.createElement("div");
+  crumb.className = "burrow-scope-crumb";
+  const list = doc.createElement("div");
+  list.className = "burrow-scope-list";
+  const hintsLine = doc.createElement("div");
+  hintsLine.className = "burrow-scope-hints";
+  node.append(crumb, list, hintsLine);
+  lifecycle.node(node, doc.body);
+  let listKey = null;
+  const span = (className, textContent) => Object.assign(doc.createElement("span"), { className, textContent });
+  const ellipsize = (text) => text.length > MAX_LABEL ? `${text.slice(0, MAX_LABEL - 1)}…` : text;
+  function renderCrumb(scope) {
+    const level = scope.levels[scope.levels.length - 1];
+    const parts = [span("burrow-crumb burrow-crumb-root", scope.rootLabel)];
+    scope.levels.forEach((l, i) => {
+      parts.push(span("burrow-sep", " › "));
+      const part = span("burrow-crumb", ellipsize(l.label));
+      part.dataset.level = String(i);
+      parts.push(part);
+    });
+    const filter = span("burrow-scope-filter", level.query || "type to filter");
+    filter.classList.toggle("burrow-placeholder", !level.query);
+    crumb.replaceChildren(...parts, filter);
+  }
+  function renderList(scope) {
+    const level = scope.levels[scope.levels.length - 1];
+    const key = `${level.uid}\0${level.query}\0${scope.rows.map((r) => r.uid).join(",")}`;
+    if (key === listKey) return;
+    listKey = key;
+    if (!scope.rows.length) {
+      const self = doc.createElement("div");
+      self.className = "burrow-row burrow-self";
+      self.setAttribute("role", "option");
+      self.dataset.index = "0";
+      self.append(span("burrow-muted", "Insert "), level.label);
+      list.replaceChildren(self);
+      return;
+    }
+    list.replaceChildren(...scope.rows.map((row, i) => {
+      const item = doc.createElement("div");
+      item.className = "burrow-row";
+      if (row.heading) item.classList.add(`burrow-h${row.heading}`);
+      item.setAttribute("role", "option");
+      item.dataset.index = String(i);
+      const text = doc.createElement("span");
+      text.className = "burrow-text";
+      if (row.text) text.append(highlight(row.text, level.query));
+      else text.append(span("burrow-empty", "(empty)"));
+      item.append(text);
+      if (row.drillable) item.append(span("burrow-drill-mark", "›"));
+      return item;
+    }));
+  }
+  function renderHints(scope, on) {
+    hintsLine.hidden = !on;
+    if (!on) return;
+    const level = scope.levels[scope.levels.length - 1];
+    const items = [["↵", "insert"]];
+    if (scope.rows[level.active]?.drillable) items.push(["⇥", "drill"]);
+    items.push(["⇧⇥", "back"], ["esc", "results"]);
+    hintsLine.replaceChildren(...items.map(([keys, label]) => {
+      const item = doc.createElement("span");
+      item.className = "burrow-hint";
+      item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
+      return item;
+    }));
+  }
+  function paintActive(scope, hintsOn) {
+    const level = scope.levels[scope.levels.length - 1];
+    list.querySelectorAll(".burrow-row").forEach((item, i) => {
+      const on = i === level.active;
+      item.classList.toggle("burrow-active", on);
+      item.setAttribute("aria-selected", String(on));
+      if (on) item.scrollIntoView?.({ block: "nearest" });
+    });
+    renderHints(scope, hintsOn);
+  }
+  function place(anchor, popRect, taRect) {
+    const above = popRect.top + popRect.height / 2 < taRect.top;
+    node.style.left = `${Math.round(anchor.left)}px`;
+    node.style.width = `${Math.round(anchor.width)}px`;
+    if (above) {
+      node.style.top = "auto";
+      node.style.bottom = `${Math.round(win.innerHeight - popRect.bottom)}px`;
+    } else {
+      node.style.bottom = "auto";
+      node.style.top = `${Math.round(popRect.top)}px`;
+    }
+  }
+  return {
+    node,
+    show(scope, hintsOn) {
+      renderCrumb(scope);
+      renderList(scope);
+      node.hidden = false;
+      paintActive(scope, hintsOn);
+    },
+    paintActive,
+    place,
+    hide() {
+      node.hidden = true;
+      listKey = null;
     }
   };
 }
@@ -1300,8 +1477,17 @@ function tokenStillValid(value, selStart, selEnd, token) {
 var POPUP = ".rm-autocomplete__results";
 var NATIVE_ROWS = ".rm-autocomplete__results-scroll > div";
 var OWNS = "burrow-owns-selection";
-var PAD_CLASSES = ["burrow-pad-1", "burrow-pad-2", "burrow-pad-3"];
+var PAD = "burrow-pad";
+var PAD_BOTTOM = "burrow-pad-foot";
+var FOLD_ALIASES = "burrow-fold-aliases";
+var LAYOUT = "burrow-layout";
+var SCOPE_OPEN = "burrow-scope-open";
+var FOLDED = "data-burrow-folded";
+var HINTS_HEIGHT = 22;
+var CHIPS_INSET = 8;
 var ROW_LIMIT = 3;
+var PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
+var POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
 var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
 var POPUP_WAIT_FRAMES = 12;
@@ -1321,7 +1507,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     ignoreNextInput: false,
     released: null,
     waitFrame: 0,
-    observers: []
+    observers: [],
+    auto: false,
+    chip: -1,
+    scope: null
   };
   const debug = { lastFailure: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -1333,7 +1522,15 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   strip.setAttribute("role", "listbox");
   strip.hidden = true;
   lifecycle.node(strip, doc.body);
+  const chipsNode = doc.createElement("div");
+  chipsNode.className = "burrow-chips";
+  const hints = doc.createElement("div");
+  hints.className = "burrow-hints";
+  hints.hidden = true;
+  lifecycle.node(hints, doc.body);
   const preview = createPreview({ doc, win, lifecycle });
+  const scopePreview = createPreview({ doc, win, lifecycle });
+  const scopePanel = createScopePanel({ doc, win, lifecycle, highlight: (text, query) => highlight(text, query) });
   const fast = api.data?.fast?.q ? (query, ...args) => api.data.fast.q(query, ...args) : (query, ...args) => api.q(query, ...args);
   const tree = createTreeSource({
     pull: (pattern, eid) => api.pull(pattern, eid),
@@ -1342,7 +1539,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1;
     }
   });
-  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill");
+  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints");
   const isBlockInput = (el) => el?.tagName === "TEXTAREA" && el.classList.contains("rm-block-input");
   function rank(token) {
     st.drill = null;
@@ -1381,7 +1578,22 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
     const format = setting("aliasLinkFormat");
-    return matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: memory?.lookup("alias", token.query) }).map((hit) => ({
+    const hits = matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: memory?.lookup("alias", token.query) });
+    if (setting("aliasInline")) {
+      return groupAliasHits(hits, indexes.aliases).map((hit) => ({
+        kind: "alias",
+        key: `alias:${hit.uid}`,
+        uid: hit.uid,
+        alias: hit.alias,
+        title: hit.title,
+        aliases: hit.aliases,
+        refs: hit.refs,
+        level: hit.level,
+        insertion: aliasInsertion(hit, format),
+        pick: `${hit.uid}:${hit.alias}`
+      }));
+    }
+    return hits.map((hit) => ({
       kind: "alias",
       key: `alias:${hit.uid}:${hit.alias}`,
       uid: hit.uid,
@@ -1454,7 +1666,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   });
   function visibleRows() {
     if (!st.pop) return [];
-    if (st.token?.kind !== "[[" || st.drill) return st.rows.slice(0, ROW_LIMIT);
+    if (st.token?.kind !== "[[" || st.drill || setting("aliasInline")) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = /* @__PURE__ */ new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
       const title = row.getAttribute("title");
@@ -1476,6 +1688,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   let shown = [];
   let shownQuery = null;
   function render() {
+    if (st.phase === "SCOPE") {
+      placeScope();
+      return;
+    }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
     const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
@@ -1483,19 +1699,53 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       strip.replaceChildren(...rows.map((row, i) => rowNode(row, i)));
       shown = rows;
       shownQuery = query;
+      chipsFor = null;
     }
     if (!rows.length) {
-      hideStrip();
-      if (st.phase !== "IDLE") st.phase = "ARMED";
+      if (st.phase !== "IDLE") {
+        st.phase = "ARMED";
+        st.active = -1;
+        st.auto = false;
+        st.chip = -1;
+      }
+      hideRows();
+      syncPanes(rows);
+      layoutPop();
       return;
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const preselect = (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2) && st.released !== releaseKey();
-    if (st.phase === "ARMED" && preselect && st.active < 0) own(0);
-    place(rows.length);
+    const wanted = rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, query) && !exactTitle(query);
+    if (st.phase === "OWNED" && st.auto && !wanted) {
+      st.phase = "ARMED";
+      st.active = -1;
+      st.auto = false;
+      st.chip = -1;
+    }
+    if (st.phase === "ARMED" && wanted && st.released !== releaseKey() && st.active < 0) {
+      own(0);
+      st.auto = true;
+    }
+    strip.hidden = false;
+    syncPanes(rows);
     paintActive();
     showPreview();
+  }
+  const aliasStarts = (alias, query) => {
+    const a = alias.toLowerCase().trim();
+    const q = String(query).toLowerCase().trim();
+    if (!q) return false;
+    if (a.startsWith(q)) return true;
+    const compact = searchKey(query).compact;
+    return Boolean(compact) && searchKey(alias).compact.startsWith(compact);
+  };
+  function exactTitle(query) {
+    const text = String(query).trim().toLowerCase();
+    if (!text) return false;
+    for (const row of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
+      if ((row.getAttribute("title") || "").trim().toLowerCase() === text) return true;
+    }
+    return indexes.titles?.resolve(query)?.title.toLowerCase() === text;
   }
   let model = null;
   function showPreview() {
@@ -1507,7 +1757,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       model = previewModel(st.drill, tree, readableText);
       model.drillKey = st.drill.key;
     }
-    preview.show(model, st.pop);
+    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
   }
   function rowNode(row, i) {
     const node = doc.createElement("div");
@@ -1534,12 +1784,18 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       count.textContent = String(row.refs);
       count.title = `${row.refs} block reference${row.refs === 1 ? "" : "s"}`;
       node.append(count);
+    } else if (row.kind === "alias" && row.refs != null) {
+      const count = doc.createElement("sup");
+      count.className = "rm-autocomplete__ref-count";
+      count.textContent = String(row.refs);
+      count.title = `${row.refs} linked reference${row.refs === 1 ? "" : "s"}`;
+      node.append(count);
     }
     return node;
   }
-  function highlight(text) {
+  function highlight(text, query = st.token?.query) {
     const fragment = doc.createDocumentFragment();
-    const words = (st.token?.query.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
+    const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
     if (!words.length) {
       fragment.append(text);
       return fragment;
@@ -1560,16 +1816,62 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       node.setAttribute("aria-selected", String(st.phase === "OWNED" && i === st.active));
     });
     st.pop?.classList.toggle(OWNS, st.phase === "OWNED");
+    paintChips();
+    layoutPop();
   }
-  function place(count) {
-    const pop = st.pop;
-    for (const cls of PAD_CLASSES) pop.classList.toggle(cls, cls === PAD_CLASSES[count - 1]);
-    const rect = pop.getBoundingClientRect();
-    strip.style.left = `${Math.round(rect.left)}px`;
-    strip.style.top = `${Math.round(rect.top)}px`;
-    strip.style.width = `${Math.round(rect.width)}px`;
-    strip.hidden = false;
+  let chipsFor = null;
+  let chipsScrolled = false;
+  const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
+  function paintChips() {
+    const row = shown[st.active];
+    const show = chipsAvailable(row);
+    if (!show) {
+      st.chip = -1;
+      chipsFor = null;
+      chipsScrolled = false;
+      chipsNode.remove();
+    } else {
+      const key = `${row.key}\0${row.aliases.join("\0")}`;
+      if (key !== chipsFor) {
+        chipsFor = key;
+        chipsNode.replaceChildren(
+          Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
+          ...row.aliases.map((alias, i) => {
+            const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias });
+            chip.dataset.index = String(i);
+            return chip;
+          })
+        );
+      }
+      chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
+      const rowNode2 = strip.querySelectorAll(".burrow-row")[st.active];
+      if (rowNode2 && chipsNode.previousElementSibling !== rowNode2) rowNode2.after(chipsNode);
+      revealChip();
+    }
+    setPad(shown.length, show);
   }
+  function revealChip() {
+    if (st.chip <= 0) {
+      if (chipsScrolled) chipsNode.scrollLeft = 0;
+      chipsScrolled = false;
+      return;
+    }
+    const chip = chipsNode.querySelectorAll(".burrow-chip")[st.chip];
+    if (!chip) return;
+    const box = chipsNode.getBoundingClientRect();
+    const rect = chip.getBoundingClientRect();
+    if (rect.right > box.right - CHIPS_INSET) chipsNode.scrollLeft += rect.right - box.right + CHIPS_INSET;
+    else if (rect.left < box.left + CHIPS_INSET) chipsNode.scrollLeft -= box.left + CHIPS_INSET - rect.left;
+    chipsScrolled = chipsNode.scrollLeft > 0;
+  }
+  function setPad(count, withChips) {
+    if (!st.pop) return;
+    const wanted = count > 0 ? `${PAD}-${Math.min(count, ROW_LIMIT)}${withChips ? "c" : ""}` : null;
+    for (const cls of PAD_SIZES) if (st.pop.classList.contains(cls) !== (cls === wanted)) st.pop.classList.toggle(cls);
+    if (wanted) st.pop.classList.add(PAD);
+    else st.pop.classList.remove(PAD);
+  }
+  const listColumn = (pop) => pop.querySelector(":scope > .rm-autocomplete__results-main") || pop;
   function sampleTheme(pop) {
     const cs = win.getComputedStyle(pop);
     strip.style.setProperty("--burrow-bg", cs.backgroundColor);
@@ -1582,18 +1884,133 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     else strip.style.removeProperty("--burrow-active");
     const dark = isDarkHost(doc);
     strip.classList.toggle("burrow-dark", dark);
-    for (const name of ["--burrow-bg", "--burrow-fg"]) preview.node.style.setProperty(name, strip.style.getPropertyValue(name));
-    preview.node.style.zIndex = strip.style.zIndex;
-    preview.node.style.font = strip.style.font;
-    if (blockHighlight) preview.node.style.setProperty("--burrow-highlight", dark ? `color-mix(in srgb, ${blockHighlight} 28%, transparent)` : blockHighlight);
-    else preview.node.style.removeProperty("--burrow-highlight");
-    preview.node.classList.toggle("burrow-dark", dark);
+    sampleHints(pop, dark);
+    for (const p of [preview, scopePreview]) {
+      for (const name of ["--burrow-bg", "--burrow-fg"]) p.node.style.setProperty(name, strip.style.getPropertyValue(name));
+      p.node.style.zIndex = strip.style.zIndex;
+      p.node.style.font = strip.style.font;
+    }
+    for (const p of [preview, scopePreview]) {
+      if (blockHighlight) p.node.style.setProperty("--burrow-highlight", dark ? `color-mix(in srgb, ${blockHighlight} 28%, transparent)` : blockHighlight);
+      else p.node.style.removeProperty("--burrow-highlight");
+      p.node.classList.toggle("burrow-dark", dark);
+    }
+    const panel = scopePanel.node;
+    for (const name of ["--burrow-bg", "--burrow-fg", "--burrow-active"]) {
+      const value = strip.style.getPropertyValue(name);
+      if (value) panel.style.setProperty(name, value);
+      else panel.style.removeProperty(name);
+    }
+    panel.style.zIndex = strip.style.zIndex;
+    panel.style.font = strip.style.font;
+    panel.classList.toggle("burrow-dark", dark);
+    for (const name of ["--burrow-footer-bg", "--burrow-footer-fg"]) {
+      const value = hints.style.getPropertyValue(name);
+      if (value) panel.style.setProperty(name, value);
+      else panel.style.removeProperty(name);
+    }
+  }
+  function sampleHints(pop, dark) {
+    const footer = pop.querySelector(".rm-autocomplete-footer");
+    const cs = footer ? win.getComputedStyle(footer) : null;
+    const bg = cs?.backgroundColor;
+    if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") hints.style.setProperty("--burrow-footer-bg", bg);
+    else hints.style.removeProperty("--burrow-footer-bg");
+    if (cs?.color) hints.style.setProperty("--burrow-footer-fg", cs.color);
+    else hints.style.removeProperty("--burrow-footer-fg");
+    for (const name of ["--burrow-bg", "--burrow-fg"]) hints.style.setProperty(name, strip.style.getPropertyValue(name));
+    hints.style.fontFamily = strip.style.fontFamily;
+    hints.style.zIndex = strip.style.zIndex;
+    hints.classList.toggle("burrow-dark", dark);
+  }
+  function hideRows() {
+    strip.hidden = true;
+    chipsNode.remove();
+    chipsFor = null;
+    preview.hide();
+    st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
+  }
+  function clearPopover() {
+    if (!st.pop) return;
+    st.pop.classList.remove(...POP_CLASSES);
+    for (const node of st.pop.querySelectorAll(`[${FOLDED}]`)) node.removeAttribute(FOLDED);
   }
   function hideStrip() {
+    scopePanel.hide();
+    scopePreview.hide();
     strip.hidden = true;
+    chipsNode.remove();
+    chipsFor = null;
+    hints.hidden = true;
     preview.hide();
-    if (st.pop) {
-      st.pop.classList.remove(OWNS, DRILL_CLASS, ...PAD_CLASSES);
+    clearPopover();
+  }
+  function foldedByRow(item, rows) {
+    const m = (item.querySelector("button")?.textContent ?? "").match(/^\[(.*)\]\(\[\[(.*)\]\]\)$/s);
+    if (!m) return false;
+    const [, alias, title] = m;
+    const lower = alias.toLowerCase();
+    const chips = setting("aliasChips");
+    return rows.some((row) => row.kind === "alias" && row.title.toLowerCase() === title.toLowerCase() && (row.alias === alias || row.alias.toLowerCase() === lower || chips && row.aliases.some((a) => a === alias || a.toLowerCase() === lower)));
+  }
+  function syncPanes(rows) {
+    const pop = st.pop;
+    if (!pop) return;
+    if (st.token?.kind !== "[[") {
+      pop.classList.remove(FOLD_ALIASES, LAYOUT);
+      return;
+    }
+    const fold = setting("aliasPages") && setting("aliasInline") && !st.drill;
+    const items = [...pop.querySelectorAll(".rm-aliases .dont-focus-block.alias")];
+    let visible = 0;
+    for (const item of items) {
+      if (fold && foldedByRow(item, rows)) item.setAttribute(FOLDED, "");
+      else {
+        item.removeAttribute(FOLDED);
+        visible += 1;
+      }
+    }
+    pop.classList.toggle(FOLD_ALIASES, items.length > 0 && visible === 0);
+    pop.classList.toggle(LAYOUT, setting("paneLayout") && visible > 0);
+  }
+  function hintList() {
+    if (st.phase === "SCOPE") return [];
+    const row = shown[st.active];
+    const list = [];
+    if (setting("tabDrill") && (st.token?.kind === "[[" || st.phase === "OWNED" && row?.kind === "ref")) list.push(["⇥", "drill in"]);
+    if (chipsAvailable(row)) list.push(...st.chip >= 0 ? [["←→", "alias"], ["↵", "insert"], ["esc", "rows"]] : [["⌥↓", "aliases"]]);
+    return list;
+  }
+  let hintsFor = null;
+  function layoutPop() {
+    const pop = st.pop;
+    if (!pop) return;
+    const list = setting("keyHints") ? hintList() : [];
+    if (!list.length) {
+      hints.hidden = true;
+      hintsFor = null;
+      pop.classList.remove(PAD_BOTTOM);
+    } else {
+      const key = list.map((hint) => hint.join(" ")).join("|");
+      if (key !== hintsFor) {
+        hintsFor = key;
+        hints.replaceChildren(...list.map(([keys, label]) => {
+          const item = doc.createElement("span");
+          item.className = "burrow-hint";
+          item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
+          return item;
+        }));
+      }
+      pop.classList.add(PAD_BOTTOM);
+    }
+    if (strip.hidden && !list.length) return;
+    const rect = listColumn(pop).getBoundingClientRect();
+    const left = `${Math.round(rect.left)}px`;
+    const width = `${Math.round(rect.width)}px`;
+    if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
+    if (list.length) {
+      Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
+      hints.hidden = false;
     }
   }
   function attach(pop) {
@@ -1601,6 +2018,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     detach();
     st.pop = pop;
     sampleTheme(pop);
+    if (st.phase === "SCOPE") pop.classList.add(SCOPE_OPEN);
     const mo = new MutationObserver(() => {
       if (st.pop === pop && st.phase !== "IDLE") frame();
     });
@@ -1623,7 +2041,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
     preview.hide();
-    if (st.pop) st.pop.classList.remove(OWNS, DRILL_CLASS, ...PAD_CLASSES);
+    hints.hidden = true;
+    hintsFor = null;
+    clearPopover();
     st.pop = null;
   }
   let frameQueued = false;
@@ -1676,10 +2096,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.token = null;
     st.released = null;
     st.drill = null;
+    st.auto = false;
+    st.chip = -1;
+    st.scope = null;
     model = null;
+    scopeModel = null;
     tree.clear();
     shown = [];
     shownQuery = null;
+    chipsFor = null;
+    hintsFor = null;
     strip.replaceChildren();
     hideStrip();
     detach();
@@ -1692,6 +2118,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function release() {
     st.phase = "ARMED";
     st.active = -1;
+    st.auto = false;
+    st.chip = -1;
     st.released = releaseKey();
     trace({ ev: "release" });
   }
@@ -1710,15 +2138,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.ta = ta;
     st.token = token;
     st.rows = rank(token);
-    if (!st.rows.length) {
-      if (st.phase !== "IDLE") {
-        st.phase = "ARMED";
-        st.active = -1;
-        shown = [];
-        strip.replaceChildren();
-        hideStrip();
-      }
-      return;
+    st.chip = -1;
+    if (!st.rows.length && st.phase === "OWNED") {
+      st.phase = "ARMED";
+      st.active = -1;
+      st.auto = false;
     }
     if (st.phase === "OWNED") st.active = 0;
     if (st.phase === "IDLE") st.phase = "ARMED";
@@ -1731,6 +2155,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       st.ignoreNextInput = false;
       return;
     }
+    if (st.phase === "SCOPE") exitScope();
     if (!anyFeature()) {
       if (st.phase !== "IDLE") reset("off");
       return;
@@ -1759,12 +2184,19 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       return;
     }
     if (ta.selectionStart !== ta.selectionEnd) return;
-    if (event.altKey || event.ctrlKey || event.metaKey) return;
     const count = shown.length;
     const key = event.key;
+    if (st.phase === "SCOPE") {
+      scopeKey(event);
+      return;
+    }
+    if (st.phase === "OWNED" && chipKey(event)) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (st.phase === "ARMED") {
+      if (key === "Tab" && !event.shiftKey && setting("tabDrill") && st.token.kind === "[[" && enterScope(armedSource(), event)) return;
       if (key === "ArrowUp" && !event.shiftKey && count && !strip.hidden && nativeActiveIsFirst()) {
         own(count - 1);
+        st.auto = false;
         paintActive();
         consume(event);
       }
@@ -1777,12 +2209,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     }
     switch (key) {
       case "ArrowDown":
+        st.auto = false;
+        st.chip = -1;
         if (st.active < count - 1) st.active += 1;
         else release();
         paintActive();
         consume(event);
         return;
       case "ArrowUp":
+        st.auto = false;
+        st.chip = -1;
         if (st.active > 0) st.active -= 1;
         paintActive();
         consume(event);
@@ -1791,6 +2227,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       case "Tab": {
         if (event.shiftKey) return;
         const row = shown[st.active];
+        if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, -1), event)) return;
         if (row && commit(row)) consume(event);
         else reset("commit-refused");
         return;
@@ -1808,6 +2245,217 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
         reset("caret-move");
         return;
       default:
+    }
+  }
+  function chipKey(event) {
+    const row = shown[st.active];
+    if (!chipsAvailable(row)) {
+      st.chip = -1;
+      return false;
+    }
+    const key = event.key;
+    const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+    if (st.chip < 0) {
+      if (key !== "ArrowDown" || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false;
+      st.auto = false;
+      st.chip = Math.max(0, row.aliases.indexOf(row.alias));
+      paintActive();
+      consume(event);
+      return true;
+    }
+    const last = row.aliases.length - 1;
+    if (plain && (key === "ArrowLeft" || key === "ArrowUp")) st.chip = Math.max(0, st.chip - 1);
+    else if (plain && (key === "ArrowRight" || key === "ArrowDown")) st.chip = Math.min(last, st.chip + 1);
+    else if (key === "ArrowUp" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey || key === "Escape" && plain) st.chip = -1;
+    else if (plain && (key === "Enter" || key === "Tab")) {
+      if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, st.chip), event)) return true;
+      if (!commit(chipRow(row, st.chip))) reset("commit-refused");
+      consume(event);
+      return true;
+    } else {
+      st.chip = -1;
+      paintActive();
+      return false;
+    }
+    paintActive();
+    consume(event);
+    return true;
+  }
+  function chipRow(row, index) {
+    const alias = row.aliases[index];
+    return { ...row, insertion: aliasInsertion({ alias, title: row.title }, setting("aliasLinkFormat")), pick: `${row.uid}:${alias}` };
+  }
+  function ownedSource(row, chip) {
+    if (!row) return null;
+    if (row.kind === "alias") {
+      const insertion = chip >= 0 ? chipRow(row, chip).insertion : row.insertion;
+      return { uid: row.uid, label: row.title, page: { uid: row.uid, title: row.title }, insertion };
+    }
+    if (row.kind === "ref") return { uid: row.uid, label: row.text, page: null, insertion: row.insertion };
+    if (row.kind === "drill" && st.drill) return { uid: row.uid, label: row.text, page: st.drill.page, insertion: row.insertion };
+    return null;
+  }
+  function armedSource() {
+    const rows = [...st.pop?.querySelectorAll(NATIVE_ROWS) || []];
+    if (!rows.length) return null;
+    const at = rows.findIndex((row) => row.style.backgroundColor);
+    const title = rows[Math.max(0, at)].getAttribute("title");
+    const page = title ? indexes.titles?.resolve(title) : null;
+    if (!page || page.title !== title) return null;
+    return { uid: page.uid, label: title, page, insertion: `[[${title}]]` };
+  }
+  function enterScope(source, event) {
+    const ta = st.ta;
+    if (!source || !st.pop || st.composing || event.target !== ta) return false;
+    if (!tokenStillValid(ta.value, ta.selectionStart, ta.selectionEnd, st.token)) return false;
+    if (!tree.children(source.uid).length) return false;
+    st.scope = {
+      rootLabel: st.token.kind === "[[" ? "Pages" : "Blocks",
+      levels: [{ ...source, query: "", active: 0 }],
+      rows: [],
+      returnTo: { phase: st.phase, active: st.active, chip: st.chip }
+    };
+    st.phase = "SCOPE";
+    st.auto = false;
+    st.chip = -1;
+    trace({ ev: "scope-enter", uid: source.uid });
+    strip.hidden = true;
+    chipsNode.remove();
+    preview.hide();
+    st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
+    st.pop.classList.add(SCOPE_OPEN);
+    hints.hidden = true;
+    hintsFor = null;
+    scopeRefresh(false);
+    consume(event);
+    return true;
+  }
+  function exitScope() {
+    const scope = st.scope;
+    if (!scope) return;
+    st.scope = null;
+    scopePanel.hide();
+    scopePreview.hide();
+    scopeModel = null;
+    st.pop?.classList.remove(SCOPE_OPEN);
+    st.phase = scope.returnTo.phase;
+    st.active = scope.returnTo.active;
+    st.chip = scope.returnTo.chip;
+    trace({ ev: "scope-exit" });
+    frame();
+  }
+  const scopeLevel = () => st.scope.levels[st.scope.levels.length - 1];
+  function scopeRefresh(keepActive) {
+    const level = scopeLevel();
+    st.scope.rows = scopeRows(tree.twoLevels(level.uid), level.query, { strict: !setting("betterMatch"), text: readableText });
+    level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1)) : 0;
+    scopePanel.show(st.scope, setting("keyHints"));
+    placeScope();
+  }
+  let scopeModel = null;
+  function placeScope() {
+    const scope = st.scope;
+    const pop = st.pop;
+    if (!scope || !pop) return;
+    pop.classList.add(SCOPE_OPEN);
+    const popRect = pop.getBoundingClientRect();
+    const main = pop.classList.contains("rm-autocomplete__results--expanded") ? pop.querySelector(".rm-autocomplete__results-main") : null;
+    scopePanel.place(main ? main.getBoundingClientRect() : popRect, popRect, st.ta.getBoundingClientRect());
+    showScopePreview();
+  }
+  function showScopePreview() {
+    const level = scopeLevel();
+    if (!setting("drillPreview")) {
+      scopePreview.hide();
+      return;
+    }
+    const row = st.scope.rows[level.active];
+    const target = row ? row.node : level.page?.uid === level.uid ? null : tree.get(level.uid);
+    const first = tree.trail(level.uid)[0];
+    const page = level.page || (first ? { uid: first.uid, title: first.title } : null);
+    if (!page) {
+      scopePreview.hide();
+      return;
+    }
+    const key = `${page.uid}:${target?.uid ?? ""}`;
+    if (scopeModel?.drillKey !== key) {
+      scopeModel = previewModel({ page, target }, tree, readableText);
+      scopeModel.drillKey = key;
+    }
+    scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });
+  }
+  function scopeMove(delta) {
+    const level = scopeLevel();
+    level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
+    scopePanel.paintActive(st.scope, setting("keyHints"));
+    showScopePreview();
+  }
+  function scopeDeeper() {
+    const level = scopeLevel();
+    const row = st.scope.rows[level.active];
+    if (!row?.drillable) return;
+    st.scope.levels.push({ uid: row.uid, label: row.text || "(empty)", page: level.page, insertion: `((${row.uid}))`, query: "", active: 0 });
+    scopeRefresh(false);
+  }
+  function scopeBack(toLevel = st.scope.levels.length - 2) {
+    if (toLevel < 0) {
+      exitScope();
+      return;
+    }
+    st.scope.levels.length = toLevel + 1;
+    scopeRefresh(true);
+  }
+  function scopeCommit() {
+    const level = scopeLevel();
+    const row = st.scope.rows[level.active];
+    return commit(row ? { kind: "scope", key: `scope:${row.uid}`, insertion: `((${row.uid}))` } : { kind: "scope", key: `scope:${level.uid}`, insertion: level.insertion });
+  }
+  function scopeKey(event) {
+    const key = event.key;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const level = scopeLevel();
+    if (key === "Tab") {
+      consume(event);
+      if (event.shiftKey) scopeBack();
+      else scopeDeeper();
+      return;
+    }
+    if (key === "Enter") {
+      if (scopeCommit()) consume(event);
+      else reset("commit-refused");
+      return;
+    }
+    if (key === "Escape") {
+      exitScope();
+      consume(event);
+      return;
+    }
+    if (key === "ArrowDown" || key === "ArrowUp") {
+      scopeMove(key === "ArrowDown" ? 1 : -1);
+      consume(event);
+      return;
+    }
+    if (key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End" || key === "PageUp" || key === "PageDown") {
+      exitScope();
+      reset("caret-move");
+      return;
+    }
+    if (key === "Backspace") {
+      consume(event);
+      if (level.query) {
+        level.query = [...level.query].slice(0, -1).join("");
+        scopeRefresh(false);
+      } else scopeBack();
+      return;
+    }
+    if (key.length === 1) {
+      consume(event);
+      if (key === ">" && st.scope.rows[level.active]?.drillable) {
+        scopeDeeper();
+        return;
+      }
+      level.query += key;
+      scopeRefresh(false);
     }
   }
   function commit(row) {
@@ -1848,10 +2496,31 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function onStripMouseDown(event) {
     event.preventDefault();
     event.stopPropagation();
+    const chip = event.target.closest?.(".burrow-chip");
+    if (chip) {
+      const row2 = shown[st.active];
+      if (row2 && !commit(chipRow(row2, Number(chip.dataset.index)))) reset("click-refused");
+      return;
+    }
     const node = event.target.closest?.(".burrow-row");
     if (!node) return;
     const row = shown[Number(node.dataset.index)];
     if (row && !commit(row)) reset("click-refused");
+  }
+  function onScopeMouseDown(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!st.scope) return;
+    const crumb = event.target.closest?.(".burrow-crumb");
+    if (crumb) {
+      if (crumb.dataset.level == null) exitScope();
+      else scopeBack(Number(crumb.dataset.level));
+      return;
+    }
+    const row = event.target.closest?.(".burrow-row");
+    if (!row) return;
+    scopeLevel().active = Number(row.dataset.index);
+    if (!scopeCommit()) reset("click-refused");
   }
   function onCompositionStart(event) {
     if (!isBlockInput(event.target)) return;
@@ -1888,6 +2557,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
+  lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
   lifecycle.add(() => reset("unload"));
   return { state: st, debug, reset, tree };
 }
@@ -1896,9 +2566,9 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.2.0";
+var VERSION = "0.3.0";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;
