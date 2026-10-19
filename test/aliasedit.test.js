@@ -132,3 +132,18 @@ test("deleteAliasFromPage reports a missing alias without writing", async () => 
   assert.equal(api.log.update.length, 0);
   assert.equal((await deleteAliasFromPage(fakeApi([{ uid: "a1", string: "Aliases:: x", top: true }], { failWrite: true }), { pageUid: "P", keyword: "Aliases", alias: "x" })).error, "boom");
 });
+
+test("alias values live on the block's first line only", () => {
+  assert.deepEqual(appendAlias("Aliases:: a\nnote", "Aliases", "c"), { string: "Aliases:: a, c\nnote", changed: true });
+  assert.equal(appendAlias("Aliases::\nnote", "Aliases", "c").string, "Aliases:: c\nnote");
+  assert.equal(appendAlias("Aliases:: a\nnote", "Aliases", "note").changed, true);
+  assert.equal(removeAlias("Aliases:: a, b\nnote", "Aliases", "b"), "Aliases:: a\nnote");
+  assert.equal(removeAlias("Aliases:: a, b\nnote", "Aliases", "note"), null);
+});
+
+test("validAlias rejects a leading #", () => {
+  assert.equal(validAlias("#word").ok, false);
+  assert.equal(validAlias("  #word").reason, "no # at the start: Roam reads it as a tag");
+  assert.equal(validAlias("c#").ok, true);
+  assert.equal(validAlias("a #b").ok, true);
+});

@@ -8,6 +8,7 @@ export function validAlias(text) {
   const alias = String(text ?? "").trim();
   if (!alias) return { ok: false, reason: "type an alias" };
   if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
+  if (alias.startsWith("#")) return { ok: false, reason: "no # at the start: Roam reads it as a tag" };
   if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
   return { ok: true, alias };
 }
@@ -17,25 +18,32 @@ export function isAliasBlock(string, keyword) {
   return String(string).slice(0, kw.length + 2).toLowerCase() === `${kw.toLowerCase()}::`;
 }
 
+const splitFirst = (string) => {
+  const at = string.indexOf("\n");
+  return at < 0 ? [string, ""] : [string.slice(0, at), string.slice(at)];
+};
+
 const holds = (string, keyword, alias) => parseAliasBlock(string, keyword).some((a) => a.toLowerCase() === alias.toLowerCase());
 
 export function appendAlias(string, keyword, alias) {
   if (!isAliasBlock(string, keyword)) return null;
   if (holds(string, keyword, alias)) return { string, changed: false };
+  const [line, rest] = splitFirst(string);
   const at = kwOf(keyword).length + 2;
-  if (!string.slice(at).trim()) return { string: `${string.slice(0, at)} ${alias}`, changed: true };
-  return { string: `${string.trimEnd()}, ${alias}`, changed: true };
+  if (!line.slice(at).trim()) return { string: `${line.slice(0, at)} ${alias}${rest}`, changed: true };
+  return { string: `${line.trimEnd()}, ${alias}${rest}`, changed: true };
 }
 
 export function removeAlias(string, keyword, alias) {
   if (!isAliasBlock(string, keyword)) return null;
+  const [line, rest] = splitFirst(string);
   const at = kwOf(keyword).length + 2;
-  const parts = string.slice(at).split(",");
+  const parts = line.slice(at).split(",");
   let index = parts.findIndex((part) => clean(part) === alias);
   if (index < 0) index = parts.findIndex((part) => clean(part).toLowerCase() === alias.toLowerCase());
   if (index < 0) return null;
   parts.splice(index, 1);
-  return string.slice(0, at) + parts.join(",");
+  return line.slice(0, at) + parts.join(",") + rest;
 }
 
 export function findAliasBlocks(api, pageUid, keyword) {
