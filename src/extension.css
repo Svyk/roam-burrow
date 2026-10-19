@@ -166,8 +166,7 @@
 .burrow-hints { position: fixed; z-index: 30; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 12px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
 .burrow-hints.burrow-dark { border-top-color: rgba(255, 255, 255, 0.1); }
 .burrow-hints[hidden] { display: none; }
-.burrow-hint kbd { font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
-.rm-autocomplete__results.burrow-pad-bottom { padding-bottom: 22px !important; }
+.burrow-hint kbd { color: inherit; box-shadow: none; font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
 .burrow-chips { display: flex; align-items: center; gap: 4px; box-sizing: border-box; height: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow: hidden; }
 .burrow-chips-label { opacity: 0.6; margin-right: 2px; }
 .burrow-chip { padding: 1px 6px; border-radius: 3px; cursor: pointer; background: rgba(138, 155, 168, 0.15); }
@@ -209,5 +208,5 @@
 .burrow-scope-hints { flex: none; display: flex; gap: 12px; align-items: center; height: 22px; padding: 0 8px; font-size: 12px; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); border-top: 1px solid rgba(16, 22, 26, 0.12); }
 .burrow-scope-hints[hidden] { display: none; }
 .burrow-scope.burrow-dark .burrow-scope-hints { border-top-color: rgba(255, 255, 255, 0.1); }
-.burrow-scope-hints kbd { font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
+.burrow-scope-hints kbd { color: inherit; box-shadow: none; font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
 .rm-autocomplete__results.burrow-scope-open { visibility: hidden !important; }

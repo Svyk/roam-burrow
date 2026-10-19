@@ -95,7 +95,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
   // anchor: the rect the panel takes over; below: the popover opens under the
   // text (so the panel hangs from its top), else it sits above (bottom edge).
   function place(anchor, popRect, taRect) {
-    const above = popRect.bottom <= taRect.top + 2;
+    const above = popRect.top + popRect.height / 2 < taRect.top;
     node.style.left = `${Math.round(anchor.left)}px`;
     node.style.width = `${Math.round(anchor.width)}px`;
     if (above) {

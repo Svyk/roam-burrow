@@ -19,17 +19,31 @@ export const DRILL_TREE = [
   { key: "pickB", string: "zebra burrow pick two" },
 ];
 
+// The gates use this page; BURROW_FIXTURE_PAGE picks another when a crashed run left a stale tree.
+export const FIXTURE_PAGE = process.env.BURROW_FIXTURE_PAGE || "Burrow/Fixtures";
+
 export async function setupFixture(c, { drillTree = false } = {}) {
-  return c.evaluate(async ({ drillTree, tree }) => {
+  return c.evaluate(async ({ drillTree, tree, title }) => {
     const api = window.roamAlphaAPI;
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const title = "Burrow/Fixtures";
     const created = { page: false, sidebar: false };
     let pageUid = api.q(`[:find ?u . :where [?p :node/title "${title}"] [?p :block/uid ?u]]`);
+    if (drillTree && pageUid && api.q(`[:find ?b . :where [?p :block/uid "${pageUid}"] [?p :block/children ?b] [?b :block/string "Alpha section"]]`)) {
+      throw new Error(`stale fixture tree on ${title}: rerun with BURROW_FIXTURE_PAGE=<other title>`);
+    }
     if (!pageUid) {
       pageUid = api.util.generateUID();
       await api.data.page.create({ page: { title, uid: pageUid } });
       created.page = true;
+    }
+    // An empty page for the "nothing to drill into" Tab case.
+    const emptyTitle = `${title} Empty`;
+    let emptyUid = api.q(`[:find ?u . :where [?p :node/title "${emptyTitle}"] [?p :block/uid ?u]]`);
+    created.emptyPage = false;
+    if (!emptyUid) {
+      emptyUid = api.util.generateUID();
+      await api.data.page.create({ page: { title: emptyTitle, uid: emptyUid } });
+      created.emptyPage = true;
     }
     // The drill tree goes in before the typing block and before keepAll, so
     // the gates never count it as a block Roam created.
@@ -78,9 +92,9 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     for (const old of window.__burrowGuards || []) window.removeEventListener("keydown", old, true);
     window.__burrowGuards = [guard.onKeyDown];
     window.addEventListener("keydown", guard.onKeyDown, true);
-    window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill };
+    window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill, emptyTitle, emptyUid };
     return { pageUid, blockUid, windowId, created, drill };
-  }, { drillTree, tree: DRILL_TREE });
+  }, { drillTree, tree: DRILL_TREE, title: FIXTURE_PAGE });
 }
 
 // After Escape Roam keeps the block *selected*, and that selection survives
@@ -155,6 +169,10 @@ export async function cleanupFixture(c, { keep = false } = {}) {
     if (g.created.page) {
       const left = api.q(`[:find (count ?b) . :where [?p :block/uid "${g.pageUid}"] [?b :block/page ?p]]`) || 0;
       if (!left) await api.data.page.delete({ page: { uid: g.pageUid } });
+    }
+    if (g.created.emptyPage) {
+      const p = api.pull("[:block/uid {:block/children [:db/id]} {:block/_refs [:db/id]}]", [":block/uid", g.emptyUid]);
+      if (p && !p[":block/children"]?.length && !p[":block/_refs"]?.length) await api.data.page.delete({ page: { uid: g.emptyUid } });
     }
     window.__burrowFixture = null;
     return { blockExists: Boolean(exists) };

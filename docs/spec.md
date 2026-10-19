@@ -156,6 +156,12 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `drillPreview` | switch | on | Highlighted preview for drill (drill still works without it) |
 | `pickMemory` | switch | off | Phase 2: learn from picks |
 | `pageBoost` | switch | on | Phase 2: blocks on the page being edited first among equals in `((` |
+| `aliasInline` | switch | on | BRW-5: one alias row per page with its ref count, roam-aliases' duplicates folded |
+| `aliasPreselect` | switch | on | BRW-5: the alias row starts selected when the alias starts with the query and no page has that exact title |
+| `aliasChips` | switch | on | BRW-5: the selected alias row's aliases as chips (⌥↓) |
+| `tabDrill` | switch | on | BRW-5: Tab / Shift+Tab drill into the highlighted row's children |
+| `paneLayout` | switch | on | BRW-5: roam-aliases' column, Roam's list and Roam's preview each in their own space |
+| `keyHints` | switch | on | BRW-5: key-hint line under Roam's list and in the drill panel |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
 | `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
 | `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
@@ -220,6 +226,19 @@ Findings from the live work on notes and svy that the drill code relies on. Wher
 - **Keys in drill.** Drill is OWNED with one row: Enter and Tab commit, ↑ and ↓ are consumed and do nothing (no arrow keys in the preview, and ↓ to Roam's "No pages found." row would let Enter create the page), Esc passes through, a caret move or a refused commit hands the key to Roam.
 - **Pick memory** sits right after the match band (before originals-over-quoters), so a pick can reorder equal matches but never lift a weaker band. It is stored in `localStorage` under `burrow:picks:<graph>`, at most 200 picks. **Current page** sits after the alias boost, before the raw score; the page comes from the editing block's `data-page-title`.
 - **Cost on svy with the preview open** (`perf-gate --drill`, 3 interleaved runs, 234 keys each): Burrow JS p95 1.4–1.5 ms per key, one-time max 9 ms when the first `#` resolves; input-to-paint median p95 delta −0.1 ms against Burrow absent; 7 data reads per run, 0 index queries per key.
+
+## 12. Picker parity with RefX (BRW-5)
+
+Svy's 0.2.0 test in svy (2026-10-18) showed three gaps against RefX: no pickable alias row on the page, no Tab drill, and overlapping text. Where this section differs from §2, §4, §5 or §9.5, it wins.
+
+- **roam-aliases' column was the overlap.** It prepends `.rm-aliases` (`position:absolute; right:0; min-width:400px`) to the popover and adds `alias-container` (popover `min-width: 800px`). Roam drops that class whenever it re-renders the popover (Ctrl-O, some updates), and the 400 px column then lies on top of Roam's list; with the preview open (`--expanded-left` near the right edge) it lies on the list or the preview. Burrow's own panes were not involved.
+- **Burrow now lists aliases itself, with roam-aliases installed** (Svy, task BRW-5: "make alias matches pickable inline on the page row"). One row per page, `alias ↳ Page` and the page's inbound-ref count (one idle query over the alias pages). roam-aliases' rows `[alias]([[Page]])` whose page Burrow shows (with chips on: any of that page's aliases) get `data-burrow-folded`; when all are folded the popover gets `burrow-fold-aliases` and the column disappears. Rows Burrow does not show stay. Both plugins write the same text, so nothing is lost and nothing is listed twice. `aliasInline` off restores §2's "leave it to roam-aliases".
+- **Keep panes apart.** While roam-aliases' column still shows, `burrow-layout` makes it static: a 96 px scrolling band above Roam's list in the normal column popover, and a grid (`aliases | preview` over `main | preview`) when the preview is open. Burrow's strip, chips and hint line pad `.rm-autocomplete__results-main` (rules in a Burrow-owned `<style>`), not the popover, so Roam's preview keeps its full 300 px column.
+- **Roam's own Tab** in the `[[` popup inserts the active row, exactly like Enter. Right after the popup opens no row carries the inline background yet, and Enter/Tab still take row 0, so "Roam's active row" is the row with the background, else row 0.
+- **Tab drill is picker-only, RefX style.** Tab consumes the key only when the highlighted row (Burrow's, or Roam's `[[` row whose `title` is an exact page title) has children: one cached pull. While scoped, Burrow consumes printable keys, Backspace, ↑ ↓ Enter Tab Shift+Tab and Esc; the textarea keeps exactly the typed `[[query`, so a scoped filter can never create a page, and Enter replaces the whole token through the usual commit check. The popover gets `visibility: hidden` (`burrow-scope-open`) and a Burrow panel takes its place (above or below the caret like the popover); the preview of the highlighted child sits beside it. Esc returns to the results with Roam's popup still open; ← → Home End leave the drill and move the caret. `((` native rows carry no uid, so Tab there stays Roam's; Burrow's referenced rows drill.
+- **Pre-select for aliases** happens only when the alias starts with the typed text and no page has exactly that title (Roam's row or the title index). In svy `[[lori` therefore does not pre-select `lori ↳ Lori Boyd`, because a page `lori` exists; `[[lorina` does. A pre-selection that stops holding while native rows arrive is handed back silently.
+- **Roam ships a global `kbd { color: #fff; background: #333 }`**; Burrow's hint keys set their own colors.
+- **Testing next to an installed Burrow.** svy runs 0.2.0 from its GitHub Pages URL, and a developer extension has no on/off switch in Roam Depot (only reload and remove). For the live checks the installed instance was parked in memory only: its state reads `composing`, its nodes were detached and its stylesheet disabled; unparking restores all three. Nothing persistent changed.
 
 ## Also noticed
 

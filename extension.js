@@ -879,7 +879,7 @@ var DEFAULTS = Object.freeze({
   perfHud: false
 });
 var SWITCHES = [
-  ["aliasPages", "Alias rows in [[", "Typing a page alias in [[ shows the page. Hidden for aliases that roam-aliases already lists."],
+  ["aliasPages", "Alias rows in [[", "Typing a page alias in [[ shows the page. With Alias rows with their page off, aliases roam-aliases already lists are left to its column."],
   ["aliasExpand", "Alias expansion in ((", "In ((, an alias also finds referenced blocks that link to its page."],
   ["aliasInline", "Alias rows with their page", "One row per page an alias matches, alias ↳ Page with its reference count, also when roam-aliases is installed: its Aliases column folds into these rows instead of lying beside or over Roam's list. Off: Burrow leaves aliases that roam-aliases lists to its column."],
   ["aliasPreselect", "Pre-select the alias row", "When an alias starts with what you typed and no page has exactly that title, its row starts selected, so Enter inserts it."],
@@ -1388,7 +1388,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     renderHints(scope, hintsOn);
   }
   function place(anchor, popRect, taRect) {
-    const above = popRect.bottom <= taRect.top + 2;
+    const above = popRect.top + popRect.height / 2 < taRect.top;
     node.style.left = `${Math.round(anchor.left)}px`;
     node.style.width = `${Math.round(anchor.width)}px`;
     if (above) {
@@ -1478,7 +1478,7 @@ var POPUP = ".rm-autocomplete__results";
 var NATIVE_ROWS = ".rm-autocomplete__results-scroll > div";
 var OWNS = "burrow-owns-selection";
 var PAD = "burrow-pad";
-var PAD_BOTTOM = "burrow-pad-bottom";
+var PAD_BOTTOM = "burrow-pad-foot";
 var FOLD_ALIASES = "burrow-fold-aliases";
 var LAYOUT = "burrow-layout";
 var SCOPE_OPEN = "burrow-scope-open";
@@ -1525,7 +1525,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   const chipsNode = doc.createElement("div");
   chipsNode.className = "burrow-chips";
   const padStyle = lifecycle.node(doc.createElement("style"), doc.head);
-  let padPx = 0;
+  let padPx = -1;
+  const writePad = (px) => {
+    padPx = px;
+    padStyle.textContent = `.rm-autocomplete__results.${PAD} > .rm-autocomplete__results-main { padding-top: ${px}px !important; }
+.rm-autocomplete__results.${PAD_BOTTOM} > .rm-autocomplete__results-main { padding-bottom: ${HINTS_HEIGHT}px !important; }`;
+  };
+  writePad(0);
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -1712,6 +1718,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       }
       hideRows();
       syncPanes(rows);
+      layoutPop();
       return;
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
@@ -1727,9 +1734,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       own(0);
       st.auto = true;
     }
-    place();
-    paintActive();
+    strip.hidden = false;
     syncPanes(rows);
+    paintActive();
     showPreview();
   }
   const aliasStarts = (alias, query) => {
@@ -1818,7 +1825,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     });
     st.pop?.classList.toggle(OWNS, st.phase === "OWNED");
     paintChips();
-    syncHints();
+    layoutPop();
   }
   let chipsFor = null;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
@@ -1835,7 +1842,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
         chipsFor = key;
         chipsNode.replaceChildren(
           Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
-          ...row.aliases.map((alias, i) => Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, dataset: { index: String(i) } }))
+          ...row.aliases.map((alias, i) => {
+            const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias });
+            chip.dataset.index = String(i);
+            return chip;
+          })
         );
       }
       chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
@@ -1847,19 +1858,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function setPad(count, withChips) {
     if (!st.pop) return;
     const px = ROW_HEIGHT * count + 1 + (withChips ? CHIPS_HEIGHT : 0);
-    if (px !== padPx) {
-      padPx = px;
-      padStyle.textContent = `.rm-autocomplete__results.${PAD} { padding-top: ${px}px !important; }`;
-    }
+    if (px !== padPx) writePad(px);
     st.pop.classList.add(PAD);
   }
-  function place() {
-    const rect = st.pop.getBoundingClientRect();
-    strip.style.left = `${Math.round(rect.left)}px`;
-    strip.style.top = `${Math.round(rect.top)}px`;
-    strip.style.width = `${Math.round(rect.width)}px`;
-    strip.hidden = false;
-  }
+  const listColumn = (pop) => pop.querySelector(":scope > .rm-autocomplete__results-main") || pop;
   function sampleTheme(pop) {
     const cs = win.getComputedStyle(pop);
     strip.style.setProperty("--burrow-bg", cs.backgroundColor);
@@ -1944,7 +1946,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function syncPanes(rows) {
     const pop = st.pop;
     if (!pop) return;
-    const fold = setting("aliasPages") && setting("aliasInline") && st.token?.kind === "[[" && !st.drill;
+    if (st.token?.kind !== "[[") {
+      pop.classList.remove(FOLD_ALIASES, LAYOUT);
+      return;
+    }
+    const fold = setting("aliasPages") && setting("aliasInline") && !st.drill;
     const items = [...pop.querySelectorAll(".rm-aliases .dont-focus-block.alias")];
     let visible = 0;
     for (const item of items) {
@@ -1956,7 +1962,6 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     }
     pop.classList.toggle(FOLD_ALIASES, items.length > 0 && visible === 0);
     pop.classList.toggle(LAYOUT, setting("paneLayout") && visible > 0);
-    syncHints();
   }
   function hintList() {
     if (st.phase === "SCOPE") return [];
@@ -1967,31 +1972,36 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     return list;
   }
   let hintsFor = null;
-  function syncHints() {
+  function layoutPop() {
     const pop = st.pop;
-    const list = pop && setting("keyHints") ? hintList() : [];
+    if (!pop) return;
+    const list = setting("keyHints") ? hintList() : [];
     if (!list.length) {
       hints.hidden = true;
       hintsFor = null;
-      pop?.classList.remove(PAD_BOTTOM);
-      return;
+      pop.classList.remove(PAD_BOTTOM);
+    } else {
+      const key = list.map((hint) => hint.join(" ")).join("|");
+      if (key !== hintsFor) {
+        hintsFor = key;
+        hints.replaceChildren(...list.map(([keys, label]) => {
+          const item = doc.createElement("span");
+          item.className = "burrow-hint";
+          item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
+          return item;
+        }));
+      }
+      pop.classList.add(PAD_BOTTOM);
     }
-    const key = list.map((hint) => hint.join(" ")).join("|");
-    if (key !== hintsFor) {
-      hintsFor = key;
-      hints.replaceChildren(...list.map(([keys, label]) => {
-        const item = doc.createElement("span");
-        item.className = "burrow-hint";
-        item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
-        return item;
-      }));
+    if (strip.hidden && !list.length) return;
+    const rect = listColumn(pop).getBoundingClientRect();
+    const left = `${Math.round(rect.left)}px`;
+    const width = `${Math.round(rect.width)}px`;
+    if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
+    if (list.length) {
+      Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
+      hints.hidden = false;
     }
-    pop.classList.add(PAD_BOTTOM);
-    const rect = pop.getBoundingClientRect();
-    hints.style.left = `${Math.round(rect.left)}px`;
-    hints.style.top = `${Math.round(rect.bottom - HINTS_HEIGHT)}px`;
-    hints.style.width = `${Math.round(rect.width)}px`;
-    hints.hidden = false;
   }
   function attach(pop) {
     if (st.pop === pop) return;

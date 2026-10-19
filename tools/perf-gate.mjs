@@ -12,7 +12,7 @@
 //   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
-import { cleanupFixture, deleteNewPages, guardReport, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
 
 const args = process.argv.slice(2);
 const title = args[0];
@@ -20,7 +20,7 @@ const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ?
 const runs = Number(flag("--runs", 3));
 const drill = args.includes("--drill");
 const query = flag("--query", drill ? "never > grand" : "ant man");
-const opener = drill ? "[[Burrow/Fixtures#alpha > " : "((";
+const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
 const c = await connect(title);
@@ -34,7 +34,7 @@ async function setArm(arm) {
     if (dev.module) { await dev.module.default.onunload(); dev.module = null; }
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
-    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost"]) dev.values[f] = true;
+    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"]) dev.values[f] = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
     style.textContent = css;
