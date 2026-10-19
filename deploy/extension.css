@@ -168,8 +168,9 @@
 .burrow-hints[hidden] { display: none; }
 .burrow-hint kbd { color: inherit; box-shadow: none; font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
 .burrow-chips { display: flex; align-items: center; gap: 4px; box-sizing: border-box; height: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow: hidden; }
-.burrow-chips-label { opacity: 0.6; margin-right: 2px; }
-.burrow-chip { padding: 1px 6px; border-radius: 3px; cursor: pointer; background: rgba(138, 155, 168, 0.15); }
+/* Chips keep their width (shrinking them ran their text together); the line scrolls to the active one. */
+.burrow-chips-label { flex: none; opacity: 0.6; margin-right: 2px; }
+.burrow-chip { flex: none; max-width: 75%; overflow: hidden; text-overflow: ellipsis; padding: 1px 6px; border-radius: 3px; cursor: pointer; background: rgba(138, 155, 168, 0.15); }
 .burrow-chip.burrow-active { background: var(--burrow-active, rgba(138, 155, 168, 0.35)); }
 
 .rm-autocomplete__results.burrow-fold-aliases .rm-aliases { display: none !important; }

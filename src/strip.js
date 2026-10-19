@@ -22,6 +22,8 @@ const FOLDED = "data-burrow-folded";
 const ROW_HEIGHT = 33;
 const CHIPS_HEIGHT = 28;
 const HINTS_HEIGHT = 22;
+// .burrow-chips side padding in src/extension.css.
+const CHIPS_INSET = 8;
 const ROW_LIMIT = 3;
 const PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
 // Every class Burrow puts on Roam's popover; each one is removed again on reset.
@@ -349,6 +351,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // The active alias row's other aliases, directly under it. Only this part
   // is rebuilt when the active row changes; rows keep the class-only path.
   let chipsFor = null;
+  let chipsScrolled = false;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
 
   function paintChips() {
@@ -357,6 +360,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!show) {
       st.chip = -1;
       chipsFor = null;
+      chipsScrolled = false;
       chipsNode.remove();
     } else {
       const key = `${row.key}\u0000${row.aliases.join("\u0000")}`;
@@ -374,8 +378,27 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
       const rowNode = strip.querySelectorAll(".burrow-row")[st.active];
       if (rowNode && chipsNode.previousElementSibling !== rowNode) rowNode.after(chipsNode);
+      revealChip();
     }
     setPad(shown.length, show);
+  }
+
+  // The chips are one clipped line; scroll it so the active chip shows, and
+  // back to the start (the label) on the first chip or out of chip mode.
+  // Layout is read only in chip mode, never while typing.
+  function revealChip() {
+    if (st.chip <= 0) {
+      if (chipsScrolled) chipsNode.scrollLeft = 0;
+      chipsScrolled = false;
+      return;
+    }
+    const chip = chipsNode.querySelectorAll(".burrow-chip")[st.chip];
+    if (!chip) return;
+    const box = chipsNode.getBoundingClientRect();
+    const rect = chip.getBoundingClientRect();
+    if (rect.right > box.right - CHIPS_INSET) chipsNode.scrollLeft += rect.right - box.right + CHIPS_INSET;
+    else if (rect.left < box.left + CHIPS_INSET) chipsNode.scrollLeft -= box.left + CHIPS_INSET - rect.left;
+    chipsScrolled = chipsNode.scrollLeft > 0;
   }
 
   // The strip overlays the top of Roam's list column, the hints line its

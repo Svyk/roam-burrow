@@ -1484,6 +1484,7 @@ var LAYOUT = "burrow-layout";
 var SCOPE_OPEN = "burrow-scope-open";
 var FOLDED = "data-burrow-folded";
 var HINTS_HEIGHT = 22;
+var CHIPS_INSET = 8;
 var ROW_LIMIT = 3;
 var PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
 var POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
@@ -1819,6 +1820,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     layoutPop();
   }
   let chipsFor = null;
+  let chipsScrolled = false;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
   function paintChips() {
     const row = shown[st.active];
@@ -1826,6 +1828,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (!show) {
       st.chip = -1;
       chipsFor = null;
+      chipsScrolled = false;
       chipsNode.remove();
     } else {
       const key = `${row.key}\0${row.aliases.join("\0")}`;
@@ -1843,8 +1846,23 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
       const rowNode2 = strip.querySelectorAll(".burrow-row")[st.active];
       if (rowNode2 && chipsNode.previousElementSibling !== rowNode2) rowNode2.after(chipsNode);
+      revealChip();
     }
     setPad(shown.length, show);
+  }
+  function revealChip() {
+    if (st.chip <= 0) {
+      if (chipsScrolled) chipsNode.scrollLeft = 0;
+      chipsScrolled = false;
+      return;
+    }
+    const chip = chipsNode.querySelectorAll(".burrow-chip")[st.chip];
+    if (!chip) return;
+    const box = chipsNode.getBoundingClientRect();
+    const rect = chip.getBoundingClientRect();
+    if (rect.right > box.right - CHIPS_INSET) chipsNode.scrollLeft += rect.right - box.right + CHIPS_INSET;
+    else if (rect.left < box.left + CHIPS_INSET) chipsNode.scrollLeft -= box.left + CHIPS_INSET - rect.left;
+    chipsScrolled = chipsNode.scrollLeft > 0;
   }
   function setPad(count, withChips) {
     if (!st.pop) return;

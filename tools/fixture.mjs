@@ -19,11 +19,15 @@ export const DRILL_TREE = [
   { key: "pickB", string: "zebra burrow pick two" },
 ];
 
+// Aliases of the `<fixture> Chips` page: more than one chip line holds.
+export const CHIP_ALIASES = ["zq chip alpha long alias", "zq chip bravo long alias", "zq chip charlie long alias", "zq chip delta long alias",
+  "zq chip echo long alias", "zq chip foxtrot long alias", "zq chip golf long alias", "zq chip hotel long alias"];
+
 // The gates use this page; BURROW_FIXTURE_PAGE picks another when a crashed run left a stale tree.
 export const FIXTURE_PAGE = process.env.BURROW_FIXTURE_PAGE || "Burrow/Fixtures";
 
 export async function setupFixture(c, { drillTree = false } = {}) {
-  return c.evaluate(async ({ drillTree, tree, title }) => {
+  return c.evaluate(async ({ drillTree, tree, title, aliases }) => {
     const api = window.roamAlphaAPI;
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const created = { page: false, sidebar: false };
@@ -44,6 +48,16 @@ export async function setupFixture(c, { drillTree = false } = {}) {
       emptyUid = api.util.generateUID();
       await api.data.page.create({ page: { title: emptyTitle, uid: emptyUid } });
       created.emptyPage = true;
+    }
+    // A page with more aliases than one chip line holds, for the chip scroll case.
+    const chipsTitle = `${title} Chips`;
+    let chipsUid = api.q(`[:find ?u . :where [?p :node/title "${chipsTitle}"] [?p :block/uid ?u]]`);
+    created.chipsPage = false;
+    if (!chipsUid) {
+      chipsUid = api.util.generateUID();
+      await api.data.page.create({ page: { title: chipsTitle, uid: chipsUid } });
+      await api.data.block.create({ location: { "parent-uid": chipsUid, order: 0 }, block: { string: `Aliases:: ${aliases.join(", ")}` } });
+      created.chipsPage = true;
     }
     // The drill tree goes in before the typing block and before keepAll, so
     // the gates never count it as a block Roam created.
@@ -92,9 +106,9 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     for (const old of window.__burrowGuards || []) window.removeEventListener("keydown", old, true);
     window.__burrowGuards = [guard.onKeyDown];
     window.addEventListener("keydown", guard.onKeyDown, true);
-    window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill, emptyTitle, emptyUid };
-    return { pageUid, blockUid, windowId, created, drill };
-  }, { drillTree, tree: DRILL_TREE, title: FIXTURE_PAGE });
+    window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill, emptyTitle, emptyUid, chipsTitle, chipsUid };
+    return { pageUid, blockUid, windowId, created, drill, chipsTitle };
+  }, { drillTree, tree: DRILL_TREE, title: FIXTURE_PAGE, aliases: CHIP_ALIASES });
 }
 
 // After Escape Roam keeps the block *selected*, and that selection survives
@@ -173,6 +187,13 @@ export async function cleanupFixture(c, { keep = false } = {}) {
     if (g.created.emptyPage) {
       const p = api.pull("[:block/uid {:block/children [:db/id]} {:block/_refs [:db/id]}]", [":block/uid", g.emptyUid]);
       if (p && !p[":block/children"]?.length && !p[":block/_refs"]?.length) await api.data.page.delete({ page: { uid: g.emptyUid } });
+    }
+    if (g.created.chipsPage) {
+      const p = api.pull("[:block/uid {:block/children [:block/string]} {:block/_refs [:db/id]}]", [":block/uid", g.chipsUid]);
+      const kids = p?.[":block/children"] || [];
+      if (p && kids.length === 1 && kids[0][":block/string"].startsWith("Aliases:: zq chip") && !p[":block/_refs"]?.length) {
+        await api.data.page.delete({ page: { uid: g.chipsUid } });
+      }
     }
     window.__burrowFixture = null;
     return { blockExists: Boolean(exists) };

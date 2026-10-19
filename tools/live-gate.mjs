@@ -18,7 +18,7 @@
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { FIXTURE_PAGE, cleanupFixture, guardReport, primeFixture, setupFixture } from "./fixture.mjs";
+import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, guardReport, primeFixture, setupFixture } from "./fixture.mjs";
 
 const CONFIGS = {
   svy: {
@@ -168,7 +168,12 @@ async function state() {
             active: scopeRowsList.find((r) => r.classList.contains("burrow-active"))?.textContent ?? null,
             filter: panel.querySelector(".burrow-scope-filter")?.textContent ?? "",
           } : null,
-          chips: [...document.querySelectorAll(".burrow-chips .burrow-chip")].map((n) => ({ text: n.textContent, active: n.classList.contains("burrow-active") })),
+          chips: [...document.querySelectorAll(".burrow-chips .burrow-chip")].map((n) => {
+            const box = n.parentElement.getBoundingClientRect();
+            const r = n.getBoundingClientRect();
+            return { text: n.textContent, active: n.classList.contains("burrow-active"), inView: r.left >= box.left - 0.5 && r.right <= box.right + 0.5, l: r.left, r: r.right, fits: n.scrollWidth <= n.clientWidth + 1 };
+          }),
+          chipsScroll: document.querySelector(".burrow-chips")?.scrollLeft ?? null,
           hints: document.querySelector(".burrow-hints:not([hidden])")?.textContent ?? null,
           popoverHidden: Boolean(document.querySelector(".rm-autocomplete__results.burrow-scope-open")),
           foldedAliases: column ? getComputedStyle(column).display === "none" || items.every((i) => !shown(i)) : true,
@@ -359,6 +364,23 @@ const ALIAS_CASES = [
     check: (r) => {
       const chips = r.snaps[1]?.chips || [];
       return chips.length >= 2 && chips.filter((chip) => chip.active).length === 1 ? null : `chips after ⌥↓ ${JSON.stringify(chips)}`;
+    },
+  },
+  {
+    // The fixture's Chips page has more aliases than the chip line holds.
+    name: "alias chips: the active chip scrolls into view", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`,
+    keys: ["alt+ArrowDown", "snap", ...Array(7).fill("ArrowRight"), "snap", ...Array(7).fill("ArrowLeft"), "snap", ...Array(7).fill("ArrowRight"), "Enter"],
+    on: `${SEED}[${CHIP_ALIASES.at(-1)}]([[${FIXTURE_PAGE} Chips]])`,
+    check: (r) => {
+      const [first, last, back] = r.snaps;
+      const at = (snap) => snap?.chips.findIndex((chip) => chip.active) ?? -1;
+      // Short enough to show whole: text wider than its chip runs into the next one.
+      const overlap = r.snaps.find((snap) => snap.chips.some((chip, i) => !chip.fits || (i && chip.l < snap.chips[i - 1].r - 0.5)));
+      if (overlap) return `chip text overlaps ${JSON.stringify(overlap.chips)}`;
+      if (first?.chips.length !== CHIP_ALIASES.length || first.chips.every((chip) => chip.inView)) return `no clipped chips after ⌥↓ ${JSON.stringify(first?.chips)}`;
+      if (at(last) !== CHIP_ALIASES.length - 1 || !last.chips[at(last)].inView) return `after → ×7 ${JSON.stringify(last?.chips)}`;
+      if (at(back) !== 0 || !back.chips[0].inView || back.chipsScroll !== 0) return `after ← ×7 scroll ${back?.chipsScroll} ${JSON.stringify(back?.chips)}`;
+      return null;
     },
   },
 ];
