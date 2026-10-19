@@ -1,0 +1,276 @@
+#!/usr/bin/env node
+// Before/after screenshots of the picker for a human report, on a live Roam
+// Desktop window over CDP (:9223). Loads a build with every switch on, sets
+// the fixture up, and for each scenario primes the fixture block, runs its
+// keys, waits, and saves a PNG clipped to the textarea, the popover and every
+// visible Burrow node. It never presses Enter on a write prompt, so no alias
+// is ever written. Roam's preview is put back as found; an installed Burrow
+// is parked and restored; the theme override, the fixture and any page the
+// typing caused are removed, also on SIGINT / SIGTERM / a crash.
+//
+//   node tools/shots.mjs <window> <svy|notes> --label <before|after> --theme <light|dark> [--code <extension.js>] [--css <extension.css>] [--out <dir>]
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { connect, sleep } from "./cdp.mjs";
+import { parkInstalled, unparkInstalled } from "./installed.mjs";
+import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+
+const GRAPHS = {
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr" },
+};
+const SEED = "seed αβ 🙂 ";
+const TYPE_MS = 35;
+const REF_COMMAND = "Burrow: block reference search";
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
+  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
+
+const [title, graph, ...flags] = process.argv.slice(2);
+const config = GRAPHS[graph];
+if (!title || !config) throw new Error("usage: shots.mjs <window> <svy|notes> --label <before|after> --theme <light|dark> [--code <file>] [--css <file>] [--out <dir>]");
+const flagValue = (name) => { const i = flags.indexOf(name); return i >= 0 ? flags[i + 1] : null; };
+const label = flagValue("--label") || "after";
+const theme = flagValue("--theme");
+if (theme && theme !== "light" && theme !== "dark") throw new Error("--theme must be light or dark");
+const root = new URL("..", import.meta.url);
+const codePath = flagValue("--code") ? resolve(flagValue("--code")) : new URL("extension.js", root).pathname;
+const cssPath = flagValue("--css") ? resolve(flagValue("--css")) : new URL("extension.css", root).pathname;
+const outDir = resolve(flagValue("--out") || join(tmpdir(), "burrow-shots"));
+const chipsQuery = `[[${CHIP_ALIASES[0].slice(0, 9)}`;
+
+const SCENARIOS = [
+  { id: "01-alias-row", query: config.alias, keys: [] },
+  { id: "02-chips", query: config.alias, keys: ["alt+ArrowDown"] },
+  { id: "03-chips-wheel", query: chipsQuery, keys: ["wheel:chips:600"] },
+  { id: "04-long-alias", query: chipsQuery, keys: ["alt+ArrowDown", ...Array(8).fill("ArrowRight")] },
+  { id: "05-row-preview", query: config.alias, keys: ["preview-open"] },
+  { id: "06-tab-drill", query: `[[${FIXTURE_PAGE}`, keys: ["Tab"], loose: true },
+  { id: "07-ordinal", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:steps", "Tab", "type:2"], loose: true },
+  { id: "08-empty", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:hollow", "Tab"], loose: true },
+  { id: "09-more", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:many", "Tab"], loose: true },
+  { id: "10-alias-prompt", query: chipsQuery, keys: ["alt+a", "type:zq chip kilo"] },
+  { id: "11-delete-confirm", query: chipsQuery, keys: ["alt+ArrowDown", "ArrowRight", "alt+Backspace"] },
+  { id: "12-column-band", query: config.listed, keys: [], settings: { aliasInline: false } },
+  { id: "13-above", query: config.alias, keys: [], low: true },
+  { id: "14-above-drill", query: `[[${FIXTURE_PAGE}`, keys: ["Tab"], low: true, loose: true },
+  { id: "15-ref-search", query: "", keys: [`palette:${REF_COMMAND}`, "wait:500", `type:${config.ref}`] },
+];
+
+const c = await connect(title);
+
+async function setArm(arm) {
+  const code = await readFile(codePath, "utf8");
+  const css = await readFile(cssPath, "utf8");
+  return c.evaluate(async ({ arm, code, css, features, refCommand }) => {
+    const dev = window.__burrowDev || (window.__burrowDev = { values: {} });
+    if (dev.module) { await dev.module.default.onunload(); dev.module = null; }
+    document.getElementById("burrow-dev-css")?.remove();
+    if (arm === "gone") return { arm };
+    for (const f of features) dev.values[f] = true;
+    const style = document.createElement("style");
+    style.id = "burrow-dev-css";
+    style.textContent = css;
+    document.head.append(style);
+    const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+    dev.module = await import(url);
+    URL.revokeObjectURL(url);
+    const extensionAPI = {
+      settings: {
+        canSet: true, get: (k) => (k in dev.values ? dev.values[k] : null),
+        set: async (k, v) => { dev.values[k] = v; }, panel: { create: async () => null },
+      },
+      // Only the ref-search entry reaches Roam's palette (see live-gate.mjs).
+      ui: {
+        commandPalette: {
+          addCommand: async (cmd) => (cmd?.label === refCommand ? window.roamAlphaAPI.ui.commandPalette.addCommand(cmd) : null),
+          removeCommand: async (cmd) => (cmd?.label === refCommand ? window.roamAlphaAPI.ui.commandPalette.removeCommand(cmd) : null),
+        },
+      },
+    };
+    await dev.module.default.onload({ extensionAPI, extension: { version: "shots" } });
+    const t0 = performance.now();
+    while (!window.__BURROW?.indexes?.refs && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
+    return { arm, refs: window.__BURROW?.indexes?.refs?.entries.length };
+  }, { arm, code, css, features: FEATURES, refCommand: REF_COMMAND });
+}
+
+const ctrlO = async () => {
+  const base = { key: "o", code: "KeyO", windowsVirtualKeyCode: 79, nativeVirtualKeyCode: 79, modifiers: 2 };
+  await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  await sleep(300);
+};
+const isExpanded = () => c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results--expanded")));
+
+async function settle(loose) {
+  for (let t0 = Date.now(); Date.now() - t0 < 2500;) {
+    const ready = await c.evaluate((loose) => {
+      if (!document.querySelector(".rm-autocomplete__results")) return false;
+      if (loose) return true;
+      const b = window.__BURROW;
+      return Boolean(b && b.state.phase !== "IDLE" && document.querySelector(".burrow-strip:not([hidden]) .burrow-row"));
+    }, loose);
+    if (ready) break;
+    await sleep(40);
+  }
+  await sleep(200);
+}
+
+async function point(selector, text, exact = false) {
+  return c.evaluate(({ selector, text, exact }) => {
+    const el = [...document.querySelectorAll(selector)].find((n) => (text == null ? true : exact ? n.textContent.trim() === text : n.textContent.includes(text)));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }, { selector, text, exact });
+}
+
+// The palette input is not the fixture's textarea, so the key guard steps aside while it is open.
+async function palette(name) {
+  await c.evaluate(() => { window.__burrowFixture.guard.armed = false; });
+  try {
+    const base = { key: "p", code: "KeyP", windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 4 };
+    await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+    await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+    for (let t0 = Date.now(); Date.now() - t0 < 3000;) {
+      if (await c.evaluate(() => document.activeElement?.tagName === "INPUT")) break;
+      await sleep(50);
+    }
+    await c.type(name, 25);
+    await sleep(400);
+    await c.key("Enter");
+    await sleep(300);
+  } finally {
+    await c.evaluate(() => { if (window.__burrowFixture) window.__burrowFixture.guard.armed = true; });
+  }
+}
+
+async function runKeys(keys) {
+  for (const k of keys) {
+    const modified = k.match(/^(alt|shift)\+(.+)$/);
+    if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
+    else if (k.startsWith("wheel:chips:")) {
+      const p = await point(".burrow-chips", null);
+      if (p) await c.wheel(p.x, p.y, 0, Number(k.slice(12)));
+    } else if (k.startsWith("palette:")) await palette(k.slice(8));
+    else if (k.startsWith("wait:")) await sleep(Number(k.slice(5)));
+    else if (k.startsWith("type:")) await c.type(k.slice(5), TYPE_MS);
+    else if (modified) await c.key(modified[2], modified[1] === "alt" ? 1 : 8);
+    else await c.key(k);
+    if (!k.startsWith("wait:")) await sleep(120);
+  }
+}
+
+// Textarea + popover + every visible Burrow node, plus 16 px, inside the viewport.
+async function captureRect() {
+  return c.evaluate(() => {
+    const g = window.__burrowFixture;
+    const els = [document.getElementById(g?.inputId), document.querySelector(".rm-autocomplete__results"),
+      ...document.querySelectorAll(".burrow-strip:not([hidden]), .burrow-hints:not([hidden]), .burrow-preview:not([hidden]), .burrow-scope:not([hidden])")]
+      .filter((el) => el?.getClientRects().length);
+    if (!els.length) return null;
+    const boxes = els.map((el) => el.getBoundingClientRect());
+    const left = Math.max(0, Math.min(...boxes.map((b) => b.left)) - 16);
+    const top = Math.max(0, Math.min(...boxes.map((b) => b.top)) - 16);
+    const right = Math.min(window.innerWidth, Math.max(...boxes.map((b) => b.right)) + 16);
+    const bottom = Math.min(window.innerHeight, Math.max(...boxes.map((b) => b.bottom)) + 16);
+    return { left, top, width: right - left, height: bottom - top };
+  });
+}
+
+// Out of the popup, block cleared, and any page the typing made deleted.
+async function reset() {
+  for (let i = 0; i < 3; i++) { await c.key("Escape"); await sleep(150); }
+  await guardReport(c);
+  await c.evaluate(async () => {
+    const g = window.__burrowFixture;
+    if (document.activeElement?.tagName === "TEXTAREA") document.activeElement.blur();
+    await window.roamAlphaAPI.data.block.update({ block: { uid: g.blockUid, string: "" } });
+    await new Promise((r) => setTimeout(r, 400));
+  });
+  await deleteNewPages(c);
+}
+
+const files = [];
+let initialPreview = null;
+let cleaning = null;
+const cleanup = () => (cleaning ||= (async () => {
+  try {
+    await placeNormal(c).catch(() => {});
+    await setArm("gone");
+    await cleanupFixture(c);
+  } catch (error) {
+    console.error("cleanup:", error);
+  } finally {
+    try {
+      await unparkInstalled(c);
+      if (theme) await c.setTheme(null);
+    } catch (error) {
+      console.error("cleanup:", error);
+    }
+    c.close();
+  }
+})());
+onAbort(cleanup);
+
+if (theme) await c.setTheme(theme);
+await c.evaluate(async () => {
+  const dev = window.__burrowDev;
+  if (dev?.module) { await dev.module.default.onunload(); dev.module = null; }
+  document.getElementById("burrow-dev-css")?.remove();
+});
+const installed = await parkInstalled(c);
+if (installed.error) { await cleanup(); throw new Error(installed.error); }
+try {
+  await mkdir(outDir, { recursive: true });
+  await setArm("gone");
+  await setupFixture(c, { drillTree: true });
+  const loaded = await setArm("on");
+  if (!loaded.refs) throw new Error("index not built");
+  const stamp = `${label}-${theme || "default"}`;
+  for (const scenario of SCENARIOS) {
+    await c.evaluate((settings) => {
+      const values = window.__burrowDev.values;
+      for (const f of ["aliasInline"]) values[f] = true;
+      Object.assign(values, settings || {});
+    }, scenario.settings);
+    await snapshotTitles(c);
+    let primed = await primeFixture(c, SEED);
+    if (!primed.ok) { await sleep(800); primed = await primeFixture(c, SEED); }
+    if (!primed.ok) { console.error(`${scenario.id}: focus failed, skipped`); continue; }
+    if (scenario.low) await placeLow(c);
+    try {
+      if (scenario.query) {
+        await c.type(scenario.query, TYPE_MS);
+        await settle(scenario.loose);
+        initialPreview ??= await isExpanded();
+      }
+      await runKeys(scenario.keys);
+      await sleep(400);
+      const rect = await captureRect();
+      if (!rect) { console.error(`${scenario.id}: nothing on screen, skipped`); continue; }
+      const file = join(outDir, `${stamp}-${scenario.id}.png`);
+      await writeFile(file, await c.screenshot(rect));
+      files.push(file);
+      console.log(file);
+    } finally {
+      if (scenario.low) await placeNormal(c);
+      await reset();
+    }
+  }
+  // Roam's preview state, as found.
+  if (initialPreview != null) {
+    const primed = await primeFixture(c, SEED);
+    if (primed.ok) {
+      await c.type(config.listed, TYPE_MS);
+      await settle(true);
+      if ((await isExpanded()) !== initialPreview) await ctrlO();
+      await reset();
+    }
+  }
+} finally {
+  await cleanup();
+}
+console.log(`${files.length} screenshot(s) in ${outDir}`);

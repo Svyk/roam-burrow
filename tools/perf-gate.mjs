@@ -10,11 +10,11 @@
 // (`[[Burrow/Fixtures#alpha > ` then the query), with the preview open; data
 // fetched by the drill (one pull per node it visits) is reported separately.
 // An installed Burrow is parked for the run and put back afterwards.
-//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--json]
+//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--theme light|dark] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
 
 const args = process.argv.slice(2);
 const title = args[0];
@@ -25,7 +25,10 @@ const query = flag("--query", drill ? "never > grand" : "ant man");
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
+const theme = flag("--theme", null);
+if (theme && theme !== "light" && theme !== "dark") throw new Error("--theme must be light or dark");
 const c = await connect(title);
+if (theme) await c.setTheme(theme);
 
 const code = await readFile(new URL("extension.js", root), "utf8");
 const css = await readFile(new URL("extension.css", root), "utf8");
@@ -36,7 +39,8 @@ async function setArm(arm) {
     if (dev.module) { await dev.module.default.onunload(); dev.module = null; }
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
-    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"]) dev.values[f] = true;
+    for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
+      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"]) dev.values[f] = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
     style.textContent = css;
@@ -96,6 +100,8 @@ async function endRun() {
       drillFetches: perf ? (perf.counters.drillPulls || 0) + (perf.counters.drillQueries || 0) : null,
       previewShown: Boolean(document.querySelector(".burrow-preview:not([hidden]) .burrow-target")),
       builds: perf ? perf.counters.builds : null,
+      // Burrow's deferred (idle) preview draw, apart from the per-key cost.
+      preview: perf?.summary ? perf.summary("preview") : null,
       popup: Boolean(document.querySelector(".rm-autocomplete__results")),
     };
   });
@@ -111,6 +117,25 @@ const report = { window: c.page.title, query: opener + query, runs, results: [] 
 await setArm("gone");
 report.installed = await parkInstalled(c);
 if (report.installed.error) throw new Error(report.installed.error);
+// One cleanup for the finally path and for SIGINT / SIGTERM / a crash.
+let cleaning = null;
+const cleanup = () => (cleaning ||= (async () => {
+  try {
+    await setArm("gone");
+    report.cleanup = await cleanupFixture(c);
+  } catch (error) {
+    console.error("cleanup:", error);
+  } finally {
+    try {
+      report.restored = await unparkInstalled(c);
+      if (theme) await c.setTheme(null);
+    } catch (error) {
+      console.error("cleanup:", error);
+    }
+    c.close();
+  }
+})());
+onAbort(cleanup);
 await setupFixture(c, { drillTree: drill }).then(() => snapshotTitles(c)).catch(async (error) => { await unparkInstalled(c); throw error; });
 try {
   for (let run = 0; run < runs; run++) {
@@ -144,7 +169,7 @@ try {
         run, arm, keys: r.keys, strayKeys: r.aborted, popupAtEnd: r.popup, build: loaded.build,
         paintP50: pct(r.latency, 0.5), paintP95: pct(r.latency, 0.95),
         burrowP50: pct(r.burrowInput, 0.5), burrowP95: pct(r.burrowInput, 0.95), burrowMax: pct(r.burrowInput, 1),
-        renderP95: pct(r.burrowRender, 0.95), burrowSamples: r.burrowInput?.length ?? 0,
+        renderP95: pct(r.burrowRender, 0.95), previewP95: r.preview?.p95 ?? null, previewSamples: r.preview?.n ?? 0, burrowSamples: r.burrowInput?.length ?? 0,
         queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
         pagesDeleted: r.pages?.deleted,
       });
@@ -155,13 +180,7 @@ try {
   report.error = String(error?.message || error);
   process.exitCode = 1;
 } finally {
-  try {
-    await setArm("gone");
-    report.cleanup = await cleanupFixture(c);
-  } finally {
-    report.restored = await unparkInstalled(c);
-    c.close();
-  }
+  await cleanup();
 }
 const notRestored = report.installed.parked && !report.restored?.restored;
 if (notRestored) process.exitCode = 1;
@@ -171,6 +190,7 @@ report.summary = {
   paintP95: { gone: by("gone", "paintP95"), on: by("on", "paintP95") },
   burrowP50: by("on", "burrowP50"),
   burrowP95: by("on", "burrowP95"),
+  previewP95: by("on", "previewP95"),
   queriesPerKey: by("on", "queriesDuringRun"),
 };
 // Budget (spec §6): Burrow JS <= 4 ms p95 per input, input-to-paint p95
@@ -205,8 +225,9 @@ report.verdict = verdict;
 if (args.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else {
-  console.log(`cost gate ${title}${drill ? " (drill)" : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
+  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
+  console.log(`  preview draw (deferred) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms; not part of the budget`);
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);
   console.log(`  per-run p95 deltas: ${report.summary.paintP95Deltas.join(" / ")} ms; Burrow-absent paint p50 ${report.summary.paintP50.gone.join(" / ")} ms`);
   console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);

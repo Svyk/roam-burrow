@@ -7,6 +7,7 @@
 //   node tools/live-gate.mjs <window-title-prefix> <graph-config> [--keep]
 //   node tools/live-gate.mjs <window> <svy|notes> --only "<case name>" [--arms on,gone] [--repeat N]
 //     one case with its verdict, about 30 s
+//   --theme light|dark   emulate prefers-color-scheme for the run (reset at the end)
 //
 // Graph configs (below) name the acceptance query and expected block uid.
 // Arms: "on" (all toggles on), "off" (all toggles off), "gone" (module
@@ -18,7 +19,10 @@
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, guardReport, primeFixture, setupFixture } from "./fixture.mjs";
+import {
+  CHIP_ALIASES, CHIP_LONG, CHIPS_ALIAS_STRING, FIXTURE_PAGE, aliasBlockString, childStrings, cleanupFixture, deleteBlock, editedSince, guardReport,
+  neutralClick, onAbort, pageNow, placeLow, placeNormal, primeFixture, setAliasBlock, setupFixture,
+} from "./fixture.mjs";
 
 const CONFIGS = {
   svy: {
@@ -26,7 +30,7 @@ const CONFIGS = {
     alias: { query: "[[lorinatr", insert: "[lorinator]([[Lori Boyd]])" },
     listed: { query: "[[lorinator" },
     drill: { query: "[[MCU Watch Order > watch order > ant man", uid: "3XSu0IJ8f" },
-    preselect: { query: "[[lorina", insert: "[lorinator]([[Lori Boyd]])" },
+    preselect: { query: "[[lorina", insert: "[lorinator]([[Lori Boyd]])", page: "Lori Boyd" },
     chips: { query: "[[lorina", keys: ["alt+ArrowDown", "ArrowLeft", "Enter"], insert: "[lori]([[Lori Boyd]])" },
     refHasChildren: true,
   },
@@ -35,14 +39,16 @@ const CONFIGS = {
     alias: { query: "[[holy gost", insert: "[Holy Ghost]([[Concepts/Holy Spirit]])" },
     listed: { query: "[[mike khi" },
     drill: { query: "[[Systems/Executor Lanes and LaunchAgents#grok lane > never", uid: "-EeRGLF5U" },
-    preselect: { query: "[[mike kh", insert: "[Mike Khieu]([[Entities/Michael Khieu]])" },
+    preselect: { query: "[[mike kh", insert: "[Mike Khieu]([[Entities/Michael Khieu]])", page: "Entities/Michael Khieu" },
     chips: { query: "[[mike kh", keys: ["alt+ArrowDown", "ArrowLeft", "Enter"], insert: "[king_khieu]([[Entities/Michael Khieu]])" },
   },
 };
 const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
-  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints"];
+  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
+const REF_COMMAND = "Burrow: block reference search";
 
 const [title, configName, ...flags] = process.argv.slice(2);
 const config = CONFIGS[configName];
@@ -52,8 +58,11 @@ const flagValue = (name) => { const i = flags.indexOf(name); return i >= 0 ? fla
 const only = flagValue("--only");
 const arms = (flagValue("--arms") || "on,off,gone,drilloff").split(",");
 const repeat = Number(flagValue("--repeat") || 1);
+const theme = flagValue("--theme");
+if (theme && theme !== "light" && theme !== "dark") throw new Error("--theme must be light or dark");
 const root = new URL("..", import.meta.url);
 const c = await connect(title);
+if (theme) await c.setTheme(theme);
 
 // ---- page-side helpers ----
 
@@ -125,6 +134,24 @@ async function readBack() {
 async function state() {
   return c.evaluate(() => {
     const b = window.__BURROW;
+    const shown = (el) => {
+      if (!el?.getClientRects().length) return false;
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.display === "none" || cs.visibility === "hidden") return false;
+      }
+      return true;
+    };
+    const rect = (el) => {
+      if (!el || !shown(el)) return null;
+      const r = el.getBoundingClientRect();
+      return { l: r.left, t: r.top, r: r.right, b: r.bottom };
+    };
+    const overlap = (a, b) => {
+      const w = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      return w > 0 && h > 0 ? (w * h) / Math.min(a.width * a.height, b.width * b.height) : 0;
+    };
     return {
       phase: b?.state.phase ?? "gone",
       rows: [...document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row")].map((r) => ({
@@ -138,6 +165,7 @@ async function state() {
         return {
           trail: pane.querySelector(".burrow-trail")?.textContent,
           target: pane.querySelector(".burrow-target")?.textContent ?? null,
+          previewMore: pane.querySelector(".burrow-more")?.textContent ?? null,
           targetVisible: (() => {
             const t = pane.querySelector(".burrow-target");
             if (!t) return null;
@@ -147,33 +175,68 @@ async function state() {
           nativeHidden: [...document.querySelectorAll(".rm-autocomplete__results.burrow-drill .rm-autocomplete__preview > *")].every((n) => getComputedStyle(n).visibility === "hidden"),
         };
       })(),
+      rowPreview: (() => {
+        const pane = document.querySelector(".burrow-preview.burrow-preview-docked:not([hidden])");
+        if (!pane) return null;
+        const native = document.querySelector(".rm-autocomplete__preview");
+        const over = native ? overlap(pane.getBoundingClientRect(), native.getBoundingClientRect()) : 0;
+        return { trail: pane.querySelector(".burrow-trail")?.textContent ?? null, docked: true, overNative: over >= 0.9 };
+      })(),
       value: document.activeElement?.value,
-      ...(() => {
-        const shown = (el) => {
-          if (!el.getClientRects().length) return false;
-          for (let n = el; n && n !== document.body; n = n.parentElement) {
-            const cs = getComputedStyle(n);
-            if (cs.display === "none" || cs.visibility === "hidden") return false;
-          }
-          return true;
+      prompt: (() => {
+        const el = document.querySelector(".burrow-prompt");
+        if (!el) return null;
+        const input = el.querySelector(".burrow-prompt-input");
+        return {
+          label: el.querySelector(".burrow-prompt-label")?.textContent ?? null,
+          input: input ? (input.value ?? input.textContent) : null,
+          fresh: Boolean(input?.classList.contains("burrow-fresh") || el.classList.contains("burrow-fresh")),
+          error: el.querySelector(".burrow-prompt-error")?.textContent || null,
         };
+      })(),
+      confirm: document.querySelector(".burrow-confirm-text")?.textContent ?? null,
+      visibleBurrow: [...document.querySelectorAll("[class*=burrow-]")]
+        .filter((n) => !n.closest("[hidden]") && shown(n)).map((n) => `${n.tagName}.${String(n.className).split(/\s+/).filter((x) => x.includes("burrow-")).join(".")}`),
+      geometry: {
+        // The textarea's text line(s): its padding may sit under the popover's edge.
+        ta: (() => {
+          const el = document.getElementById(window.__burrowFixture?.inputId);
+          const box = rect(el);
+          if (!box) return null;
+          const cs = getComputedStyle(el);
+          return { l: box.l, t: box.t + parseFloat(cs.paddingTop), r: box.r, b: box.b - parseFloat(cs.paddingBottom) };
+        })(),
+        pop: rect(document.querySelector(".rm-autocomplete__results")),
+        strip: rect(document.querySelector(".burrow-strip:not([hidden])")),
+        hints: rect(document.querySelector(".burrow-hints:not([hidden])")),
+        scope: rect(document.querySelector(".burrow-scope:not([hidden])")),
+        preview: rect(document.querySelector(".burrow-preview:not([hidden])")),
+      },
+      ...(() => {
         const panel = document.querySelector(".burrow-scope:not([hidden])");
         const scopeRowsList = panel ? [...panel.querySelectorAll(".burrow-scope-list .burrow-row")] : [];
         const column = document.querySelector(".rm-aliases");
         const items = [...document.querySelectorAll(".rm-aliases .dont-focus-block.alias")];
+        const line = document.querySelector(".burrow-chips");
         return {
           scope: panel ? {
             crumb: panel.querySelector(".burrow-scope-crumb")?.textContent ?? "",
             rows: scopeRowsList.map((r) => r.textContent),
+            rowsFull: scopeRowsList.map((r) => ({ text: r.textContent, cls: r.className })),
             active: scopeRowsList.find((r) => r.classList.contains("burrow-active"))?.textContent ?? null,
             filter: panel.querySelector(".burrow-scope-filter")?.textContent ?? "",
           } : null,
+          scopeHints: panel?.querySelector(".burrow-scope-hints")?.textContent ?? null,
           chips: [...document.querySelectorAll(".burrow-chips .burrow-chip")].map((n) => {
             const box = n.parentElement.getBoundingClientRect();
             const r = n.getBoundingClientRect();
-            return { text: n.textContent, active: n.classList.contains("burrow-active"), inView: r.left >= box.left - 0.5 && r.right <= box.right + 0.5, l: r.left, r: r.right, fits: n.scrollWidth <= n.clientWidth + 1 };
+            return {
+              text: n.textContent, title: n.getAttribute("title"), active: n.classList.contains("burrow-active"),
+              inView: r.left >= box.left - 0.5 && r.right <= box.right + 0.5, l: r.left, r: r.right,
+              ellipsized: n.scrollWidth > n.clientWidth + 1, clientWidth: n.clientWidth, scrollWidth: n.scrollWidth, lineWidth: line?.clientWidth ?? 0,
+            };
           }),
-          chipsScroll: document.querySelector(".burrow-chips")?.scrollLeft ?? null,
+          chipsScroll: line?.scrollLeft ?? null,
           hints: document.querySelector(".burrow-hints:not([hidden])")?.textContent ?? null,
           popoverHidden: Boolean(document.querySelector(".rm-autocomplete__results.burrow-scope-open")),
           foldedAliases: column ? getComputedStyle(column).display === "none" || items.every((i) => !shown(i)) : true,
@@ -187,7 +250,7 @@ async function state() {
 async function setArm(arm) {
   const code = await readFile(new URL("extension.js", root), "utf8");
   const css = await readFile(new URL("extension.css", root), "utf8");
-  return c.evaluate(async ({ arm, code, css, features }) => {
+  return c.evaluate(async ({ arm, code, css, features, refCommand }) => {
     const dev = window.__burrowDev || (window.__burrowDev = { values: {} });
     if (arm === "gone") {
       if (dev.module) await dev.module.default.onunload();
@@ -212,14 +275,22 @@ async function setArm(arm) {
           canSet: true, get: (k) => (k in dev.values ? dev.values[k] : null),
           set: async (k, v) => { dev.values[k] = v; }, panel: { create: async () => null },
         },
-        ui: { commandPalette: { addCommand: async () => null, removeCommand: async () => null } },
+        // Only the ref-search entry reaches Roam's palette; the installed 0.2.0
+        // registered "Burrow: Disable all features" through its own API, so
+        // that label is never added or removed here.
+        ui: {
+          commandPalette: {
+            addCommand: async (cmd) => (cmd?.label === refCommand ? window.roamAlphaAPI.ui.commandPalette.addCommand(cmd) : null),
+            removeCommand: async (cmd) => (cmd?.label === refCommand ? window.roamAlphaAPI.ui.commandPalette.removeCommand(cmd) : null),
+          },
+        },
       };
       await dev.module.default.onload({ extensionAPI, extension: { version: "gate" } });
     }
     const t0 = performance.now();
     while (!window.__BURROW?.indexes?.refs && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
     return { arm, refs: window.__BURROW?.indexes?.refs?.entries.length };
-  }, { arm, code, css, features: FEATURES });
+  }, { arm, code, css, features: FEATURES, refCommand: REF_COMMAND });
 }
 
 // ---- cases ----
@@ -228,16 +299,6 @@ const q = config.ref.query;
 const qBody = q.slice(2);
 const open = `${SEED}${q}${q.startsWith("((") ? "))" : "]]"}`;
 const committed = `${SEED}((${config.ref.uid}))`;
-
-const pageClick = async () => {
-  const { x, y } = await c.evaluate(() => {
-    const r = document.querySelector(".roam-article h1, .rm-title-display")?.getBoundingClientRect();
-    return r ? { x: r.left + 20, y: r.top + r.height / 2 } : { x: 400, y: 120 };
-  });
-  for (const type of ["mousePressed", "mouseReleased"]) {
-    await c.call("Input.dispatchMouseEvent", { type, x, y, button: "left", clickCount: 1 });
-  }
-};
 
 const CASES = [
   { name: "Enter", keys: ["Enter"], on: committed },
@@ -273,6 +334,9 @@ const DRILL_CASES = [
   { name: "drill: Enter on an unresolved heading", query: `[[${DRILL_PAGE}#zzzz`, keys: ["Enter"], on: () => `${SEED}[[${DRILL_PAGE}]]` },
   { name: "drill: Backspace out of drill then Escape", query: `[[${DRILL_PAGE}#`, keys: ["Backspace", "Escape"] },
   { name: "drill: caret moved before commit", query: DRILL_Q, keys: ["caret-move", "Enter"] },
+  { name: "drill: typed > 2 takes the numbered block", query: `[[${DRILL_PAGE} > steps > 2`, keys: ["Enter"], on: (d) => `${SEED}((${d.two}))`, line: true },
+  // Burrow's preview shows 16 of the section's 55 children and says so.
+  { name: "drill: preview caps children with +N more", query: `[[${DRILL_PAGE} > many`, keys: ["Enter"], on: (d) => `${SEED}((${d.many}))`, previewMore: "+39 more", line: true },
 ];
 
 // After typing the query: wait until Roam's popup is up and, with Burrow on,
@@ -308,13 +372,106 @@ async function withSettings(arm, settings, fn) {
   }
 }
 
+// Alt+Shift+9 as a mac sends it: the key is the typed character "·".
+const altShift9 = async () => {
+  const base = { key: "·", code: "Digit9", windowsVirtualKeyCode: 57, nativeVirtualKeyCode: 57, modifiers: 9 };
+  await c.call("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "·", unmodifiedText: "·" });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+};
+
+// Roam's command palette; a raw key event, so no "p" is typed if Roam lets it through.
+const metaP = async () => {
+  const base = { key: "p", code: "KeyP", windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 4 };
+  await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+};
+
+// Centre of the first element matching a selector whose text passes `test`.
+const centerOf = (selector, text, exact = false) => c.evaluate(({ selector, text, exact }) => {
+  const el = [...document.querySelectorAll(selector)].find((n) => (text == null ? true : exact ? n.textContent.trim() === text : n.textContent.includes(text)));
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}, { selector, text, exact });
+
+// A missing target is recorded, not thrown: the Roam-alone arm has no panel to click.
+let misses = [];
+let wheelSteps = 0;
+async function clickAt(point, what) {
+  if (!point) { misses.push(`missing click target: ${what}`); return; }
+  await c.click(point.x, point.y);
+}
+
+// The palette input is not the fixture's textarea, so the key guard steps aside while it is open.
+async function palette(label) {
+  await c.evaluate(() => { window.__burrowFixture.guard.armed = false; });
+  try {
+    await metaP();
+    for (let t0 = Date.now(); Date.now() - t0 < 3000;) {
+      if (await c.evaluate(() => document.activeElement?.tagName === "INPUT")) break;
+      await sleep(50);
+    }
+    await c.type(label, 25);
+    await sleep(400);
+    await c.key("Enter");
+    await sleep(300);
+  } finally {
+    await c.evaluate(() => { if (window.__burrowFixture) window.__burrowFixture.guard.armed = true; });
+  }
+}
+
 async function runKeys(keys, snaps = []) {
   for (const k of keys) {
     const modified = k.match(/^(alt|shift)\+(.+)$/);
     if (k === "snap") snaps.push(await state());
+    else if (k === "alt+shift+9") await altShift9();
+    else if (k === "ctrl+o") await ctrlO();
+    else if (k === "meta+p") await metaP();
+    else if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
+    else if (k.startsWith("down:")) {
+      for (let i = 0; i < Number(k.slice(5)); i++) { await c.key("ArrowDown"); await sleep(40); }
+    } else if (k.startsWith("scope-to:")) {
+      const want = k.slice(9);
+      for (let i = 0; i < 60; i++) {
+        const active = (await state()).scope?.active ?? "";
+        if (active.includes(want)) break;
+        await c.key("ArrowDown");
+        await sleep(40);
+      }
+    } else if (k.startsWith("wheel:chips:")) {
+      const point = await centerOf(".burrow-chips", null);
+      if (!point) throw new Error("wheel: no chips line");
+      await c.wheel(point.x, point.y, 0, Number(k.slice(12)));
+    } else if (k.startsWith("wheel-until:chips:")) {
+      const alias = k.slice(18);
+      const chipInView = () => c.evaluate((alias) => {
+        const line = document.querySelector(".burrow-chips");
+        const chip = [...document.querySelectorAll(".burrow-chips .burrow-chip")].find((n) => n.textContent.trim() === alias);
+        if (!line || !chip) return false;
+        const box = line.getBoundingClientRect();
+        const r = chip.getBoundingClientRect();
+        return r.left >= box.left - 0.5 && r.right <= box.right + 0.5;
+      }, alias);
+      const point = await centerOf(".burrow-chips", null);
+      if (!point) throw new Error("wheel-until: no chips line");
+      let steps = 0;
+      while (steps < 25 && !(await chipInView())) {
+        await c.wheel(point.x, point.y, 0, 120);
+        steps += 1;
+        await sleep(80);
+      }
+      wheelSteps = steps;
+    } else if (k.startsWith("click:chip:")) await clickAt(await centerOf(".burrow-chips .burrow-chip", k.slice(11), true), k);
+    else if (k.startsWith("click:scope:")) await clickAt(await centerOf(".burrow-scope-list .burrow-row", k.slice(12)), k);
+    else if (k.startsWith("click:crumb:")) await clickAt(await centerOf(`.burrow-crumb[data-level="${k.slice(12)}"]`, null), k);
+    else if (k === "click-away") await neutralClick(c);
+    else if (k.startsWith("palette:")) await palette(k.slice(8));
+    else if (k.startsWith("wait:")) await sleep(Number(k.slice(5)));
+    else if (k === "low") await placeLow(c);
+    else if (k === "normal") await placeNormal(c);
     else if (modified) await c.key(modified[2], modified[1] === "alt" ? 1 : 8);
     else if (k.startsWith("type:")) await c.type(k.slice(5), TYPE_MS);
-    else if (k === "click") await pageClick();
+    else if (k === "click") await neutralClick(c);
     else if (k === "down-past-strip") {
       const rows = (await state()).rows.length;
       for (let i = 0; i < rows; i++) { await c.key("ArrowDown"); await sleep(60); }
@@ -328,7 +485,7 @@ async function runKeys(keys, snaps = []) {
     } else if (k === "unload") {
       await c.evaluate(async () => { const d = window.__burrowDev; if (d?.module) await d.module.default.onunload(); });
     } else await c.key(k);
-    if (k !== "snap") await sleep(120);
+    if (k !== "snap" && !k.startsWith("wait:")) await sleep(120);
   }
 }
 
@@ -356,7 +513,10 @@ const ALIAS_CASES = [
   },
   {
     name: "alias pre-selected: Enter inserts it", query: config.preselect.query, keys: ["snap", "Enter"], on: `${SEED}${config.preselect.insert}`,
-    check: (r) => (r.snaps[0]?.rows[0]?.active ? null : `first row not active ${JSON.stringify(r.snaps[0]?.rows)}`),
+    check: (r) => {
+      if (!r.snaps[0]?.rows[0]?.active) return `first row not active ${JSON.stringify(r.snaps[0]?.rows)}`;
+      return r.snaps[0].hints === HINTS_ROW ? null : `hints ${JSON.stringify(r.snaps[0].hints)}`;
+    },
   },
   {
     name: "alias chips: ⌥↓, ←, Enter", query: config.chips.query,
@@ -374,15 +534,150 @@ const ALIAS_CASES = [
     check: (r) => {
       const [first, last, back] = r.snaps;
       const at = (snap) => snap?.chips.findIndex((chip) => chip.active) ?? -1;
-      // Short enough to show whole: text wider than its chip runs into the next one.
-      const overlap = r.snaps.find((snap) => snap.chips.some((chip, i) => !chip.fits || (i && chip.l < snap.chips[i - 1].r - 0.5)));
-      if (overlap) return `chip text overlaps ${JSON.stringify(overlap.chips)}`;
-      if (first?.chips.length !== CHIP_ALIASES.length || first.chips.every((chip) => chip.inView)) return `no clipped chips after ⌥↓ ${JSON.stringify(first?.chips)}`;
+      const bad = r.snaps.map(chipsProblem).find(Boolean);
+      if (bad) return bad;
+      if (first?.chips.length !== CHIP_ALIASES.length + 1 || first.chips.every((chip) => chip.inView)) return `no clipped chips after ⌥↓ ${JSON.stringify(first?.chips)}`;
       if (at(last) !== CHIP_ALIASES.length - 1 || !last.chips[at(last)].inView) return `after → ×7 ${JSON.stringify(last?.chips)}`;
       if (at(back) !== 0 || !back.chips[0].inView || back.chipsScroll !== 0) return `after ← ×7 scroll ${back?.chipsScroll} ${JSON.stringify(back?.chips)}`;
       return null;
     },
   },
+  {
+    name: "alias chips: wheel scrolls the line, click a hidden chip", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`,
+    keys: ["snap", `wheel-until:chips:${CHIP_ALIASES[7]}`, "wait:200", "snap", `click:chip:${CHIP_ALIASES[7]}`],
+    on: `${SEED}[${CHIP_ALIASES[7]}]([[${FIXTURE_PAGE} Chips]])`,
+    check: ({ snaps: [a, b] }) => {
+      const hotel = (snap) => snap?.chips.find((chip) => chip.text === CHIP_ALIASES[7]);
+      if (!hotel(a) || hotel(a).inView || a.chipsScroll !== 0) return `before the wheel: scroll ${a?.chipsScroll} ${JSON.stringify(hotel(a))}`;
+      if (!(b?.chipsScroll > 0) || !hotel(b)?.inView) return `after the wheel: scroll ${b?.chipsScroll} ${JSON.stringify(hotel(b))}`;
+      return null;
+    },
+  },
+  {
+    name: "alias chips: a long alias shows in full when selected", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, settings: { aliasDelete: true },
+    keys: ["alt+ArrowDown", "snap", ...Array(8).fill("ArrowRight"), "snap", "Enter"],
+    on: `${SEED}[${CHIP_LONG}]([[${FIXTURE_PAGE} Chips]])`,
+    check: ({ snaps: [a, b] }) => {
+      const long = (snap) => snap?.chips.find((chip) => chip.text === CHIP_LONG);
+      const bad = [a, b].map(chipsProblem).find(Boolean);
+      if (bad) return bad;
+      if (!long(a)?.ellipsized || long(a).title !== CHIP_LONG) return `long chip before selecting ${JSON.stringify(long(a))}`;
+      if (!long(b)?.active || long(b).ellipsized || !long(b).inView) return `long chip when selected ${JSON.stringify(long(b))}`;
+      if (a.hints !== HINTS_CHIPS) return `chip hints ${JSON.stringify(a.hints)}`;
+      return null;
+    },
+  },
+  {
+    name: "alias row preview: Ctrl-O shows the alias's page", query: config.preselect.query, restorePreview: true, mayCreatePage: true,
+    keys: ["preview-open", "wait:400", "snap", "down-past-strip", "wait:400", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (a?.rowPreview?.trail !== config.preselect.page || !a.rowPreview.docked || !a.rowPreview.overNative) return `Burrow row selected: ${JSON.stringify(a?.rowPreview)}`;
+      return b?.rowPreview === null ? null : `Roam row selected: ${JSON.stringify(b?.rowPreview)}`;
+    },
+  },
+];
+
+const HINTS_ROW = "⌥A alias · ⌥↓ pick alias · ⇥/> drill · ⌃O preview · ↵ insert";
+const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · esc rows";
+const HINTS_SCOPE = ["⇥/> drill", "⇧⇥ back", "⌃O preview", "↵ insert", "esc results"];
+
+// A cut chip is not an overlap: boxes must not overlap, a cut chip carries its
+// full alias as a title, and the active chip is whole whenever it can be.
+function chipsProblem(snap) {
+  const chips = snap?.chips || [];
+  const overlap = chips.findIndex((chip, i) => i && chip.l < chips[i - 1].r - 0.5);
+  if (overlap >= 0) return `chips overlap ${JSON.stringify(chips)}`;
+  const untitled = chips.find((chip) => chip.ellipsized && chip.title !== chip.text);
+  if (untitled) return `cut chip without its title ${JSON.stringify(untitled)}`;
+  const active = chips.find((chip) => chip.active);
+  if (active?.ellipsized && active.scrollWidth <= active.lineWidth - 16) return `active chip cut though it fits ${JSON.stringify(active)}`;
+  return null;
+}
+
+// Write cases, on arm only: each restores what it wrote. `read` runs before the restore.
+const CHIPS_Q = `[[${CHIP_ALIASES[0].slice(0, 10)}`;
+const WRITE_SETTINGS = { aliasCreate: true, aliasDelete: true };
+const within = (edited, ...allowed) => edited.every((u) => allowed.includes(u));
+const WRITE_CASES = [
+  {
+    name: "alias create: ⌥A on a page without aliases", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "snap", "type:zq new alias", "snap", "Enter"], on: `${SEED}[zq new alias]([[${FIXTURE_PAGE} Empty]])`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid), kids: await childUids(fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a, b] = r.snaps;
+      if (a?.prompt?.input !== `${FIXTURE_PAGE} Empty` || !a.prompt.fresh) return `prompt ${JSON.stringify(a?.prompt)}`;
+      if (b?.prompt?.input !== "zq new alias") return `typed prompt ${JSON.stringify(b?.prompt)}`;
+      if (JSON.stringify(r.read.children) !== JSON.stringify(["Aliases:: zq new alias"])) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid, ...r.read.kids) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: ⌥A appends to the alias block", query: CHIPS_Q, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:zq chip kilo", "Enter"], on: `${SEED}[zq chip kilo]([[${FIXTURE_PAGE} Chips]])`,
+    read: async () => ({ alias: await aliasBlockString(c, fx.chipsUid) }),
+    restore: () => setAliasBlock(c, fx.chipsAliasUid, CHIPS_ALIAS_STRING),
+    check: (r) => {
+      if (r.read.alias !== `${CHIPS_ALIAS_STRING}, zq chip kilo`) return `alias block ${JSON.stringify(r.read.alias)}`;
+      return within(r.edited, fx.blockUid, fx.chipsAliasUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: Esc writes nothing", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:zz", "Escape", "snap", "Escape"], on: `${SEED}[[${FIXTURE_PAGE} Empty]]`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a] = r.snaps;
+      if (a?.prompt !== null || !a.popup) return `after Esc prompt ${JSON.stringify(a?.prompt)} popup ${a?.popup}`;
+      if (r.read.children.length) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias delete: Alt+Backspace, Enter removes only that alias", query: CHIPS_Q, settings: WRITE_SETTINGS, mayCreatePage: true,
+    keys: ["alt+ArrowDown", "ArrowRight", "alt+Backspace", "snap", "Enter", "wait:300", "snap", "Escape", "Escape"], on: `${SEED}[[${CHIP_ALIASES[0].slice(0, 10)}]]`,
+    read: async () => ({ alias: await aliasBlockString(c, fx.chipsUid) }),
+    restore: () => setAliasBlock(c, fx.chipsAliasUid, CHIPS_ALIAS_STRING),
+    check: (r) => {
+      const [a, b] = r.snaps;
+      if (!a?.confirm?.includes(CHIP_ALIASES[1])) return `confirm ${JSON.stringify(a?.confirm)}`;
+      if (!b || b.chips.some((chip) => chip.text === CHIP_ALIASES[1])) return `chips after delete ${JSON.stringify(b?.chips.map((chip) => chip.text))}`;
+      const want = CHIPS_ALIAS_STRING.replace(`, ${CHIP_ALIASES[1]}`, "");
+      if (r.read.alias !== want) return `alias block ${JSON.stringify(r.read.alias)} != ${JSON.stringify(want)}`;
+      return within(r.edited, fx.blockUid, fx.chipsAliasUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias delete: Esc keeps the alias", query: CHIPS_Q, settings: WRITE_SETTINGS, mayCreatePage: true,
+    keys: ["alt+ArrowDown", "ArrowRight", "alt+Backspace", "Escape", "snap", "Escape", "Escape"],
+    read: async () => ({ alias: await aliasBlockString(c, fx.chipsUid) }),
+    restore: () => setAliasBlock(c, fx.chipsAliasUid, CHIPS_ALIAS_STRING),
+    check: (r) => {
+      const [a] = r.snaps;
+      if (a?.confirm !== null || !a.chips.some((chip) => chip.text === CHIP_ALIASES[1])) return `after Esc confirm ${JSON.stringify(a?.confirm)} chips ${JSON.stringify(a?.chips.map((chip) => chip.text))}`;
+      return r.read.alias === CHIPS_ALIAS_STRING ? null : `alias block ${JSON.stringify(r.read.alias)}`;
+    },
+  },
+];
+
+// Block reference search, on arm only: no query is typed; the command (or the
+// hotkey) puts (()) at the caret and the typed words go between the parens.
+const REFSEARCH_CASES = [
+  {
+    name: "ref search: palette opens (( at the caret", query: "", keys: [`palette:${REF_COMMAND}`, "wait:500", "snap", `type:${config.ref.query.slice(2)}`, "Enter"], on: committed,
+    check: ({ snaps: [a] }) => (a?.value === `${SEED}(())` && a.popup ? null : `after the command ${JSON.stringify(a?.value)} popup ${a?.popup}`),
+  },
+  {
+    name: "ref search: Alt+Shift+9 opens (( at the caret", query: "", settings: { refSearchHotkey: true }, keys: ["alt+shift+9", "wait:300", "snap", `type:${config.ref.query.slice(2)}`, "Enter"], on: committed,
+    check: ({ snaps: [a] }) => (a?.value === `${SEED}(())` && a.popup ? null : `after the hotkey ${JSON.stringify(a?.value)} popup ${a?.popup}`),
+  },
+];
+
+// Keys that are Roam's own with the Burrow switch off: on, off and gone must agree.
+const PASS_CASES = [
+  { name: "⌥A with alias writes off is Roam's", query: `[[${FIXTURE_PAGE} Empty`, settings: { aliasCreate: false }, keys: ["alt+a", "Escape"], line: true },
+  { name: "Alt+Shift+9 with the hotkey off is Roam's", query: "", settings: { refSearchHotkey: false }, keys: ["alt+shift+9", "Escape"], line: true },
 ];
 
 // Tab drill, on and gone arms. `on` is the expected string with Burrow; a
@@ -426,6 +721,69 @@ const TAB_CASES = [
     name: "Tab drills into a referenced original with children", query: config.ref.query, refCase: true,
     keys: ["Tab", "snap", "Enter"], on: (d, x) => `${SEED}((${x.refChild}))`,
     expect: ([s]) => (s?.scope ? null : "no scope panel"),
+  },
+  {
+    name: "tab drill: click a child inserts it", query: `[[${DRILL_PAGE}`, loose: true,
+    keys: ["Tab", "type:alpha", "Tab", "snap", "click:scope:third item"], on: (d) => `${SEED}((${d.third}))`,
+    expect: ([s]) => {
+      // The Alpha section level: its first child is a leaf unless the row carries ▸.
+      const drillable = (s?.scope?.active ?? "").includes("▸");
+      const want = HINTS_SCOPE.filter((part, i) => drillable || i).join(" · ");
+      return s?.scopeHints === want ? null : `scope hints ${JSON.stringify(s?.scopeHints)} != ${JSON.stringify(want)} (active ${JSON.stringify(s?.scope?.active)})`;
+    },
+  },
+  {
+    name: "tab drill: click a crumb goes back", query: `[[${DRILL_PAGE}`, loose: true,
+    keys: ["Tab", "type:alpha", "Tab", "click:crumb:0", "snap", "Escape", "Escape"], on: () => TYPED_PAGE,
+    expect: ([s]) => (s?.scope && s.scope.crumb.includes(DRILL_PAGE) && !s.scope.crumb.includes("Alpha section") && s.scope.filter === "alpha"
+      ? null : `after the crumb click ${JSON.stringify(s?.scope)}`),
+  },
+  {
+    name: "tab drill: click away while drilled in", query: `[[${DRILL_PAGE}`, loose: true,
+    keys: ["Tab", "snap", "click-away", "wait:300", "snap"], on: () => TYPED_PAGE,
+    expect: ([s0, s1]) => {
+      if (!s0?.scope) return `no scope panel before the click ${JSON.stringify(s0?.scope)}`;
+      const left = s1?.visibleBurrow?.filter((n) => /burrow-(strip|hints|preview|scope|chips|row)/.test(n)) ?? [];
+      if (s1?.scope !== null || s1.rows.length || s1.hints !== null || s1.preview !== null || s1.popup || left.length) {
+        return `after the click scope ${JSON.stringify(s1?.scope)} rows ${s1?.rows.length} hints ${JSON.stringify(s1?.hints)} popup ${s1?.popup} visible ${JSON.stringify(s1?.visibleBurrow)}`;
+      }
+      return s1.visibleBurrow.length ? `Burrow nodes still visible ${JSON.stringify(s1.visibleBurrow)}` : null;
+    },
+  },
+  {
+    name: "tab drill: ordinals rank 2. (b) iii first", query: `[[${DRILL_PAGE}`, loose: true,
+    keys: ["Tab", "type:steps", "Tab", "type:2", "snap", "Backspace", "type:(b)", "snap", "Backspace", "Backspace", "Backspace", "type:iii", "snap", "Enter"],
+    on: (d) => `${SEED}((${d.roman}))`,
+    expect: ([a, b, c3]) => {
+      const got = [a, b, c3].map((snap) => snap?.scope?.active ?? null);
+      const want = ["2. bake", "(b) cool", "iii. serve"];
+      return want.every((text, i) => got[i]?.includes(text)) ? null : `active rows ${JSON.stringify(got)}`;
+    },
+  },
+  {
+    name: "tab drill: ordinals off keeps outline order", query: `[[${DRILL_PAGE}`, loose: true, settings: { drillOrdinals: false },
+    keys: ["Tab", "type:steps", "Tab", "type:(b)", "snap", "Escape", "Escape"], on: () => TYPED_PAGE,
+    expect: ([s]) => (s?.scope?.active?.includes("B-side") ? null : `active row ${JSON.stringify(s?.scope?.active)}`),
+  },
+  {
+    name: "tab drill: (empty) ▸ shown, empty leaf hidden", query: `[[${DRILL_PAGE}`, loose: true,
+    keys: ["Tab", "type:hollow", "Tab", "snap", "ArrowUp", "Tab", "snap", "Enter"], on: (d) => `${SEED}((${d.insideHollow}))`,
+    expect: ([a, b]) => {
+      if (JSON.stringify(a?.scope?.rows) !== JSON.stringify(["(empty) ▸", "after hollow"]) || a.scope.active !== "after hollow") return `rows ${JSON.stringify(a?.scope?.rows)} active ${JSON.stringify(a?.scope?.active)}`;
+      if (!b?.scope?.crumb.includes("(empty)") || JSON.stringify(b.scope.rows) !== JSON.stringify(["inside hollow"])) return `inside ${JSON.stringify(b?.scope)}`;
+      return null;
+    },
+  },
+  {
+    name: "tab drill: +N more lists the next slice", query: `[[${DRILL_PAGE}`, loose: true,
+    keys: ["Tab", "type:many", "Tab", "snap", "down:50", "snap", "Enter", "snap", "Enter"], on: (d) => `${SEED}((${d.many51}))`,
+    expect: ([a, b, c3]) => {
+      const rows = a?.scope?.rowsFull ?? [];
+      if (rows.length !== 51 || !rows.at(-1).text.includes("+5 more") || !rows.at(-1).cls.includes("burrow-more-row")) return `first slice ${rows.length} rows, last ${JSON.stringify(rows.at(-1))}`;
+      if (!b?.scope?.active?.includes("+5 more") || !b.scopeHints?.includes("↵ more")) return `on the more row: active ${JSON.stringify(b?.scope?.active)} hints ${JSON.stringify(b?.scopeHints)}`;
+      if (c3?.scope?.rows.length !== 55 || !c3.scope.active?.includes("many 51")) return `second slice ${c3?.scope?.rows.length} rows, active ${JSON.stringify(c3?.scope?.active)}`;
+      return null;
+    },
   },
 ].filter((kase) => !kase.refCase || config.refHasChildren);
 
@@ -476,13 +834,30 @@ async function runFastCase() {
   return readBack();
 }
 
+const childUids = (pageUid) => c.evaluate((pageUid) => (window.roamAlphaAPI.pull("[{:block/children [:block/uid]}]", [":block/uid", pageUid])?.[":block/children"] || []).map((k) => k[":block/uid"]), pageUid);
+
+// Roam keeps its preview open/closed across popups; put it back as found.
+async function restorePreviewState(initial) {
+  const primed = await prime(SEED);
+  if (!primed.ok) return;
+  await c.type(config.listed.query, TYPE_MS);
+  await settle("on");
+  if ((await isExpanded()) !== initial) await ctrlO();
+  await c.key("Escape");
+  await readBack();
+}
+
 async function runAliasCase(kase) {
   return withSettings("on", kase.settings, async () => {
+    misses = [];
+    wheelSteps = 0;
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed", primed };
-    await c.type(kase.query, TYPE_MS);
-    // A "noRows" case expects no Burrow row; give roam-aliases time to draw.
-    await settle(kase.noRows ? "gone" : "on");
+    if (kase.query) {
+      await c.type(kase.query, TYPE_MS);
+      // A "noRows" case expects no Burrow row; give roam-aliases time to draw.
+      await settle(kase.noRows ? "gone" : "on");
+    }
     if (kase.waitAliases) {
       for (let t0 = Date.now(); Date.now() - t0 < 2000;) {
         if (await c.evaluate(() => document.querySelectorAll(".rm-aliases .rm-autocomplete-result").length)) break;
@@ -494,8 +869,15 @@ async function runAliasCase(kase) {
     const before = await state();
     before.roamAliasesRows = await c.evaluate(() => document.querySelectorAll(".rm-aliases .rm-autocomplete-result").length);
     const snaps = [];
-    await runKeys(kase.keys, snaps);
-    return { before, snaps, ...(await readBack()) };
+    const initialPreview = kase.restorePreview ? await isExpanded() : null;
+    let after;
+    try {
+      await runKeys(kase.keys, snaps);
+      after = await readBack();
+    } finally {
+      if (kase.restorePreview) await restorePreviewState(initialPreview);
+    }
+    return { before, snaps, ...after, misses, wheelSteps };
   });
 }
 
@@ -511,16 +893,21 @@ async function runCase(arm, kase) {
 
 async function runCaseBody(arm, kase) {
   const query = kase.query ?? q;
-  const typedOpen = `${SEED}${query}${query.startsWith("((") ? "))" : "]]"}`;
+  // An empty query types nothing: the block just holds the seed.
+  const typedOpen = query === "" ? SEED : `${SEED}${query}${query.startsWith("((") ? "))" : "]]"}`;
   if (kase.pre === "break" && arm !== "gone") {
     await c.evaluate(() => { const i = window.__BURROW.indexes; i.__saved = i.refs; Object.defineProperty(i, "refs", { configurable: true, get: () => ({ entries: null }) }); });
   }
+  misses = [];
+  wheelSteps = 0;
   let before = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed", primed };
-    await c.type(query, TYPE_MS);
-    await settle(kase.pre === "break" || kase.loose || arm === "drilloff" ? "gone" : arm);
+    if (query !== "") {
+      await c.type(query, TYPE_MS);
+      await settle(kase.pre === "break" || kase.loose || arm === "drilloff" ? "gone" : arm);
+    }
     before = await state();
     if (before.value === typedOpen) break;
     retypes += 1;
@@ -534,7 +921,7 @@ async function runCaseBody(arm, kase) {
   if (kase.pre === "break" && arm !== "gone") {
     await c.evaluate(() => { const i = window.__BURROW?.indexes; if (i) { delete i.refs; } });
   }
-  return { before, snaps, ...after };
+  return { before, snaps, ...after, misses, wheelSteps };
 }
 
 // ---- overlap ----
@@ -620,13 +1007,122 @@ async function runOverlap() {
   }
   return { layouts: 4, pairs };
 }
+// Write cases change the graph: edits are measured from just after priming,
+// and whatever the case wrote is put back in a finally.
+async function runWriteCase(kase) {
+  return withSettings("on", kase.settings, async () => {
+    try {
+      const primed = await prime(SEED);
+      if (!primed.ok) return { error: "focus failed", primed };
+      const t0 = await pageNow(c);
+      await c.type(kase.query, TYPE_MS);
+      await settle("on");
+      await sleep(150);
+      const before = await state();
+      const snaps = [];
+      await runKeys(kase.keys, snaps);
+      const after = await readBack();
+      await sleep(300);
+      const edited = await editedSince(c, t0);
+      const read = await kase.read?.();
+      return { before, snaps, ...after, edited, read };
+    } finally {
+      await kase.restore?.();
+    }
+  });
+}
+
+// ---- popup above the text ----
+
+const hits = (a, b) => Boolean(a && b) && Math.min(a.r, b.r) - Math.max(a.l, b.l) > 2 && Math.min(a.b, b.b) - Math.max(a.t, b.t) > 2;
+const inside = (a, b) => Boolean(a && b) && a.l >= b.l - 2 && a.r <= b.r + 2 && a.t >= b.t - 2 && a.b <= b.b + 2;
+
+async function runAbove() {
+  const low = async () => {
+    const { taTop, innerHeight } = await placeLow(c);
+    if (!(taTop >= innerHeight - 200)) throw new Error(`above: placement did not take, text top ${taTop} of ${innerHeight}`);
+  };
+  const problems = [];
+  const mine = [];
+  try {
+    // (a) the [[ results with Burrow's strip and hints
+    let primed = await prime(SEED);
+    if (!primed.ok) throw new Error("above: focus failed");
+    await low();
+    await c.type(config.listed.query, TYPE_MS);
+    await settle("on");
+    await sleep(300);
+    const a = await state();
+    const g = a.geometry;
+    if (!g.pop || !g.ta) problems.push(`(a) no popover or textarea ${JSON.stringify(g)}`);
+    else {
+      if (g.pop.b > g.ta.t + 2) problems.push(`(a) popover not above the text: bottom ${g.pop.b} > text top ${g.ta.t}`);
+      if (g.strip && !inside(g.strip, g.pop)) problems.push(`(a) strip outside the popover ${JSON.stringify([g.strip, g.pop])}`);
+      if (g.hints && !inside(g.hints, g.pop)) problems.push(`(a) hints outside the popover ${JSON.stringify([g.hints, g.pop])}`);
+      for (const name of ["strip", "hints", "preview"]) if (hits(g[name], g.ta)) problems.push(`(a) ${name} covers the text`);
+    }
+    for (const pair of await collectRects()) problems.push(`(a) overlap ${pair}`);
+    mine.push(a);
+    await c.key("Escape");
+    await readBack();
+    // (b) the Tab drill panel
+    primed = await prime(SEED);
+    if (!primed.ok) throw new Error("above: focus failed");
+    await low();
+    await c.type(`[[${DRILL_PAGE}`, TYPE_MS);
+    await settle("gone");
+    await c.key("Tab");
+    await sleep(500);
+    const b = await state();
+    const h = b.geometry;
+    if (!h.scope || !h.ta) problems.push(`(b) no scope panel or textarea ${JSON.stringify(h)}`);
+    else {
+      if (h.scope.b > h.ta.t + 2) problems.push(`(b) scope panel not above the text: bottom ${h.scope.b} > text top ${h.ta.t}`);
+      for (const name of ["scope", "preview"]) if (hits(h[name], h.ta)) problems.push(`(b) ${name} covers the text`);
+    }
+    mine.push(b);
+    await c.key("Escape");
+    await sleep(120);
+    await c.key("Escape");
+    await readBack();
+  } finally {
+    await placeNormal(c);
+  }
+  return { problems, snaps: mine };
+}
+
 // ---- main ----
 
-const report = { window: c.page.title, config: configName, arms: {}, failures: [] };
+const report = { window: c.page.title, config: configName, theme, arms: {}, failures: [], lines: [] };
+const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
+const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES];
+const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES];
+const ABOVE = "popup above the text: panes stay in the popover, off the text";
 if (only) {
-  const names = [...CASES, ...DRILL_CASES, ...ALIAS_CASES, ...TAB_CASES].map((k) => k.name);
+  const names = [...BYTE_CASES, ...ALIAS_RUN_CASES, ...WRITE_CASES, ...TAB_CASES].map((k) => k.name).concat(ABOVE);
   if (!names.includes(only)) throw new Error(`unknown case ${JSON.stringify(only)}; names: ${names.map((n) => JSON.stringify(n)).join(", ")}`);
 }
+// One cleanup for the finally path and for SIGINT / SIGTERM / a crash, so the
+// arm is unloaded, the fixture deleted, the installed Burrow put back and the
+// theme override dropped exactly once.
+let cleaning = null;
+const cleanup = () => (cleaning ||= (async () => {
+  try {
+    await setArm("gone");
+    report.cleanup = await cleanupFixture(c, { keep });
+  } catch (error) {
+    console.error("cleanup:", error);
+  } finally {
+    try {
+      report.restored = await unparkInstalled(c);
+      if (theme) await c.setTheme(null);
+    } catch (error) {
+      console.error("cleanup:", error);
+    }
+    c.close();
+  }
+})());
+onAbort(cleanup);
 // Start from a fresh module, never one left by an earlier dev-load, and park
 // an installed Burrow before the leftover checks (setArm's, and the one below).
 await c.evaluate(async () => {
@@ -657,6 +1153,9 @@ const byteVerdict = (kase, { on, off, gone, drilloff }) => {
       failures.push(`${kase.name}: preview ${JSON.stringify(p)}`);
     }
   }
+  if (kase.previewMore && on.before?.preview?.previewMore !== kase.previewMore) {
+    failures.push(`${kase.name}: preview more ${JSON.stringify(on.before?.preview?.previewMore)} != ${JSON.stringify(kase.previewMore)}`);
+  }
   if (expected) {
     if (on.string !== expected || on.extraStrings.length || on.newPages.length) failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
   } else if (!sameResult(on, gone)) {
@@ -669,7 +1168,8 @@ const aliasVerdict = (kase, r) => {
   if (r.error) failures.push(`${kase.name}: ${r.error}`);
   else {
     if (r.newPages?.length && !kase.mayCreatePage) failures.push(`${kase.name}: created ${r.newPages}`);
-    if (kase.on && (r.string !== kase.on || r.newPages.length)) failures.push(`${kase.name}: ${JSON.stringify(r.string)} != ${JSON.stringify(kase.on)} rows ${JSON.stringify(r.before?.rows)}`);
+    if (kase.on && (r.string !== kase.on || (r.newPages.length && !kase.mayCreatePage))) failures.push(`${kase.name}: ${JSON.stringify(r.string)} != ${JSON.stringify(kase.on)} rows ${JSON.stringify(r.before?.rows)}`);
+    for (const miss of r.misses ?? []) failures.push(`${kase.name}: ${miss}`);
     const failure = kase.check?.(r);
     if (failure) failures.push(`${kase.name}: ${failure}`);
   }
@@ -685,6 +1185,7 @@ const tabVerdict = (kase, on, gone, refChild) => {
     } else if (!sameResult(on, gone)) {
       failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
     }
+    for (const miss of on.misses ?? []) failures.push(`${kase.name}: ${miss}`);
     const failure = kase.expect?.(on.snaps);
     if (failure) failures.push(`${kase.name}: ${failure}`);
   }
@@ -699,11 +1200,13 @@ try {
   const cases = CASES;
   if (only) {
     // One case of any kind with its verdict.
-    const kind = CASES.some((k) => k.name === only) || DRILL_CASES.some((k) => k.name === only) ? "byte"
-      : ALIAS_CASES.some((k) => k.name === only) ? "alias" : "tab";
+    const kind = BYTE_CASES.some((k) => k.name === only) ? "byte"
+      : ALIAS_RUN_CASES.some((k) => k.name === only) ? "alias"
+      : WRITE_CASES.some((k) => k.name === only) ? "write"
+      : only === ABOVE ? "above" : "tab";
     report.only = { name: only, kind, runs: [] };
     if (kind === "byte") {
-      const kase = [...CASES, ...DRILL_CASES].find((k) => k.name === only);
+      const kase = BYTE_CASES.find((k) => k.name === only);
       const results = {};
       for (let i = 0; i < repeat; i++) {
         for (const arm of arms.filter((a) => a !== "drilloff" || DRILL_CASES.includes(kase))) {
@@ -718,13 +1221,20 @@ try {
         }
       }
       if (results.on && results.off && results.gone) report.failures.push(...byteVerdict(kase, results));
-    } else if (kind === "alias") {
-      const kase = ALIAS_CASES.find((k) => k.name === only);
+    } else if (kind === "alias" || kind === "write") {
+      const kase = [...ALIAS_RUN_CASES, ...WRITE_CASES].find((k) => k.name === only);
       for (let i = 0; i < repeat; i++) {
         await setArm("on");
-        const r = await runAliasCase(kase);
+        const r = await (kind === "write" ? runWriteCase(kase) : runAliasCase(kase));
         report.only.runs.push({ arm: "on", ...r });
         report.failures.push(...aliasVerdict(kase, r));
+      }
+    } else if (kind === "above") {
+      for (let i = 0; i < repeat; i++) {
+        await setArm("on");
+        const r = await runAbove();
+        report.only.runs.push({ arm: "on", string: r.problems.length ? r.problems.join("; ") : "ok" });
+        for (const problem of r.problems) report.failures.push(`${ABOVE}: ${problem}`);
       }
     } else {
       const kase = TAB_CASES.find((k) => k.name === only);
@@ -742,7 +1252,7 @@ try {
   } else {
   for (const arm of arms) {
     report.arms[arm] = {};
-    for (const kase of arm === "drilloff" ? DRILL_CASES : [...cases, ...DRILL_CASES]) {
+    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...PASS_CASES] : [...cases, ...DRILL_CASES]) {
       // Unload and break both damage the runtime: reload the module per case.
       const loaded = await setArm(arm);
       if (arm !== "gone" && !loaded.refs) throw new Error(`arm ${arm}: index not built`);
@@ -758,18 +1268,27 @@ try {
   for (const [arm, results] of Object.entries(report.arms)) {
     for (const [name, r] of Object.entries(results)) if (r.error) report.failures.push(`${arm} ${name}: ${r.error} ${JSON.stringify(r.primed)}`);
   }
-  for (const kase of [...CASES, ...DRILL_CASES]) {
+  for (const kase of BYTE_CASES) {
     const at = (arm) => report.arms[arm]?.[kase.name];
+    const before = report.failures.length;
     report.failures.push(...byteVerdict(kase, { on: at("on"), off: at("off"), gone: at("gone"), drilloff: at("drilloff") }));
+    if (kase.line) note(kase.name, at("on"), before);
   }
   await setArm("on");
   report.alias = {};
-  report.lines = [];
-  const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}: ${JSON.stringify(r.string)}`);
-  for (const kase of ALIAS_CASES) {
+  for (const kase of ALIAS_RUN_CASES) {
     const before = report.failures.length;
     const r = await runAliasCase(kase);
     report.alias[kase.name] = r;
+    report.failures.push(...aliasVerdict(kase, r));
+    note(kase.name, r, before);
+  }
+  // Writes to the fixture's pages, each put back afterwards.
+  report.write = {};
+  for (const kase of WRITE_CASES) {
+    const before = report.failures.length;
+    const r = await runWriteCase(kase);
+    report.write[kase.name] = r;
     report.failures.push(...aliasVerdict(kase, r));
     note(kase.name, r, before);
   }
@@ -791,6 +1310,12 @@ try {
   await setArm("on");
   report.overlap = await runOverlap();
   for (const pair of report.overlap.pairs) report.failures.push(`overlap ${pair}`);
+  {
+    const before = report.failures.length;
+    report.above = await runAbove();
+    for (const problem of report.above.problems) report.failures.push(`${ABOVE}: ${problem}`);
+    report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${ABOVE}`);
+  }
   report.pick = await runPickCase();
   // The two rows tie, so either may come first; the other one is picked.
   report.pick.expected = report.pick.firstUids?.[0] === fx.drill.pickA ? fx.drill.pickB : fx.drill.pickA;
@@ -816,28 +1341,23 @@ try {
   report.qBody = qBody;
   }
 } finally {
-  try {
-    await setArm("gone");
-    report.cleanup = await cleanupFixture(c, { keep });
-  } finally {
-    report.restored = await unparkInstalled(c);
-    c.close();
-  }
+  await cleanup();
 }
 if (report.installed.parked && !report.restored?.restored) report.failures.push(`installed Burrow ${report.installed.version} not restored`);
+const label = `${configName}${theme ? ` (${theme})` : ""}`;
 if (flags.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else if (only) {
-  console.log(`live gate ${configName} --only ${JSON.stringify(only)}: ${report.failures.length ? "FAIL" : "PASS"}`);
+  console.log(`live gate ${label} --only ${JSON.stringify(only)}: ${report.failures.length ? "FAIL" : "PASS"}`);
   console.log(`  installed Burrow: ${report.installed.parked ? `parked ${report.installed.version} for the run, restored: ${report.restored?.restored ? "yes" : "no"}` : "none in this window"}`);
   for (const r of report.only.runs) console.log(armLine(r.arm, r));
   for (const f of report.failures) console.log(`  FAIL ${f}`);
 } else if (!only) {
   const caseCount = Object.values(report.arms).reduce((n, a) => n + Object.keys(a).length, 0);
-  console.log(`live gate ${configName}: ${report.failures.length ? "FAIL" : "PASS"}`);
+  console.log(`live gate ${label}: ${report.failures.length ? "FAIL" : "PASS"}`);
   console.log(`  installed Burrow: ${report.installed.parked ? `parked ${report.installed.version} for the run, restored: ${report.restored?.restored ? "yes" : "no"}` : "none in this window"}`);
   console.log(`  acceptance ${q} -> ((${config.ref.uid})) first and selected: ${report.acceptance?.pass ? "yes" : "no"}`);
-  console.log(`  byte-for-byte: ${caseCount} case runs (on / off / gone / drilloff), ${DRILL_CASES.length} of them drill cases; retyped after a Roam key drop: ${retypes}`);
+  console.log(`  byte-for-byte: ${caseCount} case runs (on / off / gone / drilloff), ${DRILL_CASES.length} of them drill cases, ${PASS_CASES.length} pass-through; retyped after a Roam key drop: ${retypes}`);
   const drillPages = (arm, commits) => DRILL_CASES.filter((k) => Boolean(k.on) === commits)
     .reduce((n, k) => n + (report.arms[arm]?.[k.name]?.newPages?.length || 0), 0);
   console.log(`  drill pages created: by Burrow commits ${drillPages("on", true)}; by Roam in the pass-through cases on ${drillPages("on", false)} = gone ${drillPages("gone", false)}`);

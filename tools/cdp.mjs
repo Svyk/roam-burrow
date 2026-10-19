@@ -12,6 +12,8 @@ const KEYS = {
   ArrowDown: { code: "ArrowDown", keyCode: 40 },
   ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
   ArrowRight: { code: "ArrowRight", keyCode: 39 },
+  Home: { code: "Home", keyCode: 36 },
+  End: { code: "End", keyCode: 35 },
 };
 
 export async function connect(titlePart) {
@@ -42,7 +44,10 @@ export async function connect(titlePart) {
     return result.result.value;
   };
   const key = async (name, modifiers = 0) => {
-    const spec = KEYS[name] || { code: `Key${name.toUpperCase()}`, keyCode: name.toUpperCase().charCodeAt(0), text: name };
+    const digit = /^\d$/.test(name);
+    const spec = KEYS[name] || (digit
+      ? { code: `Digit${name}`, keyCode: 48 + Number(name), text: name }
+      : { code: `Key${name.toUpperCase()}`, keyCode: name.toUpperCase().charCodeAt(0), text: name });
     const base = { key: name, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode, modifiers };
     await call("Input.dispatchKeyEvent", { type: spec.text ? "keyDown" : "rawKeyDown", ...base, text: spec.text, unmodifiedText: spec.text });
     await call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
@@ -55,8 +60,35 @@ export async function connect(titlePart) {
       if (delay) await sleep(delay);
     }
   };
+  // Mouse coordinates equal getBoundingClientRect() values (no zoom scaling).
+  const click = async (x, y) => {
+    await call("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+    await call("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+    await call("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+  };
+  const wheel = (x, y, deltaX, deltaY) => call("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX, deltaY });
+  // The override lives only as long as this connection; svy's theme follows it.
+  const setTheme = async (mode) => {
+    await call("Emulation.setEmulatedMedia", { features: mode ? [{ name: "prefers-color-scheme", value: mode }] : [] });
+    if (!mode) return;
+    for (let t0 = Date.now(); Date.now() - t0 < 4000;) {
+      if (await evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches) === (mode === "dark")) break;
+      await sleep(50);
+    }
+    await sleep(600);
+  };
+  // Page.captureScreenshot clips are in unzoomed pixels; Roam Desktop runs zoomed.
+  const screenshot = async (rect) => {
+    const params = { format: "png" };
+    if (rect) {
+      const k = await evaluate(() => window.devicePixelRatio / Math.round(window.devicePixelRatio));
+      params.clip = { x: rect.left * k, y: rect.top * k, width: rect.width * k, height: rect.height * k, scale: 1 };
+    }
+    const result = await call("Page.captureScreenshot", params);
+    return Buffer.from(result.data, "base64");
+  };
   const close = () => socket.close();
-  return { page, call, evaluate, key, type, close };
+  return { page, call, evaluate, key, type, click, wheel, setTheme, screenshot, close };
 }
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
