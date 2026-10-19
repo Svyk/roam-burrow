@@ -1483,11 +1483,10 @@ var FOLD_ALIASES = "burrow-fold-aliases";
 var LAYOUT = "burrow-layout";
 var SCOPE_OPEN = "burrow-scope-open";
 var FOLDED = "data-burrow-folded";
-var ROW_HEIGHT = 33;
-var CHIPS_HEIGHT = 28;
 var HINTS_HEIGHT = 22;
-var POP_CLASSES = [OWNS, DRILL_CLASS, PAD, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
 var ROW_LIMIT = 3;
+var PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
+var POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
 var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
 var POPUP_WAIT_FRAMES = 12;
@@ -1524,14 +1523,6 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   lifecycle.node(strip, doc.body);
   const chipsNode = doc.createElement("div");
   chipsNode.className = "burrow-chips";
-  const padStyle = lifecycle.node(doc.createElement("style"), doc.head);
-  let padPx = -1;
-  const writePad = (px) => {
-    padPx = px;
-    padStyle.textContent = `.rm-autocomplete__results.${PAD} > .rm-autocomplete__results-main { padding-top: ${px}px !important; }
-.rm-autocomplete__results.${PAD_BOTTOM} > .rm-autocomplete__results-main { padding-bottom: ${HINTS_HEIGHT}px !important; }`;
-  };
-  writePad(0);
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -1857,9 +1848,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   function setPad(count, withChips) {
     if (!st.pop) return;
-    const px = ROW_HEIGHT * count + 1 + (withChips ? CHIPS_HEIGHT : 0);
-    if (px !== padPx) writePad(px);
-    st.pop.classList.add(PAD);
+    const wanted = count > 0 ? `${PAD}-${Math.min(count, ROW_LIMIT)}${withChips ? "c" : ""}` : null;
+    for (const cls of PAD_SIZES) if (st.pop.classList.contains(cls) !== (cls === wanted)) st.pop.classList.toggle(cls);
+    if (wanted) st.pop.classList.add(PAD);
+    else st.pop.classList.remove(PAD);
   }
   const listColumn = (pop) => pop.querySelector(":scope > .rm-autocomplete__results-main") || pop;
   function sampleTheme(pop) {
@@ -1918,7 +1910,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     chipsNode.remove();
     chipsFor = null;
     preview.hide();
-    st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD);
+    st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
   function clearPopover() {
     if (!st.pop) return;
@@ -2312,7 +2304,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     strip.hidden = true;
     chipsNode.remove();
     preview.hide();
-    st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, PAD_BOTTOM);
+    st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
     hints.hidden = true;
     hintsFor = null;

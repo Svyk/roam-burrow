@@ -18,12 +18,14 @@ const FOLD_ALIASES = "burrow-fold-aliases";
 const LAYOUT = "burrow-layout";
 const SCOPE_OPEN = "burrow-scope-open";
 const FOLDED = "data-burrow-folded";
+// Row, chips and hints heights; src/extension.css's burrow-pad-* rules are built from them.
 const ROW_HEIGHT = 33;
 const CHIPS_HEIGHT = 28;
 const HINTS_HEIGHT = 22;
-// Every class Burrow puts on Roam's popover; each one is removed again on reset.
-const POP_CLASSES = [OWNS, DRILL_CLASS, PAD, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
 const ROW_LIMIT = 3;
+const PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
+// Every class Burrow puts on Roam's popover; each one is removed again on reset.
+const POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
 const MIN_REF_QUERY = 3;
 const MIN_ALIAS_QUERY = 2;
 const POPUP_WAIT_FRAMES = 12;
@@ -59,14 +61,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.node(strip, doc.body);
   const chipsNode = doc.createElement("div");
   chipsNode.className = "burrow-chips";
-  const padStyle = lifecycle.node(doc.createElement("style"), doc.head);
-  let padPx = -1;
-  const writePad = (px) => {
-    padPx = px;
-    padStyle.textContent = `.rm-autocomplete__results.${PAD} > .rm-autocomplete__results-main { padding-top: ${px}px !important; }\n`
-      + `.rm-autocomplete__results.${PAD_BOTTOM} > .rm-autocomplete__results-main { padding-bottom: ${HINTS_HEIGHT}px !important; }`;
-  };
-  writePad(0);
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -385,13 +379,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   }
 
   // The strip overlays the top of Roam's list column, the hints line its
-  // bottom; reversible classes on the popover pad that column (not the
-  // preview beside it) so no native row is covered.
+  // bottom; static classes (burrow-pad-N, -Nc with the chips) pad that column
+  // (not the preview beside it) so no native row is covered. A class toggle
+  // restyles only the popover; a rewritten stylesheet would restyle the whole
+  // document on every row-count change.
   function setPad(count, withChips) {
     if (!st.pop) return;
-    const px = ROW_HEIGHT * count + 1 + (withChips ? CHIPS_HEIGHT : 0);
-    if (px !== padPx) writePad(px);
-    st.pop.classList.add(PAD);
+    const wanted = count > 0 ? `${PAD}-${Math.min(count, ROW_LIMIT)}${withChips ? "c" : ""}` : null;
+    for (const cls of PAD_SIZES) if (st.pop.classList.contains(cls) !== (cls === wanted)) st.pop.classList.toggle(cls);
+    if (wanted) st.pop.classList.add(PAD);
+    else st.pop.classList.remove(PAD);
   }
 
   const listColumn = (pop) => pop.querySelector(":scope > .rm-autocomplete__results-main") || pop;
@@ -456,7 +453,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsNode.remove();
     chipsFor = null;
     preview.hide();
-    st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD);
+    st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
 
   // Everything Burrow put on the popover and on roam-aliases' rows, undone.
@@ -877,7 +874,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.hidden = true;
     chipsNode.remove();
     preview.hide();
-    st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, PAD_BOTTOM);
+    st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
     hints.hidden = true;
     hintsFor = null;

@@ -177,6 +177,16 @@
 .rm-autocomplete__results.burrow-fold-aliases.alias-container .dont-unfocus-block { max-width: none !important; }
 .rm-aliases [data-burrow-folded] { display: none !important; }
 
+/* Room for Burrow's rows over Roam's list column: 33px per row + 1 (strip.js ROW_HEIGHT), +28px with the alias
+   chips (CHIPS_HEIGHT); the hint line 22px (HINTS_HEIGHT). Static classes: a class toggle restyles the popover only. */
+.rm-autocomplete__results.burrow-pad-1 > .rm-autocomplete__results-main { padding-top: 34px !important; }
+.rm-autocomplete__results.burrow-pad-2 > .rm-autocomplete__results-main { padding-top: 67px !important; }
+.rm-autocomplete__results.burrow-pad-3 > .rm-autocomplete__results-main { padding-top: 100px !important; }
+.rm-autocomplete__results.burrow-pad-1c > .rm-autocomplete__results-main { padding-top: 62px !important; }
+.rm-autocomplete__results.burrow-pad-2c > .rm-autocomplete__results-main { padding-top: 95px !important; }
+.rm-autocomplete__results.burrow-pad-3c > .rm-autocomplete__results-main { padding-top: 128px !important; }
+.rm-autocomplete__results.burrow-pad-foot > .rm-autocomplete__results-main { padding-bottom: 22px !important; }
+
 .rm-autocomplete__results.burrow-layout.alias-container { min-width: 0 !important; }
 .rm-autocomplete__results.burrow-layout.alias-container .dont-unfocus-block { max-width: none !important; }
 .rm-autocomplete__results.burrow-layout .rm-aliases { position: static !important; float: none !important; min-width: 0 !important; width: auto !important; max-height: 96px !important; flex: none; overflow: auto; border-bottom: 1px solid rgba(16, 22, 26, 0.12); }
