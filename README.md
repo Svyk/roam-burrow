@@ -81,6 +81,7 @@ npm run check   # build, secret scan, syntax check, tests, generated-artifact dr
 npm run gate:live                            # everything below, both graphs, about 22 minutes, PASS/FAIL summary
 node tools/live-gate.mjs Svy svy             # about 4 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases, alias rows, pick memory, fast typing
 node tools/live-gate.mjs Readwisenotes notes # about 4 min
+node tools/live-gate.mjs Svy svy --only "alias chips: ⌥↓, ←, Enter"   # one case and its verdict, about 30 s
 node tools/perf-gate.mjs Svy --runs 3        # about 3 min: per-key cost and input-to-paint, Burrow on vs absent
 node tools/perf-gate.mjs Svy --runs 3 --drill # the same while typing a drill-down with the preview open
 ```

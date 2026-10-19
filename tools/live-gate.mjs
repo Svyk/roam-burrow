@@ -5,6 +5,8 @@
 // is parked for the run and put back afterwards.
 //
 //   node tools/live-gate.mjs <window-title-prefix> <graph-config> [--keep]
+//   node tools/live-gate.mjs <window> <svy|notes> --only "<case name>" [--arms on,gone] [--repeat N]
+//     one case with its verdict, about 30 s
 //
 // Graph configs (below) name the acceptance query and expected block uid.
 // Arms: "on" (all toggles on), "off" (all toggles off), "gone" (module
@@ -599,6 +601,10 @@ async function runOverlap() {
 // ---- main ----
 
 const report = { window: c.page.title, config: configName, arms: {}, failures: [] };
+if (only) {
+  const names = [...CASES, ...DRILL_CASES, ...ALIAS_CASES, ...TAB_CASES].map((k) => k.name);
+  if (!names.includes(only)) throw new Error(`unknown case ${JSON.stringify(only)}; names: ${names.map((n) => JSON.stringify(n)).join(", ")}`);
+}
 // Start from a fresh module, never one left by an earlier dev-load, and park
 // an installed Burrow before the leftover checks (setArm's, and the one below).
 await c.evaluate(async () => {
@@ -616,16 +622,99 @@ if (leaks) {
 }
 const fx = await setupFixture(c, { drillTree: true }).catch(async (error) => { await unparkInstalled(c); throw error; });
 report.fixture = fx;
+const sameResult = (a, b) => a.string === b.string && JSON.stringify(a.extraStrings) === JSON.stringify(b.extraStrings) && JSON.stringify(a.newPages) === JSON.stringify(b.newPages);
+// Verdicts return failure strings; the full run and --only share them.
+const byteVerdict = (kase, { on, off, gone, drilloff }) => {
+  const failures = [];
+  if (!sameResult(off, gone)) failures.push(`${kase.name}: off ${JSON.stringify(off.string)} != gone ${JSON.stringify(gone.string)}`);
+  if (drilloff && !sameResult(drilloff, gone)) failures.push(`${kase.name}: drilloff ${JSON.stringify(drilloff.string)}/${JSON.stringify(drilloff.newPages)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.newPages)}`);
+  const expected = typeof kase.on === "function" ? kase.on(fx.drill) : kase.on;
+  if (kase.preview) {
+    const p = on.before?.preview;
+    if (!p || p.trail !== kase.preview.trail || p.target !== kase.preview.target || !p.targetVisible || !p.nativeHidden) {
+      failures.push(`${kase.name}: preview ${JSON.stringify(p)}`);
+    }
+  }
+  if (expected) {
+    if (on.string !== expected || on.extraStrings.length || on.newPages.length) failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
+  } else if (!sameResult(on, gone)) {
+    failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
+  }
+  return failures;
+};
+const aliasVerdict = (kase, r) => {
+  const failures = [];
+  if (r.error) failures.push(`${kase.name}: ${r.error}`);
+  else {
+    if (r.newPages?.length && !kase.mayCreatePage) failures.push(`${kase.name}: created ${r.newPages}`);
+    if (kase.on && (r.string !== kase.on || r.newPages.length)) failures.push(`${kase.name}: ${JSON.stringify(r.string)} != ${JSON.stringify(kase.on)} rows ${JSON.stringify(r.before?.rows)}`);
+    const failure = kase.check?.(r);
+    if (failure) failures.push(`${kase.name}: ${failure}`);
+  }
+  return failures;
+};
+const tabVerdict = (kase, on, gone, refChild) => {
+  const failures = [];
+  if (on.error || gone.error) failures.push(`${kase.name}: ${on.error || gone.error}`);
+  else {
+    const expected = typeof kase.on === "function" ? kase.on(fx.drill, { refChild }) : kase.on;
+    if (expected) {
+      if (on.string !== expected || on.extraStrings.length || on.newPages.length) failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
+    } else if (!sameResult(on, gone)) {
+      failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
+    }
+    const failure = kase.expect?.(on.snaps);
+    if (failure) failures.push(`${kase.name}: ${failure}`);
+  }
+  return failures;
+};
+const getRefChild = () => config.refHasChildren ? c.evaluate((uid) => {
+  const kids = window.roamAlphaAPI.pull("[{:block/children [:block/uid :block/order]}]", [":block/uid", uid])?.[":block/children"] || [];
+  return kids.sort((a, b) => a[":block/order"] - b[":block/order"])[0]?.[":block/uid"] ?? null;
+}, config.ref.uid) : null;
+const armLine = (arm, r) => r.error ? `  ${arm}: ERROR ${r.error} ${JSON.stringify(r.primed)}` : `  ${arm}: ${JSON.stringify(r.string)} pages ${JSON.stringify(r.newPages)}`;
 try {
-  const cases = only ? CASES.filter((k) => k.name === only) : CASES;
+  const cases = CASES;
   if (only) {
-    // Diagnostic mode: one case, chosen arms, repeated; no pass/fail.
-    for (const arm of arms) {
-      report.arms[arm] = [];
+    // One case of any kind with its verdict.
+    const kind = CASES.some((k) => k.name === only) || DRILL_CASES.some((k) => k.name === only) ? "byte"
+      : ALIAS_CASES.some((k) => k.name === only) ? "alias" : "tab";
+    report.only = { name: only, kind, runs: [] };
+    if (kind === "byte") {
+      const kase = [...CASES, ...DRILL_CASES].find((k) => k.name === only);
+      const results = {};
       for (let i = 0; i < repeat; i++) {
-        await setArm(arm);
-        const r = await runCase(arm, cases[0]);
-        report.arms[arm].push(r.error ? `ERROR ${r.error} ${JSON.stringify(r.primed)}` : r.string + " | " + JSON.stringify(r.extraStrings));
+        for (const arm of arms.filter((a) => a !== "drilloff" || DRILL_CASES.includes(kase))) {
+          const loaded = await setArm(arm);
+          if (arm !== "gone" && !loaded.refs) throw new Error(`arm ${arm}: index not built`);
+          const r = await runCase(arm, kase);
+          results[arm] = r;
+          report.only.runs.push({ arm, ...r });
+          if (r.guarded) report.failures.push(`${arm} ${only}: stray keys ${r.guarded}`);
+          if (r.error) report.failures.push(`${arm} ${only}: ${r.error} ${JSON.stringify(r.primed)}`);
+          if (kase.pre === "break" || kase.keys.includes("unload")) await setArm("gone");
+        }
+      }
+      if (results.on && results.off && results.gone) report.failures.push(...byteVerdict(kase, results));
+    } else if (kind === "alias") {
+      const kase = ALIAS_CASES.find((k) => k.name === only);
+      for (let i = 0; i < repeat; i++) {
+        await setArm("on");
+        const r = await runAliasCase(kase);
+        report.only.runs.push({ arm: "on", ...r });
+        report.failures.push(...aliasVerdict(kase, r));
+      }
+    } else {
+      const kase = TAB_CASES.find((k) => k.name === only);
+      const refChild = kase.refCase ? await getRefChild() : null;
+      for (let i = 0; i < repeat; i++) {
+        const results = {};
+        for (const arm of ["on", "gone"]) {
+          await setArm(arm);
+          results[arm] = await runCase(arm, kase);
+          report.only.runs.push({ arm, ...results[arm] });
+        }
+        report.failures.push(...tabVerdict(kase, results.on, results.gone, refChild));
       }
     }
   } else {
@@ -648,25 +737,8 @@ try {
     for (const [name, r] of Object.entries(results)) if (r.error) report.failures.push(`${arm} ${name}: ${r.error} ${JSON.stringify(r.primed)}`);
   }
   for (const kase of [...CASES, ...DRILL_CASES]) {
-    const on = report.arms.on[kase.name];
-    const off = report.arms.off[kase.name];
-    const gone = report.arms.gone[kase.name];
-    const same = (a, b) => a.string === b.string && JSON.stringify(a.extraStrings) === JSON.stringify(b.extraStrings) && JSON.stringify(a.newPages) === JSON.stringify(b.newPages);
-    if (!same(off, gone)) report.failures.push(`${kase.name}: off ${JSON.stringify(off.string)} != gone ${JSON.stringify(gone.string)}`);
-    const drilloff = report.arms.drilloff?.[kase.name];
-    if (drilloff && !same(drilloff, gone)) report.failures.push(`${kase.name}: drilloff ${JSON.stringify(drilloff.string)}/${JSON.stringify(drilloff.newPages)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.newPages)}`);
-    const expected = typeof kase.on === "function" ? kase.on(fx.drill) : kase.on;
-    if (kase.preview) {
-      const p = on.before?.preview;
-      if (!p || p.trail !== kase.preview.trail || p.target !== kase.preview.target || !p.targetVisible || !p.nativeHidden) {
-        report.failures.push(`${kase.name}: preview ${JSON.stringify(p)}`);
-      }
-    }
-    if (expected) {
-      if (on.string !== expected || on.extraStrings.length || on.newPages.length) report.failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
-    } else if (!same(on, gone)) {
-      report.failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
-    }
+    const at = (arm) => report.arms[arm]?.[kase.name];
+    report.failures.push(...byteVerdict(kase, { on: at("on"), off: at("off"), gone: at("gone"), drilloff: at("drilloff") }));
   }
   await setArm("on");
   report.alias = {};
@@ -676,42 +748,22 @@ try {
     const before = report.failures.length;
     const r = await runAliasCase(kase);
     report.alias[kase.name] = r;
-    if (r.error) report.failures.push(`${kase.name}: ${r.error}`);
-    else {
-      if (r.newPages?.length && !kase.mayCreatePage) report.failures.push(`${kase.name}: created ${r.newPages}`);
-      if (kase.on && (r.string !== kase.on || r.newPages.length)) report.failures.push(`${kase.name}: ${JSON.stringify(r.string)} != ${JSON.stringify(kase.on)} rows ${JSON.stringify(r.before?.rows)}`);
-      const failure = kase.check?.(r);
-      if (failure) report.failures.push(`${kase.name}: ${failure}`);
-    }
+    report.failures.push(...aliasVerdict(kase, r));
     note(kase.name, r, before);
   }
   // Tab drill: Burrow on against Roam alone.
   report.tab = {};
-  const refChild = config.refHasChildren ? await c.evaluate((uid) => {
-    const kids = window.roamAlphaAPI.pull("[{:block/children [:block/uid :block/order]}]", [":block/uid", uid])?.[":block/children"] || [];
-    return kids.sort((a, b) => a[":block/order"] - b[":block/order"])[0]?.[":block/uid"] ?? null;
-  }, config.ref.uid) : null;
+  const refChild = await getRefChild();
   for (const arm of ["on", "gone"]) {
     for (const kase of TAB_CASES) {
       await setArm(arm);
       (report.tab[kase.name] ||= {})[arm] = await runCase(arm, kase);
     }
   }
-  const sameResult = (a, b) => a.string === b.string && JSON.stringify(a.extraStrings) === JSON.stringify(b.extraStrings) && JSON.stringify(a.newPages) === JSON.stringify(b.newPages);
   for (const kase of TAB_CASES) {
     const before = report.failures.length;
     const { on, gone } = report.tab[kase.name];
-    if (on.error || gone.error) report.failures.push(`${kase.name}: ${on.error || gone.error}`);
-    else {
-      const expected = typeof kase.on === "function" ? kase.on(fx.drill, { refChild }) : kase.on;
-      if (expected) {
-        if (on.string !== expected || on.extraStrings.length || on.newPages.length) report.failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
-      } else if (!sameResult(on, gone)) {
-        report.failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
-      }
-      const failure = kase.expect?.(on.snaps);
-      if (failure) report.failures.push(`${kase.name}: ${failure}`);
-    }
+    report.failures.push(...tabVerdict(kase, on, gone, refChild));
     note(kase.name, report.tab[kase.name].on, before);
   }
   await setArm("on");
@@ -753,6 +805,11 @@ try {
 if (report.installed.parked && !report.restored?.restored) report.failures.push(`installed Burrow ${report.installed.version} not restored`);
 if (flags.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
+} else if (only) {
+  console.log(`live gate ${configName} --only ${JSON.stringify(only)}: ${report.failures.length ? "FAIL" : "PASS"}`);
+  console.log(`  installed Burrow: ${report.installed.parked ? `parked ${report.installed.version} for the run, restored: ${report.restored?.restored ? "yes" : "no"}` : "none in this window"}`);
+  for (const r of report.only.runs) console.log(armLine(r.arm, r));
+  for (const f of report.failures) console.log(`  FAIL ${f}`);
 } else if (!only) {
   const caseCount = Object.values(report.arms).reduce((n, a) => n + Object.keys(a).length, 0);
   console.log(`live gate ${configName}: ${report.failures.length ? "FAIL" : "PASS"}`);
@@ -770,7 +827,5 @@ if (flags.includes("--json")) {
   for (const line of report.lines || []) console.log(`  ${line}`);
   console.log(`  overlap: ${report.overlap?.layouts} layouts, ${report.overlap?.pairs.length} overlapping pairs`);
   for (const f of report.failures) console.log(`  FAIL ${f}`);
-} else {
-  console.log(JSON.stringify(report.arms, null, 1));
 }
 process.exitCode = report.failures.length ? 1 : 0;
