@@ -484,6 +484,13 @@ async function runKeys(keys, snaps = []) {
       await c.evaluate(() => { const ta = document.activeElement; ta.setSelectionRange(ta.selectionStart - 1, ta.selectionStart - 1); });
     } else if (k === "unload") {
       await c.evaluate(async () => { const d = window.__burrowDev; if (d?.module) await d.module.default.onunload(); });
+    } else if (k === "rerender") {
+      // A style change on Roam's popover makes Burrow redraw, as Roam's own updates do.
+      await c.evaluate(() => {
+        const pop = document.querySelector(".rm-autocomplete__results");
+        pop?.style.setProperty("--burrow-gate", "1");
+        pop?.style.removeProperty("--burrow-gate");
+      });
     } else await c.key(k);
     if (k !== "snap" && !k.startsWith("wait:")) await sleep(120);
   }
@@ -544,7 +551,7 @@ const ALIAS_CASES = [
   },
   {
     name: "alias chips: wheel scrolls the line, click a hidden chip", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`,
-    keys: ["snap", `wheel-until:chips:${CHIP_ALIASES[7]}`, "wait:200", "snap", `click:chip:${CHIP_ALIASES[7]}`],
+    keys: ["snap", `wheel-until:chips:${CHIP_ALIASES[7]}`, "rerender", "wait:300", "wait:200", "snap", `click:chip:${CHIP_ALIASES[7]}`],
     on: `${SEED}[${CHIP_ALIASES[7]}]([[${FIXTURE_PAGE} Chips]])`,
     check: ({ snaps: [a, b] }) => {
       const hotel = (snap) => snap?.chips.find((chip) => chip.text === CHIP_ALIASES[7]);
@@ -744,8 +751,10 @@ const TAB_CASES = [
     expect: ([s0, s1]) => {
       if (!s0?.scope) return `no scope panel before the click ${JSON.stringify(s0?.scope)}`;
       const left = s1?.visibleBurrow?.filter((n) => /burrow-(strip|hints|preview|scope|chips|row)/.test(n)) ?? [];
-      if (s1?.scope !== null || s1.rows.length || s1.hints !== null || s1.preview !== null || s1.popup || left.length) {
-        return `after the click scope ${JSON.stringify(s1?.scope)} rows ${s1?.rows.length} hints ${JSON.stringify(s1?.hints)} popup ${s1?.popup} visible ${JSON.stringify(s1?.visibleBurrow)}`;
+      // Roam decides whether the click ends editing (svy's top bar does, notes' does not and keeps its own popup
+      // open); Burrow's part is that its drill closes, leaves nothing drawn and never leaves Roam's popover hidden.
+      if (s1?.scope !== null || s1.rows.length || s1.hints !== null || s1.preview !== null || (s1.popup && s1.popoverHidden) || left.length) {
+        return `after the click scope ${JSON.stringify(s1?.scope)} rows ${s1?.rows.length} hints ${JSON.stringify(s1?.hints)} popup ${s1?.popup} hidden ${s1?.popoverHidden} visible ${JSON.stringify(s1?.visibleBurrow)}`;
       }
       return s1.visibleBurrow.length ? `Burrow nodes still visible ${JSON.stringify(s1.visibleBurrow)}` : null;
     },
@@ -1028,6 +1037,9 @@ async function runWriteCase(kase) {
       return { before, snaps, ...after, edited, read };
     } finally {
       await kase.restore?.();
+      // Burrow refreshes its alias index after its own writes or once a
+      // minute; this restore is the gate's, so rebuild the index now.
+      if (kase.restore) await c.evaluate(() => window.__BURROW?.indexes?.build?.());
     }
   });
 }
