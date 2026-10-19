@@ -21,6 +21,9 @@ const title = args[0];
 const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
 const runs = Number(flag("--runs", 3));
 const drill = args.includes("--drill");
+// --preview: Roam's preview open (Ctrl-O) on both arms, where Burrow's rows
+// draw their own preview; Roam's choice is put back afterwards.
+const withPreview = args.includes("--preview");
 const query = flag("--query", drill ? "never > grand" : "ant man");
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
@@ -107,6 +110,29 @@ async function endRun() {
   });
 }
 
+const isExpanded = () => c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results--expanded")));
+const ctrlO = async () => {
+  const base = { key: "o", code: "KeyO", windowsVirtualKeyCode: 79, nativeVirtualKeyCode: 79, modifiers: 2 };
+  await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  await sleep(400);
+};
+let previewInitial = null;
+async function restorePreview() {
+  if (!withPreview || previewInitial == null) return;
+  const primed = await primeFixture(c, "");
+  if (!primed.ok) return;
+  await c.type(opener, 60);
+  await sleep(500);
+  if ((await isExpanded()) !== previewInitial) await ctrlO();
+  await c.key("Escape");
+  await sleep(300);
+  await c.evaluate(async () => {
+    await window.roamAlphaAPI.data.block.update({ block: { uid: window.__burrowFixture.blockUid, string: "" } });
+  });
+  await deleteNewPages(c);
+}
+
 const pct = (list, p) => {
   if (!list?.length) return null;
   const s = [...list].sort((a, b) => a - b);
@@ -122,6 +148,7 @@ let cleaning = null;
 const cleanup = () => (cleaning ||= (async () => {
   try {
     await setArm("gone");
+    await restorePreview();
     report.cleanup = await cleanupFixture(c);
   } catch (error) {
     console.error("cleanup:", error);
@@ -147,6 +174,10 @@ try {
       process.stderr.write(`run ${run} arm ${arm}\n`);
       await c.type(opener, 60);
       await sleep(600);
+      if (withPreview) {
+        previewInitial ??= await isExpanded();
+        if (!(await isExpanded())) await ctrlO();
+      }
       for (let i = 0; i < cycles; i++) {
         await c.type(query, 60);
         await sleep(120);
@@ -225,7 +256,7 @@ report.verdict = verdict;
 if (args.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else {
-  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
+  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (deferred) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms; not part of the budget`);
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);

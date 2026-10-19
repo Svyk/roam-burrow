@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Every live gate on both graphs, one command, about 22 minutes:
+// Every live gate on both graphs, one command, about 30 minutes:
 // byte-for-byte + acceptance + alias rows + drill + pick memory (live-gate)
-// and the cost budget for (( typing and for drill typing with the preview
+// and the cost budget for (( typing (also with Roam's preview open in svy) and for drill typing with the preview
 // open (perf-gate, 3 interleaved runs per arm, median paired delta). Needs Roam Desktop with CDP on
 // :9223 and both windows open (svy unlocked). Never reloads a window.
 //   node tools/gate-all.mjs [--theme light|dark]        (or: npm run gate:live)
@@ -17,6 +17,7 @@ const steps = [
   ["live-gate.mjs", "Readwisenotes", "notes"],
   ["perf-gate.mjs", "Svy", "--runs", "3"],
   ["perf-gate.mjs", "Readwisenotes", "--runs", "3"],
+  ["perf-gate.mjs", "Svy", "--runs", "3", "--preview"],
   ["perf-gate.mjs", "Svy", "--runs", "3", "--drill"],
   ["perf-gate.mjs", "Readwisenotes", "--runs", "3", "--drill"],
 ];
