@@ -397,6 +397,42 @@ const centerOf = (selector, text, exact = false) => c.evaluate(({ selector, text
 // A missing target is recorded, not thrown: the Roam-alone arm has no panel to click.
 let misses = [];
 let wheelSteps = 0;
+// Roam's drag mode adds .dnd-drop-area separators on dragEnter that cover the
+// editing textarea and cancel the drop, and it ends only when one of them gets
+// a drop. So they are made click-through for the drop, then one is dropped on.
+async function dropText(text) {
+  const drag = (type, { x, y }, items = []) => c.call("Input.dispatchDragEvent", { type, x, y, data: { items, dragOperationsMask: 1 } });
+  const centre = () => c.evaluate(() => { const r = document.activeElement.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  let at = null, found = false;
+  await c.evaluate(() => { const st = document.createElement("style"); st.id = "burrow-gate-nodnd"; st.textContent = ".dnd-drop-area { pointer-events: none !important; }"; document.head.append(st); });
+  try {
+    const items = [{ mimeType: "text/plain", data: text }];
+    at = await centre();
+    await drag("dragEnter", at, items);
+    await sleep(150);
+    const point = await c.evaluate(() => {
+      const ta = document.activeElement, r = ta.getBoundingClientRect(), cy = r.top + r.height / 2;
+      const xs = [r.left + r.width / 2, r.left + 12, r.left + r.width / 4, r.left + 3 * r.width / 4];
+      for (const y of [cy, r.top + 10]) for (const x of xs) if (document.elementFromPoint(x, y) === ta) return { x, y };
+      return null;
+    });
+    if (point) {
+      at = point;
+      found = true;
+      await drag("dragOver", point, items);
+      await drag("drop", point, items);
+    }
+  } finally {
+    await c.evaluate(() => document.getElementById("burrow-gate-nodnd")?.remove());
+    await sleep(100);
+    if (at) for (const type of ["dragEnter", "dragOver", "drop"]) await drag(type, at);
+    await sleep(150);
+  }
+  if (!found) throw new Error("drop: no point on the textarea after dragEnter");
+  const on = await c.evaluate(() => [...document.querySelectorAll(".dnd-drop-area")].filter((e) => e.getBoundingClientRect().height > 0).length);
+  if (on) throw new Error("drop: Roam's drag mode stayed on");
+}
+
 async function clickAt(point, what) {
   if (!point) { misses.push(`missing click target: ${what}`); return; }
   await c.click(point.x, point.y);
@@ -480,7 +516,10 @@ async function runKeys(keys, snaps = []) {
       await c.call("Input.imeSetComposition", { text: "ni", selectionStart: 2, selectionEnd: 2 });
       await sleep(150);
       await c.call("Input.insertText", { text: "你" });
-    } else if (k === "caret-move") {
+    } else if (k.startsWith("insert:")) await c.call("Input.insertText", { text: k.slice(7) });
+    else if (k.startsWith("drop:")) await dropText(k.slice(5));
+    else if (k.startsWith("exec:")) await c.evaluate((t) => document.execCommand("insertText", false, t), k.slice(5));
+    else if (k === "caret-move") {
       await c.evaluate(() => { const ta = document.activeElement; ta.setSelectionRange(ta.selectionStart - 1, ta.selectionStart - 1); });
     } else if (k === "unload") {
       await c.evaluate(async () => { const d = window.__burrowDev; if (d?.module) await d.module.default.onunload(); });
@@ -666,6 +705,59 @@ const WRITE_CASES = [
       if (b?.prompt !== null || !b.popup) return `after Esc prompt ${JSON.stringify(b?.prompt)} popup ${b?.popup}`;
       if (r.read.children.length) return `Empty page children ${JSON.stringify(r.read.children)}`;
       return within(r.edited, fx.blockUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: text inserted without a key (emoji keyboard) goes into the field", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:zq", "insert:🙂", "wait:200", "snap", "Enter"], on: `${SEED}[zq🙂]([[${FIXTURE_PAGE} Empty]])`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid), kids: await childUids(fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a] = r.snaps;
+      if (a?.prompt?.input !== "zq🙂") return `field ${JSON.stringify(a?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (JSON.stringify(r.read.children) !== JSON.stringify(["Aliases:: zq🙂"])) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid, ...r.read.kids) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: inserted text replaces the seeded text, Esc writes nothing", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "insert:🙂", "wait:200", "snap", "Escape", "snap", "Escape"], on: `${SEED}[[${FIXTURE_PAGE} Empty]]`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a, b] = r.snaps;
+      if (a?.prompt?.input !== "🙂") return `field ${JSON.stringify(a?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (b?.prompt !== null || !b.popup) return `after Esc prompt ${JSON.stringify(b?.prompt)} popup ${b?.popup}`;
+      if (r.read.children.length) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: text put in by execCommand goes into the field", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:zq", "exec:x9", "wait:200", "snap", "Enter"], on: `${SEED}[zqx9]([[${FIXTURE_PAGE} Empty]])`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid), kids: await childUids(fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a] = r.snaps;
+      if (a?.prompt?.input !== "zqx9") return `field ${JSON.stringify(a?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (JSON.stringify(r.read.children) !== JSON.stringify(["Aliases:: zqx9"])) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid, ...r.read.kids) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    name: "alias create: dropped text goes into the field", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:zq", "drop:dz", "wait:200", "snap", "Enter"], on: `${SEED}[zqdz]([[${FIXTURE_PAGE} Empty]])`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid), kids: await childUids(fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a] = r.snaps;
+      if (a?.prompt?.input !== "zqdz") return `field ${JSON.stringify(a?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (JSON.stringify(r.read.children) !== JSON.stringify(["Aliases:: zqdz"])) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid, ...r.read.kids) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
     },
   },
   {

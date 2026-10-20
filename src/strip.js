@@ -812,7 +812,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function onInput(event) {
     const ta = event.target;
     if (!isBlockInput(ta)) return;
-    if (st.prompt && composer.input(event)) return;
+    if (st.prompt && (composer.input(event) || composer.stray(event))) return;
     if (st.ignoreNextInput) { st.ignoreNextInput = false; return; }
     if (st.prompt) st.prompt = null;
     if (st.phase === "SCOPE") exitScope();
@@ -962,7 +962,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   }
 
   function openPrompt(page) {
-    st.prompt = { kind: "add", page, text: st.token.query.trim(), fresh: true, saving: false, error: null };
+    const ta = st.ta;
+    st.prompt = { kind: "add", page, text: st.token.query.trim(), fresh: true, saving: false, error: null,
+      block: { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd } };
     st.auto = false;
     st.chip = -1;
     trace({ ev: "prompt", uid: page.uid });
@@ -1404,7 +1406,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.event(win, "compositionstart", guarded("compositionstart", onCompositionStart), true);
   lifecycle.event(win, "compositionupdate", guarded("compositionupdate", (event) => { if (st.prompt) composer.update(event); }), true);
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
-  lifecycle.event(win, "beforeinput", guarded("beforeinput", (event) => { if (st.prompt) composer.input(event); }), true);
+  lifecycle.event(win, "beforeinput", guarded("beforeinput", (event) => { if (st.prompt && !composer.input(event)) composer.insert(event); }), true);
   lifecycle.event(win, "keyup", guarded("keyup", (event) => { if (st.prompt) composer.key(event); }), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
   lifecycle.event(win, "paste", guarded("paste", onPaste), true);

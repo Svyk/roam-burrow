@@ -34,7 +34,7 @@ Burrow takes keys only while one of its rows is selected, on Tab over a row it c
 
 In the alias chips: ←/→ (or ↑/↓) move, Enter inserts with that alias, Tab drills into the page, Alt+Backspace asks to delete that alias (when alias deletion is on; Enter deletes, Esc keeps), Esc or ⌥↑ goes back to the rows.
 
-In the alias field (⌥A): type the name (the typed query is there, selected, so the first key replaces it), Backspace deletes, paste and IME or dead-key input (⌥E then E for é) work, Enter saves the alias and inserts the link, Esc goes back to the picker. The block keeps exactly the `[[…` you typed until Enter.
+In the alias field (⌥A): type the name (the typed query is there, selected, so the first key replaces it), Backspace deletes, paste, IME or dead-key input (⌥E then E for é), the emoji picker and a drop work, Enter saves the alias and inserts the link, Esc goes back to the picker. The block keeps exactly the `[[…` you typed until Enter.
 
 While drilled in (Tab), Burrow holds the keyboard and the block keeps exactly the `[[…` you typed:
 

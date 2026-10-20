@@ -1014,7 +1014,7 @@ function validAlias(text) {
   const alias = String(text ?? "").trim();
   if (!alias) return { ok: false, reason: "type an alias" };
   if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
-  if (alias.startsWith("#")) return { ok: false, reason: "no # at the start: Roam reads it as a tag" };
+  if (/#\S/.test(alias)) return { ok: false, reason: "no # right before text: Roam reads it as a tag" };
   if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
   return { ok: true, alias };
 }
@@ -1100,6 +1100,14 @@ async function deleteAliasFromPage(api, { pageUid, keyword, alias }) {
 
 // src/compose.js
 var firstLine = (data) => String(data ?? "").split(/\r?\n/)[0];
+function inserted(was, now) {
+  const a = [...was], b = [...now];
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  let j = 0;
+  while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
+  return b.slice(i, b.length - j).join("");
+}
 function createPromptComposer({ prompt, textarea, setValue, render }) {
   const open = (event) => {
     const p = prompt();
@@ -1154,7 +1162,43 @@ function createPromptComposer({ prompt, textarea, setValue, render }) {
     event.stopImmediatePropagation();
     return true;
   }
-  return { start, update, end, restore, key, input };
+  function insert(event) {
+    const p = open(event);
+    if (!p || p.compose || event.isComposing) return false;
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    if (!event.defaultPrevented) return true;
+    add(p, event.inputType?.startsWith("insert") ? event.data ?? event.dataTransfer?.getData("text/plain") : "");
+    put(p, event.target);
+    return true;
+  }
+  function stray(event) {
+    const p = open(event);
+    if (!p || p.compose || event.isComposing) return false;
+    event.stopImmediatePropagation();
+    const ta = event.target;
+    add(p, event.inputType?.startsWith("insert") ? inserted(p.block.value, ta.value) : "");
+    put(p, ta);
+    return true;
+  }
+  function add(p, data) {
+    const text = firstLine(data);
+    if (!text || p.saving) return;
+    p.text = p.fresh ? text : p.text + text;
+    p.fresh = false;
+    p.error = null;
+    render();
+  }
+  function put(p, ta) {
+    const b = p.block;
+    if (ta.value !== b.value) setValue(ta, b.value);
+    if (ta.selectionStart === b.start && ta.selectionEnd === b.end) return;
+    try {
+      ta.setSelectionRange(b.start, b.end);
+    } catch {
+    }
+  }
+  return { start, update, end, restore, key, input, insert, stray };
 }
 
 // src/ordinal.js
@@ -2539,7 +2583,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function onInput(event) {
     const ta = event.target;
     if (!isBlockInput(ta)) return;
-    if (st.prompt && composer.input(event)) return;
+    if (st.prompt && (composer.input(event) || composer.stray(event))) return;
     if (st.ignoreNextInput) {
       st.ignoreNextInput = false;
       return;
@@ -2697,7 +2741,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     return native ? { uid: native.page.uid, title: native.page.title } : null;
   }
   function openPrompt(page) {
-    st.prompt = { kind: "add", page, text: st.token.query.trim(), fresh: true, saving: false, error: null };
+    const ta = st.ta;
+    st.prompt = {
+      kind: "add",
+      page,
+      text: st.token.query.trim(),
+      fresh: true,
+      saving: false,
+      error: null,
+      block: { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd }
+    };
     st.auto = false;
     st.chip = -1;
     trace({ ev: "prompt", uid: page.uid });
@@ -3187,7 +3240,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }), true);
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
   lifecycle.event(win, "beforeinput", guarded("beforeinput", (event) => {
-    if (st.prompt) composer.input(event);
+    if (st.prompt && !composer.input(event)) composer.insert(event);
   }), true);
   lifecycle.event(win, "keyup", guarded("keyup", (event) => {
     if (st.prompt) composer.key(event);
