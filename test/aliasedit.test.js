@@ -141,9 +141,10 @@ test("alias values live on the block's first line only", () => {
   assert.equal(removeAlias("Aliases:: a, b\nnote", "Aliases", "note"), null);
 });
 
-test("validAlias rejects a leading #", () => {
-  assert.equal(validAlias("#word").ok, false);
-  assert.equal(validAlias("  #word").reason, "no # at the start: Roam reads it as a tag");
-  assert.equal(validAlias("c#").ok, true);
-  assert.equal(validAlias("a #b").ok, true);
+test("validAlias rejects # right before text", () => {
+  for (const a of ["#word", "  #word", "issue #42", "c#x", "a #b", "C#/F#"]) {
+    assert.equal(validAlias(a).ok, false, a);
+    assert.equal(validAlias(a).reason, "no # right before text: Roam reads it as a tag", a);
+  }
+  for (const a of ["C#", "C# lang", "F#", "a (b) c"]) assert.equal(validAlias(a).ok, true, a);
 });

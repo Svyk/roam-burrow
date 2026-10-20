@@ -8,7 +8,7 @@ export function validAlias(text) {
   const alias = String(text ?? "").trim();
   if (!alias) return { ok: false, reason: "type an alias" };
   if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
-  if (alias.startsWith("#")) return { ok: false, reason: "no # at the start: Roam reads it as a tag" };
+  if (/#\S/.test(alias)) return { ok: false, reason: "no # right before text: Roam reads it as a tag" };
   if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
   return { ok: true, alias };
 }
