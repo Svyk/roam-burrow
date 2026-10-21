@@ -32,6 +32,8 @@ const CONFIGS = {
     drill: { query: "[[MCU Watch Order > watch order > ant man", uid: "3XSu0IJ8f" },
     preselect: { query: "[[lorina", insert: "[lorinator]([[Lori Boyd]])", page: "Lori Boyd" },
     chips: { query: "[[lorina", keys: ["alt+ArrowDown", "ArrowLeft", "Enter"], insert: "[lori]([[Lori Boyd]])" },
+    // A pre-selected alias row whose chips all fit, over a Roam list that scrolls.
+    wheelList: { query: "[[lori" },
     refHasChildren: true,
   },
   notes: {
@@ -41,13 +43,15 @@ const CONFIGS = {
     drill: { query: "[[Systems/Executor Lanes and LaunchAgents#grok lane > never", uid: "-EeRGLF5U" },
     preselect: { query: "[[mike kh", insert: "[Mike Khieu]([[Entities/Michael Khieu]])", page: "Entities/Michael Khieu" },
     chips: { query: "[[mike kh", keys: ["alt+ArrowDown", "ArrowLeft", "Enter"], insert: "[king_khieu]([[Entities/Michael Khieu]])" },
+    wheelList: { query: "[[mike" },
   },
 };
 const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
+  "helpTips", "helpSheet", "helpNudge"];
 const REF_COMMAND = "Burrow: block reference search";
 
 const [title, configName, ...flags] = process.argv.slice(2);
@@ -226,7 +230,7 @@ async function state() {
             active: scopeRowsList.find((r) => r.classList.contains("burrow-active"))?.textContent ?? null,
             filter: panel.querySelector(".burrow-scope-filter")?.textContent ?? "",
           } : null,
-          scopeHints: panel?.querySelector(".burrow-scope-hints")?.textContent ?? null,
+          scopeHints: panel?.querySelector(".burrow-scope-hints .burrow-hints-list")?.textContent ?? null,
           chips: [...document.querySelectorAll(".burrow-chips .burrow-chip")].map((n) => {
             const box = n.parentElement.getBoundingClientRect();
             const r = n.getBoundingClientRect();
@@ -237,7 +241,33 @@ async function state() {
             };
           }),
           chipsScroll: line?.scrollLeft ?? null,
-          hints: document.querySelector(".burrow-hints:not([hidden])")?.textContent ?? null,
+          hints: document.querySelector(".burrow-hints:not([hidden]) .burrow-hints-list")?.textContent ?? null,
+          helpButton: (() => { const b = document.querySelector(".burrow-hints:not([hidden]) .burrow-help-button"); return b && !b.hidden ? b.textContent : null; })(),
+          sheet: (() => {
+            const sheet = document.querySelector(".burrow-help:not([hidden])");
+            if (!sheet) return null;
+            const r = sheet.getBoundingClientRect();
+            return {
+              groups: [...sheet.querySelectorAll(".burrow-help-group-title")].map((n) => n.textContent),
+              keys: [...sheet.querySelectorAll(".burrow-help-key")].map((n) => n.textContent),
+              notes: [...sheet.querySelectorAll(".burrow-help-note")].map((n) => n.textContent),
+              box: { l: r.left, t: r.top, r: r.right, b: r.bottom }, inWindow: r.left >= 0 && r.top >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1,
+            };
+          })(),
+          popoverCovered: Boolean(document.querySelector(".rm-autocomplete__results.burrow-help-open")) && getComputedStyle(document.querySelector(".rm-autocomplete__results")).visibility === "hidden",
+          tip: (() => {
+            const tip = document.querySelector(".burrow-tip:not([hidden])");
+            if (!tip) return null;
+            const r = tip.getBoundingClientRect();
+            return { text: tip.textContent, box: { l: r.left, t: r.top, r: r.right, b: r.bottom }, bg: getComputedStyle(tip).backgroundColor, fg: getComputedStyle(tip).color };
+          })(),
+          titles: [...document.querySelectorAll(".burrow-strip .burrow-row[title], .burrow-chips .burrow-chip[title]")].length,
+          listScroll: document.querySelector(".rm-autocomplete__results-scroll")?.scrollTop ?? null,
+          popBg: (() => { const p = document.querySelector(".rm-autocomplete__results"); return p ? getComputedStyle(p).backgroundColor : null; })(),
+          lastWheel: (window.__BURROW?.debug.trace || []).filter((e) => e.ev === "wheel").at(-1)?.to ?? null,
+          aliasEntries: window.__BURROW?.indexes?.aliases?.entries.map((e) => e.alias) ?? null,
+          nudgeSeen: window.__burrowDev?.values?.helpNudgeSeen ?? null,
+          listScrollable: (() => { const l = document.querySelector(".rm-autocomplete__results-scroll"); return l ? l.scrollHeight > l.clientHeight + 4 : null; })(),
           popoverHidden: Boolean(document.querySelector(".rm-autocomplete__results.burrow-scope-open")),
           foldedAliases: column ? getComputedStyle(column).display === "none" || items.every((i) => !shown(i)) : true,
           roamAliasesVisibleRows: items.filter(shown).length,
@@ -262,6 +292,7 @@ async function setArm(arm) {
     }
     for (const f of features) dev.values[f] = arm === "on" || arm === "drilloff";
     if (arm === "drilloff") { dev.values.drill = false; dev.values.drillPreview = false; }
+    dev.values.helpNudgeSeen = true;
     if (!dev.module) {
       const style = document.createElement("style");
       style.id = "burrow-dev-css";
@@ -379,6 +410,13 @@ const altShift9 = async () => {
   await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 };
 
+// ⌥/ as a mac sends it: the key is the typed character "÷" (Roam alone types it).
+const altSlash = async () => {
+  const base = { key: "÷", code: "Slash", windowsVirtualKeyCode: 191, nativeVirtualKeyCode: 191, modifiers: 1 };
+  await c.call("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "÷", unmodifiedText: "÷" });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+};
+
 // Roam's command palette; a raw key event, so no "p" is typed if Roam lets it through.
 const metaP = async () => {
   const base = { key: "p", code: "KeyP", windowsVirtualKeyCode: 80, nativeVirtualKeyCode: 80, modifiers: 4 };
@@ -461,6 +499,13 @@ async function runKeys(keys, snaps = []) {
     const modified = k.match(/^(alt|shift)\+(.+)$/);
     if (k === "snap") snaps.push(await state());
     else if (k === "alt+shift+9") await altShift9();
+    else if (k === "alt+slash") await altSlash();
+    else if (k.startsWith("hover:")) {
+      const point = await centerOf(k.slice(6), null);
+      if (!point) misses.push(`missing hover target: ${k}`);
+      else await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+    } else if (k === "mouse-away") await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
+    else if (k.startsWith("outside-alias:")) await setAliasBlock(c, fx.chipsAliasUid, k.slice(14));
     else if (k === "ctrl+o") await ctrlO();
     else if (k === "meta+p") await metaP();
     else if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
@@ -498,6 +543,8 @@ async function runKeys(keys, snaps = []) {
       }
       wheelSteps = steps;
     } else if (k.startsWith("click:chip:")) await clickAt(await centerOf(".burrow-chips .burrow-chip", k.slice(11), true), k);
+    else if (k === "click:help") await clickAt(await centerOf(".burrow-hints:not([hidden]) .burrow-help-button", null), k);
+    else if (k === "click:nudge-close") await clickAt(await centerOf(".burrow-hints:not([hidden]) .burrow-nudge-close", null), k);
     else if (k.startsWith("click:scope:")) await clickAt(await centerOf(".burrow-scope-list .burrow-row", k.slice(12)), k);
     else if (k.startsWith("click:crumb:")) await clickAt(await centerOf(`.burrow-crumb[data-level="${k.slice(12)}"]`, null), k);
     else if (k === "click-away") await neutralClick(c);
@@ -614,6 +661,103 @@ const ALIAS_CASES = [
     },
   },
   {
+    name: "chips: a wheel the chips cannot take scrolls Roam's list", query: config.wheelList.query, mayCreatePage: true,
+    keys: ["alt+ArrowDown", "snap", "wheel:chips:240", "wait:250", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (!(a?.chips?.length >= 2)) return `no chips ${JSON.stringify(a?.chips)}`;
+      if (!a.listScrollable) return "Roam's list does not scroll for this query";
+      // Roam may have scrolled its own list to its active row already.
+      if (!(b?.listScroll > a.listScroll) || b.lastWheel !== "list") return `after the wheel: list ${a.listScroll} -> ${b?.listScroll}, Burrow sent it to ${b?.lastWheel}`;
+      return b.chipsScroll === 0 ? null : `the chips moved ${b.chipsScroll}`;
+    },
+  },
+  {
+    name: "chips: at the end of the line the wheel goes on to Roam's list", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, mayCreatePage: true,
+    keys: [`wheel-until:chips:${CHIP_LONG}`, "snap", "wheel:chips:120", "wait:250", "snap", "wheel:chips:-120", "wait:250", "snap", "Escape"],
+    check: ({ snaps: [a, b, d] }) => {
+      if (!(a?.chipsScroll > 0) || a.lastWheel !== "chips") return `the line did not scroll to its end: ${a?.chipsScroll} ${a?.lastWheel}`;
+      if (b?.chipsScroll !== a.chipsScroll || b.lastWheel !== "list") return `at the end: scroll ${b?.chipsScroll} (was ${a.chipsScroll}), sent to ${b?.lastWheel}`;
+      return d?.chipsScroll < b.chipsScroll && d.lastWheel === "chips" ? null : `back: scroll ${d?.chipsScroll}, sent to ${d?.lastWheel}`;
+    },
+  },
+  {
+    name: "hint line: no ⇥ drill on a page without blocks", query: `[[${FIXTURE_PAGE} Empty`, settings: { aliasCreate: false }, noRows: true,
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.hints === "" && a.helpButton === "?" ? null : `hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`),
+  },
+  {
+    name: "hint line: ⇥ drill on a page with blocks", query: `[[${FIXTURE_PAGE}`, noRows: true,
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.hints === "⇥ drill · ⌥A add alias" && a.helpButton === "?" ? null : `hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`),
+  },
+  {
+    name: "key list: ⌥/ opens it in the popover's place, Esc closes it, the text stays", query: config.preselect.query, mayCreatePage: true,
+    keys: ["alt+slash", "snap", "Escape", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (!a?.sheet) return "no key list after ⌥/";
+      if (JSON.stringify(a.sheet.groups) !== JSON.stringify(["Pick", "Aliases", "Drill", "Preview"])) return `groups ${JSON.stringify(a.sheet.groups)}`;
+      if (!["⌥A", "⌥⌫", "⌥↓", "⇥ or >", "⌃O"].every((k) => a.sheet.keys.includes(k))) return `keys ${JSON.stringify(a.sheet.keys)}`;
+      if (!a.popoverCovered) return "Roam's popover still shows under the key list";
+      if (!a.sheet.inWindow) return `key list outside the window ${JSON.stringify(a.sheet.box)}`;
+      if (hits(a.sheet.box, a.geometry.ta)) return "key list covers the text";
+      if (a.value !== `${SEED}${config.preselect.query}]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (b?.sheet || !b?.popup || b.popoverCovered) return `after Esc: sheet ${JSON.stringify(b?.sheet)} popup ${b?.popup}`;
+      return b.rows[0]?.active ? null : "the alias row lost its selection";
+    },
+  },
+  {
+    name: "key list: keys of switches that are off are left out, the write keys named", query: config.preselect.query, mayCreatePage: true,
+    settings: { aliasCreate: false, aliasDelete: false, tabDrill: false, drill: false },
+    keys: ["alt+slash", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a] }) => {
+      if (!a?.sheet) return "no key list";
+      if (a.sheet.groups.includes("Drill")) return `a Drill group with drill off ${JSON.stringify(a.sheet.groups)}`;
+      if (a.sheet.keys.includes("⌥A") || a.sheet.keys.includes("⌥⌫")) return `write keys listed ${JSON.stringify(a.sheet.keys)}`;
+      return /⌥A add \(Create aliases\), ⌥⌫ delete \(Delete aliases\)\. Settings → Burrow/.test(a.sheet.notes.join(" ")) ? null : `notes ${JSON.stringify(a.sheet.notes)}`;
+    },
+  },
+  {
+    name: "key list: a typed key closes it and types", query: config.preselect.query, mayCreatePage: true,
+    keys: ["alt+slash", "type:x", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a && !a.sheet && !a.popoverCovered && a.value === `${SEED}${config.preselect.query}x]]` ? null : `after typing: sheet ${JSON.stringify(a?.sheet)} value ${JSON.stringify(a?.value)}`),
+  },
+  {
+    name: "key list: the ? on the hint line opens it", query: config.preselect.query, mayCreatePage: true,
+    keys: ["click:help", "snap", "Escape", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => (a?.sheet && a.value === `${SEED}${config.preselect.query}]]` && b && !b.sheet && b.popup ? null : `click: sheet ${JSON.stringify(a?.sheet?.groups)} value ${JSON.stringify(a?.value)}; after Esc ${JSON.stringify(b?.sheet)}`),
+  },
+  {
+    name: "first-run line: once, ✕ hides it for good", query: config.preselect.query, settings: { helpNudgeSeen: false }, mayCreatePage: true,
+    keys: ["snap", "click:nudge-close", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (!a?.helpButton?.includes("all keys") || a.nudgeSeen !== false) return `before ✕: ${JSON.stringify(a?.helpButton)} seen ${a?.nudgeSeen}`;
+      if (a.hints !== HINTS_ROW) return `hints beside the line ${JSON.stringify(a.hints)}`;
+      return b?.helpButton === "?" && b.nudgeSeen === true && b.popup ? null : `after ✕: ${JSON.stringify(b?.helpButton)} seen ${b?.nudgeSeen}`;
+    },
+  },
+  {
+    name: "first-run line: closing the popup counts as seen", query: config.preselect.query, settings: { helpNudgeSeen: false }, mayCreatePage: true,
+    keys: ["snap", "Escape", "wait:300", "snap"],
+    check: ({ snaps: [a, b] }) => (a?.helpButton?.includes("all keys") && b?.nudgeSeen === true ? null : `line ${JSON.stringify(a?.helpButton)}, seen after closing ${b?.nudgeSeen}`),
+  },
+  {
+    name: "hover tips: rows, chips, hints and preview say their keys, in Roam's colors", query: config.preselect.query, restorePreview: true, mayCreatePage: true,
+    keys: ["hover:.burrow-strip .burrow-row", "wait:700", "snap", "mouse-away", "wait:150", "snap",
+      "alt+ArrowDown", "hover:.burrow-chips .burrow-chip.burrow-active", "wait:700", "snap", "mouse-away", "Escape",
+      "hover:.burrow-hints .burrow-hint", "wait:700", "snap", "mouse-away",
+      "preview-open", "wait:500", "hover:.burrow-preview .burrow-trail", "wait:700", "snap", "mouse-away", "Escape"],
+    check: ({ snaps: [row, away, chip, hint, pane] }) => {
+      const page = config.preselect.page;
+      if (!row?.tip?.text.includes(`↳ ${page}`) || !row.tip.text.includes(`insert ${config.preselect.insert}`) || !row.tip.text.includes("⌥↓")) return `row tip ${JSON.stringify(row?.tip?.text)}`;
+      if (row.tip.bg === row.popBg) return `tip drawn in the popover's own background ${row.tip.bg}`;
+      if (hits(row.tip.box, row.geometry.ta)) return "row tip covers the text";
+      if (away?.tip || !(away?.titles > 0)) return `after leaving: tip ${JSON.stringify(away?.tip)} titles ${away?.titles}`;
+      if (!chip?.tip?.text.includes("insert [") || !chip.tip.text.includes("⌥⌫")) return `chip tip ${JSON.stringify(chip?.tip?.text)}`;
+      if (!hint?.tip?.text.includes("↵")) return `hint tip ${JSON.stringify(hint?.tip?.text)}`;
+      return pane?.tip?.text.includes(page) && pane.tip.text.includes("⌃O") ? null : `preview tip ${JSON.stringify(pane?.tip?.text)}`;
+    },
+  },
+  {
     name: "alias row preview: Ctrl-O shows the alias's page", query: config.preselect.query, restorePreview: true, mayCreatePage: true,
     keys: ["preview-open", "wait:400", "snap", "down-past-strip", "wait:400", "snap", "Escape"],
     check: ({ snaps: [a, b] }) => {
@@ -623,8 +767,10 @@ const ALIAS_CASES = [
   },
 ];
 
-const HINTS_ROW = "⌥A alias · ⌥↓ pick alias · ⇥/> drill · ⌃O preview · ↵ insert";
-const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · esc rows";
+// The pre-selected alias row's page has blocks, so Tab drills and the line says so.
+const HINTS_ROW = "↵ pick alias · ⌥↓ more aliases · ⇥ drill · ⌥A add alias";
+// The Chips page holds its alias block, so it can be drilled into too.
+const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ drill · esc rows";
 const HINTS_SCOPE = ["⇥/> drill", "⇧⇥ back", "⌃O preview", "↵ insert", "esc results"];
 
 // A cut chip is not an overlap: boxes must not overlap, a cut chip carries its
@@ -761,6 +907,43 @@ const WRITE_CASES = [
     },
   },
   {
+    name: "alias create: ref syntax in the alias is refused, nothing written", query: `[[${FIXTURE_PAGE} Empty`, settings: WRITE_SETTINGS,
+    keys: ["alt+a", "type:issue #42", "Enter", "snap", ...Array(9).fill("Backspace"), "type:a::b", "Enter", "snap", "Escape", "snap", "Escape"],
+    on: `${SEED}[[${FIXTURE_PAGE} Empty]]`,
+    read: async () => ({ children: await childStrings(c, fx.emptyUid) }),
+    restore: async () => { for (const uid of await childUids(fx.emptyUid)) await deleteBlock(c, uid); },
+    check: (r) => {
+      const [a, b, d] = r.snaps;
+      if (a?.prompt?.error !== "no #: Roam would make a tag" || a.prompt.input !== "issue #42") return `after issue #42 ${JSON.stringify(a?.prompt)}`;
+      if (b?.prompt?.error !== "no double colon: Roam would make an attribute" || b.prompt.input !== "a::b") return `after a::b ${JSON.stringify(b?.prompt)}`;
+      if (a.value !== `${SEED}[[${FIXTURE_PAGE} Empty]]`) return `block while open ${JSON.stringify(a.value)}`;
+      if (d?.prompt !== null || !d.popup) return `after Esc prompt ${JSON.stringify(d?.prompt)} popup ${d?.popup}`;
+      if (r.read.children.length) return `Empty page children ${JSON.stringify(r.read.children)}`;
+      return within(r.edited, fx.blockUid) ? null : `edited blocks ${JSON.stringify(r.edited)}`;
+    },
+  },
+  {
+    // Like a hand edit or roam-aliases: the gate writes the alias block itself.
+    name: "alias index: an alias edited outside Burrow is picked up at once", query: "[[zq outside ki", mayCreatePage: true,
+    before: () => c.evaluate(async ({ uid, string }) => {
+      const t0 = performance.now();
+      await window.roamAlphaAPI.data.block.update({ block: { uid, string } });
+      while (performance.now() - t0 < 3000) {
+        if (window.__BURROW?.indexes?.aliases?.entries.some((e) => e.alias === "zq outside kilo")) return Math.round(performance.now() - t0);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      return null;
+    }, { uid: fx.chipsAliasUid, string: `${CHIPS_ALIAS_STRING}, zq outside kilo` }),
+    keys: ["snap", "Escape", `outside-alias:${CHIPS_ALIAS_STRING}`, "wait:700", "snap"],
+    restore: () => setAliasBlock(c, fx.chipsAliasUid, CHIPS_ALIAS_STRING),
+    check: (r) => {
+      const [a, b] = r.snaps;
+      if (r.beforeResult == null || r.beforeResult > 1000) return `the index took ${r.beforeResult} ms`;
+      if (!a?.rows.some((row) => row.text.includes(`zq outside kilo ↳ ${FIXTURE_PAGE} Chips`))) return `no row for the new alias ${JSON.stringify(a?.rows)}`;
+      return b?.aliasEntries && !b.aliasEntries.includes("zq outside kilo") ? null : "the alias stayed after it was removed outside Burrow";
+    },
+  },
+  {
     name: "alias delete: Alt+Backspace, Enter removes only that alias", query: CHIPS_Q, settings: WRITE_SETTINGS, mayCreatePage: true,
     keys: ["alt+ArrowDown", "ArrowRight", "alt+Backspace", "snap", "Enter", "wait:300", "snap", "Escape", "Escape"], on: `${SEED}[[${CHIP_ALIASES[0].slice(0, 10)}]]`,
     read: async () => ({ alias: await aliasBlockString(c, fx.chipsUid) }),
@@ -804,6 +987,7 @@ const REFSEARCH_CASES = [
 const PASS_CASES = [
   { name: "⌥A with alias writes off is Roam's", query: `[[${FIXTURE_PAGE} Empty`, settings: { aliasCreate: false }, keys: ["alt+a", "Escape"], line: true },
   { name: "Alt+Shift+9 with the hotkey off is Roam's", query: "", settings: { refSearchHotkey: false }, keys: ["alt+shift+9", "Escape"], line: true },
+  { name: "⌥/ with the key list off is Roam's", query: `[[${FIXTURE_PAGE} Empty`, settings: { helpSheet: false }, keys: ["alt+slash", "Escape"], line: true },
 ];
 
 // Tab drill, on and gone arms. `on` is the expected string with Burrow; a
@@ -1143,6 +1327,7 @@ async function runWriteCase(kase) {
       const primed = await prime(SEED);
       if (!primed.ok) return { error: "focus failed", primed };
       const t0 = await pageNow(c);
+      const beforeResult = await kase.before?.();
       await c.type(kase.query, TYPE_MS);
       await settle("on");
       await sleep(150);
@@ -1153,12 +1338,12 @@ async function runWriteCase(kase) {
       await sleep(300);
       const edited = await editedSince(c, t0);
       const read = await kase.read?.();
-      return { before, snaps, ...after, edited, read };
+      return { before, snaps, ...after, edited, read, beforeResult };
     } finally {
       await kase.restore?.();
-      // Burrow refreshes its alias index after its own writes or once a
-      // minute; this restore is the gate's, so rebuild the index now.
-      if (kase.restore) await c.evaluate(() => window.__BURROW?.indexes?.build?.());
+      // The restore is an edit outside Burrow: its alias watch carries it
+      // into the index (0.5.0), so the next case only waits for that.
+      if (kase.restore) await sleep(600);
     }
   });
 }
