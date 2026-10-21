@@ -1,3 +1,4 @@
+import { ordinalQuery, startsWithOrdinal } from "./ordinal.js";
 import { matchFromKey, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
 
 // Drill grammar (spec §5), inside [[ ]] only:
@@ -42,14 +43,25 @@ export function parseDrill(query, titles) {
 
 // Best scorer match among candidates; ties go to outline order: the order
 // candidates are given in, or `first(ties)` when they come unordered.
-export function bestMatch(candidates, query, { strict = false, first } = {}) {
-  if (!candidates.length) return null;
+export function bestMatch(candidates, query, { strict = false, first, ordinals = false, hideEmpty = false } = {}) {
+  const plain = (node) => stripRoamMarkup(node.string ?? "").trim();
+  let list = candidates;
+  if (hideEmpty) {
+    list = candidates.filter((node) => plain(node) || node.kids?.length);
+    if (!String(query ?? "").trim()) list = [list.find((node) => plain(node)) ?? list[0]].filter(Boolean);
+  }
+  if (!list.length) return null;
+  const token = ordinals ? ordinalQuery(query) : null;
+  if (token) {
+    const ords = list.filter((node) => startsWithOrdinal(plain(node), token));
+    if (ords.length) return ords.length > 1 && first ? first(ords) : ords[0];
+  }
   const plan = query ? searchPlan(query) : null;
-  let ties = candidates;
+  let ties = list;
   if (plan) {
     let bestScore = -1;
     ties = [];
-    for (const node of candidates) {
+    for (const node of list) {
       const match = matchFromKey(nodeKey(node), plan, { strict });
       if (match.score < 0) continue;
       if (match.score > bestScore) { bestScore = match.score; ties = [node]; } else if (match.score === bestScore) ties.push(node);
@@ -70,19 +82,19 @@ export function nodeKey(node) {
 //   first(nodes) -> the node that comes first in the outline
 // Returns the deepest resolved node (null: only the page resolved) and the
 // step that failed, if any.
-export function resolveDrill(parsed, source, { strict = false } = {}) {
+export function resolveDrill(parsed, source, { strict = false, ordinals = false, hideEmpty = false } = {}) {
   const { page } = parsed;
   let target = null;
   let failedAt = null;
   if (parsed.heading != null) {
-    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first });
+    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first, ordinals, hideEmpty });
     if (hit) target = hit;
     else failedAt = 0;
   }
   if (failedAt == null) {
     for (let i = 0; i < parsed.steps.length; i++) {
       const kids = source.children(target ? target.uid : page.uid) || [];
-      const hit = bestMatch(kids, parsed.steps[i], { strict });
+      const hit = bestMatch(kids, parsed.steps[i], { strict, ordinals, hideEmpty });
       if (!hit) { failedAt = i + (parsed.heading != null ? 1 : 0); break; }
       target = hit;
     }

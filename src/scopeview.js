@@ -2,6 +2,8 @@
 // a scope is open (the popover itself is only made invisible). Rows are
 // rebuilt when the level, query or row list changes; moving the highlight
 // touches classes only.
+import { hintsKey, keyLabel, renderHints as paintHints } from "./hints.js";
+
 const MAX_LABEL = 40;
 
 export function createScopePanel({ doc, win, lifecycle, highlight }) {
@@ -38,7 +40,8 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
 
   function renderList(scope) {
     const level = scope.levels[scope.levels.length - 1];
-    const key = `${level.uid}\u0000${level.query}\u0000${scope.rows.map((r) => r.uid).join(",")}`;
+    const more = scope.rows.reduce((sum, r) => sum + (r.more ?? 0), 0);
+    const key = `${level.uid}\u0000${level.query}\u0000${more}\u0000${scope.rows.map((r) => r.uid).join(",")}`;
     if (key === listKey) return;
     listKey = key;
     if (!scope.rows.length) {
@@ -53,32 +56,40 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     list.replaceChildren(...scope.rows.map((row, i) => {
       const item = doc.createElement("div");
       item.className = "burrow-row";
-      if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       item.setAttribute("role", "option");
       item.dataset.index = String(i);
+      if (row.more != null) {
+        item.classList.add("burrow-more-row");
+        item.textContent = `+${row.more} more`;
+        return item;
+      }
+      if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
       if (row.text) text.append(highlight(row.text, level.query));
-      else text.append(span("burrow-empty", "(empty)"));
+      else if (row.drillable) {
+        item.classList.add("burrow-empty-row");
+        text.append(span("burrow-empty", "(empty) ▸"));
+      } else text.append(span("burrow-empty", "(empty)"));
       item.append(text);
-      if (row.drillable) item.append(span("burrow-drill-mark", "›"));
+      if (row.drillable && row.text) item.append(span("burrow-drill-mark", "›"));
       return item;
     }));
   }
 
+  let hintsShown = null;
   function renderHints(scope, on) {
     hintsLine.hidden = !on;
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
-    const items = [["↵", "insert"]];
-    if (scope.rows[level.active]?.drillable) items.push(["⇥", "drill"]);
-    items.push(["⇧⇥", "back"], ["esc", "results"]);
-    hintsLine.replaceChildren(...items.map(([keys, label]) => {
-      const item = doc.createElement("span");
-      item.className = "burrow-hint";
-      item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
-      return item;
-    }));
+    const active = scope.rows[level.active];
+    const items = [];
+    if (active?.drillable) items.push(["⇥/>", "drill"]);
+    items.push(["⇧⇥", "back"], [keyLabel("ctrlO"), "preview"], ["↵", active?.more != null ? "more" : "insert"], ["esc", "results"]);
+    const key = hintsKey(items);
+    if (key === hintsShown) return;
+    hintsShown = key;
+    paintHints(doc, hintsLine, items);
   }
 
   function paintActive(scope, hintsOn) {
@@ -120,6 +131,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     hide() {
       node.hidden = true;
       listKey = null;
+      hintsShown = null;
     },
   };
 }

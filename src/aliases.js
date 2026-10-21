@@ -5,7 +5,7 @@ import { matchFromKey, searchKey } from "./search.js";
 // these blocks.
 export function parseAliasBlock(string, keyword = "Aliases") {
   const kw = String(keyword || "Aliases").trim();
-  const text = String(string || "");
+  const text = String(string || "").split("\n")[0];
   const head = text.slice(0, kw.length + 2);
   if (head.toLowerCase() !== `${kw.toLowerCase()}::`) return [];
   return text.slice(kw.length + 2).split(",")

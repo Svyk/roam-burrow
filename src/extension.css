@@ -163,15 +163,23 @@
 }
 
 /* Alias chips, key hints, and the roam-aliases fold / pane layout. */
-.burrow-hints { position: fixed; z-index: 30; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 12px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
+.burrow-hints { position: fixed; z-index: 30; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 0; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
 .burrow-hints.burrow-dark { border-top-color: rgba(255, 255, 255, 0.1); }
 .burrow-hints[hidden] { display: none; }
+.burrow-hint-key { opacity: 0.95; }
+.burrow-hint { opacity: 0.75; }
+.burrow-hint-sep { opacity: 0.45; }
+/* Each separator is a flex item, and flex trims its edge spaces; keep " · ". */
+.burrow-hint-sep { white-space: pre; }
 .burrow-hint kbd { color: inherit; box-shadow: none; font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
-.burrow-chips { display: flex; align-items: center; gap: 4px; box-sizing: border-box; height: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow: hidden; }
+.burrow-chips { display: flex; align-items: center; gap: 4px; box-sizing: border-box; height: 28px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior: contain; }
+.burrow-chips::-webkit-scrollbar { display: none; }
 /* Chips keep their width (shrinking them ran their text together); the line scrolls to the active one. */
 .burrow-chips-label { flex: none; opacity: 0.6; margin-right: 2px; }
 .burrow-chip { flex: none; max-width: 75%; overflow: hidden; text-overflow: ellipsis; padding: 1px 6px; border-radius: 3px; cursor: pointer; background: rgba(138, 155, 168, 0.15); }
-.burrow-chip.burrow-active { background: var(--burrow-active, rgba(138, 155, 168, 0.35)); }
+.burrow-chip.burrow-active { background: var(--burrow-active, rgba(138, 155, 168, 0.35)); max-width: 100%; }
+.burrow-chips.burrow-confirm { gap: 8px; }
+.burrow-confirm-text { overflow: hidden; text-overflow: ellipsis; }
 
 .rm-autocomplete__results.burrow-fold-aliases .rm-aliases { display: none !important; }
 .rm-autocomplete__results.burrow-fold-aliases.alias-container { min-width: 0 !important; }
@@ -216,8 +224,22 @@
 .burrow-scope .burrow-row.burrow-h3 .burrow-text { font-weight: 600; }
 .burrow-drill-mark { flex: none; margin-left: 8px; opacity: 0.45; }
 .burrow-scope .burrow-empty, .burrow-self .burrow-muted { opacity: 0.5; }
-.burrow-scope-hints { flex: none; display: flex; gap: 12px; align-items: center; height: 22px; padding: 0 8px; font-size: 12px; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); border-top: 1px solid rgba(16, 22, 26, 0.12); }
+.burrow-scope-hints { flex: none; display: flex; gap: 0; align-items: center; height: 22px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); border-top: 1px solid rgba(16, 22, 26, 0.12); }
 .burrow-scope-hints[hidden] { display: none; }
 .burrow-scope.burrow-dark .burrow-scope-hints { border-top-color: rgba(255, 255, 255, 0.1); }
 .burrow-scope-hints kbd { color: inherit; box-shadow: none; font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
 .rm-autocomplete__results.burrow-scope-open { visibility: hidden !important; }
+
+/* Alias prompt row inside the strip. */
+.burrow-row.burrow-prompt { cursor: text; }
+.burrow-prompt-label { opacity: 0.6; margin-right: 6px; flex: none; }
+.burrow-prompt-input { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid rgba(138, 155, 168, 0.6); }
+.burrow-prompt-input.burrow-fresh { background: rgba(45, 114, 210, 0.25); }
+.burrow-prompt-compose { text-decoration: underline; }
+.burrow-prompt-input::after { content: ""; display: inline-block; width: 1px; height: 1em; margin-left: 1px; vertical-align: text-bottom; background: currentColor; }
+.burrow-prompt-error { flex: none; margin-left: 8px; opacity: 0.8; color: #db3737; }
+.burrow-strip.burrow-dark .burrow-prompt-error, .burrow-chips .burrow-prompt-error { color: #ff7373; }
+
+/* Drill list: empty and "+N more" rows. */
+.burrow-scope .burrow-empty-row .burrow-text, .burrow-scope .burrow-more-row { opacity: 0.6; }
+.burrow-scope .burrow-more-row { font-size: 12px; }

@@ -12,16 +12,18 @@ const MAX_HEIGHT = 300;
 export const DRILL_CLASS = "burrow-drill";
 
 // model: { key, trail: [text], items: [{ text, depth, heading, target }] }
-export function previewModel(result, tree, text) {
+export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const { page, target } = result;
   const trailNodes = target ? tree.trail(target.uid) : [];
   const parentUid = trailNodes.length ? trailNodes[trailNodes.length - 1].uid : page.uid;
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
+  const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
   const pushKids = (uid, depth, levels) => {
     const kids = levels > 1 ? tree.twoLevels(uid) : tree.children(uid);
     for (const kid of kids.slice(0, CHILD_LIMIT)) {
       if (items.length >= ITEM_LIMIT) return;
+      if (emptyLeaf(kid)) continue;
       items.push({ uid: kid.uid, text: text(kid.string || ""), depth, heading: kid.heading, target: false });
       if (levels > 1 && kid.kids?.length) pushKids(kid.uid, depth + 1, levels - 1);
     }
@@ -38,6 +40,7 @@ export function previewModel(result, tree, text) {
   if (from > 0) items.push({ more: from, depth: 0 });
   for (const sib of siblings.slice(from, from + SIBLING_WINDOW)) {
     const isTarget = sib.uid === target.uid;
+    if (!isTarget && emptyLeaf(sib)) continue;
     items.push({ uid: sib.uid, text: text(sib.string || ""), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
@@ -72,7 +75,7 @@ export function createPreview({ doc, win, lifecycle }) {
       row.style.setProperty("--burrow-depth", String(item.depth));
       if (item.more != null) {
         row.classList.add("burrow-more");
-        row.textContent = `… ${item.more} more`;
+        row.textContent = `+${item.more} more`;
         return row;
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);

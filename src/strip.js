@@ -1,9 +1,12 @@
 import { aliasInsertion, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
+import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
+import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
+import { hintsKey, keyLabel, renderHints } from "./hints.js";
 import { createTreeSource } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { rankRefs } from "./refindex.js";
-import { scopeRows } from "./scope.js";
+import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { searchKey, searchPlan, stripRoamMarkup } from "./search.js";
 import { isDarkHost } from "./theme.js";
@@ -18,6 +21,7 @@ const FOLD_ALIASES = "burrow-fold-aliases";
 const LAYOUT = "burrow-layout";
 const SCOPE_OPEN = "burrow-scope-open";
 const FOLDED = "data-burrow-folded";
+const EXPANDED = "rm-autocomplete__results--expanded";
 // Row, chips and hints heights; src/extension.css's burrow-pad-* rules are built from them.
 const ROW_HEIGHT = 33;
 const CHIPS_HEIGHT = 28;
@@ -48,9 +52,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   const st = {
     phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null,
+    auto: false, chip: -1, scope: null, prompt: null,
   };
-  const debug = { lastFailure: null, commits: 0, trace: [] };
+  const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
     debug.trace.push({ t: Math.round(performance.now()), ...event });
     if (debug.trace.length > 60) debug.trace.shift();
@@ -89,7 +93,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
       const parsed = parseDrill(token.query, indexes.titles);
       if (parsed) {
-        const result = resolveDrill(parsed, tree, { strict: !recall });
+        const result = resolveDrill(parsed, tree, { strict: !recall, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") });
         st.drill = { ...result, key: `${result.page.uid}:${result.target?.uid ?? ""}` };
         return [drillRow(result)];
       }
@@ -221,6 +225,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   let shownQuery = null;
   function render() {
     if (st.phase === "SCOPE") { placeScope(); return; }
+    if (st.prompt?.kind === "add") { renderPrompt(); return; }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
     const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
@@ -279,12 +284,63 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   }
 
   let model = null;
+  let rowPreviewKey = null;
+  let rowPreviewId = null;
+  function cancelRowPreview() {
+    if (rowPreviewId != null) { (win.cancelIdleCallback || win.clearTimeout).call(win, rowPreviewId); rowPreviewId = null; }
+    rowPreviewKey = null;
+  }
+
+  // What the row preview shows: the page an alias prompt is about, else the
+  // selected Burrow alias or referenced row.
+  function previewTarget() {
+    if (st.prompt) return { kind: "alias", key: `page:${st.prompt.page.uid}`, uid: st.prompt.page.uid, title: st.prompt.page.title };
+    const row = st.phase === "OWNED" ? shown[st.active] : null;
+    return row?.kind === "alias" || row?.kind === "ref" ? row : null;
+  }
+
   function showPreview() {
-    if (!st.drill || !setting("drillPreview") || !st.pop) { preview.hide(); return; }
-    if (model?.drillKey !== st.drill.key) {
-      model = previewModel(st.drill, tree, readableText);
-      model.drillKey = st.drill.key;
+    if (st.drill && setting("drillPreview") && st.pop) {
+      cancelRowPreview();
+      if (model?.drillKey !== st.drill.key) {
+        model = previewModel(st.drill, tree, readableText, { hideEmpty: setting("drillEmpty") });
+        model.drillKey = st.drill.key;
+      }
+      preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+      return;
     }
+    const row = previewTarget();
+    if (row && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
+      if (rowPreviewKey === row.key) {
+        if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+        return;
+      }
+      cancelRowPreview();
+      preview.hide();
+      rowPreviewKey = row.key;
+      // Drawn at idle, after the strip: like Roam's own preview it may follow
+      // a moment later, and it never adds to the cost of the key.
+      const run = () => { rowPreviewId = null; perf.time("preview", () => drawRowPreview(row)); };
+      rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 150 }) : win.setTimeout(run, 50);
+      return;
+    }
+    cancelRowPreview();
+    preview.hide();
+  }
+
+  function drawRowPreview(row) {
+    if (previewTarget()?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
+    let page;
+    let target = null;
+    if (row.kind === "alias") page = { uid: row.uid, title: row.title };
+    else {
+      const first = tree.trail(row.uid)[0];
+      if (!first) return;
+      page = { uid: first.uid, title: first.title };
+      target = tree.get(row.uid);
+    }
+    model = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
+    model.drillKey = `row:${row.key}`;
     preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
   }
 
@@ -346,12 +402,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.pop?.classList.toggle(OWNS, st.phase === "OWNED");
     paintChips();
     layoutPop();
+    showPreview();
   }
 
   // The active alias row's other aliases, directly under it. Only this part
   // is rebuilt when the active row changes; rows keep the class-only path.
   let chipsFor = null;
   let chipsScrolled = false;
+  let revealedChip = -1;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
 
   function paintChips() {
@@ -360,22 +418,37 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!show) {
       st.chip = -1;
       chipsFor = null;
+      chipsNode.scrollLeft = 0;
       chipsScrolled = false;
+      revealedChip = -1;
       chipsNode.remove();
     } else {
-      const key = `${row.key}\u0000${row.aliases.join("\u0000")}`;
+      const confirm = st.prompt?.kind === "delete" ? st.prompt : null;
+      const key = confirm
+        ? `confirm\u0000${row.key}\u0000${confirm.alias}\u0000${confirm.saving}\u0000${confirm.error ?? ""}`
+        : `${row.key}\u0000${row.aliases.join("\u0000")}`;
       if (key !== chipsFor) {
         chipsFor = key;
-        chipsNode.replaceChildren(
-          Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
-          ...row.aliases.map((alias, i) => {
-            const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias });
-            chip.dataset.index = String(i);
-            return chip;
-          }),
-        );
+        chipsNode.classList.toggle("burrow-confirm", Boolean(confirm));
+        if (confirm) {
+          const text = confirm.saving ? `deleting “${confirm.alias}”…` : `delete alias “${confirm.alias}” from ${confirm.page.title}?`;
+          chipsNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-confirm-text", textContent: text }));
+          if (confirm.error) chipsNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: confirm.error }));
+        } else {
+          chipsNode.scrollLeft = 0;
+          chipsScrolled = false;
+          revealedChip = -1;
+          chipsNode.replaceChildren(
+            Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
+            ...row.aliases.map((alias, i) => {
+              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: alias });
+              chip.dataset.index = String(i);
+              return chip;
+            }),
+          );
+        }
       }
-      chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
+      if (!confirm) chipsNode.querySelectorAll(".burrow-chip").forEach((node, i) => node.classList.toggle("burrow-active", i === st.chip));
       const rowNode = strip.querySelectorAll(".burrow-row")[st.active];
       if (rowNode && chipsNode.previousElementSibling !== rowNode) rowNode.after(chipsNode);
       revealChip();
@@ -387,6 +460,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // back to the start (the label) on the first chip or out of chip mode.
   // Layout is read only in chip mode, never while typing.
   function revealChip() {
+    if (st.prompt?.kind === "delete") return;
+    // Only a chip key moves the line; a render leaves the user's wheel scroll alone.
+    if (st.chip === revealedChip) return;
+    revealedChip = st.chip;
     if (st.chip <= 0) {
       if (chipsScrolled) chipsNode.scrollLeft = 0;
       chipsScrolled = false;
@@ -475,6 +552,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.hidden = true;
     chipsNode.remove();
     chipsFor = null;
+    cancelRowPreview();
     preview.hide();
     st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
@@ -493,6 +571,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsNode.remove();
     chipsFor = null;
     hints.hidden = true;
+    cancelRowPreview();
     preview.hide();
     clearPopover();
   }
@@ -531,10 +610,19 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function hintList() {
     if (st.phase === "SCOPE") return [];
+    if (st.prompt?.kind === "add") return [["↵", "save alias"], ["esc", "cancel"]];
+    if (st.prompt?.kind === "delete") return [["↵", "delete"], ["esc", "keep"]];
     const row = shown[st.active];
+    if (chipsAvailable(row) && st.chip >= 0) {
+      return [["←→", "alias"], ...(setting("aliasDelete") ? [[keyLabel("altBackspace"), "delete"]] : []), ["↵", "insert"], ["esc", "rows"]];
+    }
     const list = [];
-    if (setting("tabDrill") && (st.token?.kind === "[[" || (st.phase === "OWNED" && row?.kind === "ref"))) list.push(["⇥", "drill in"]);
-    if (chipsAvailable(row)) list.push(...(st.chip >= 0 ? [["←→", "alias"], ["↵", "insert"], ["esc", "rows"]] : [["⌥↓", "aliases"]]));
+    if (setting("aliasCreate") && st.token?.kind === "[[" && aliasSource()) list.push([keyLabel("altA"), "alias"]);
+    if (chipsAvailable(row)) list.push([keyLabel("altDown"), "pick alias"]);
+    if (setting("tabDrill") && st.token?.kind === "[[") list.push(["⇥/>", "drill"]);
+    else if (setting("tabDrill") && st.phase === "OWNED" && row?.kind === "ref") list.push(["⇥", "drill"]);
+    if (!list.length) return [];
+    list.push([keyLabel("ctrlO"), "preview"], ["↵", "insert"]);
     return list;
   }
 
@@ -550,15 +638,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       hintsFor = null;
       pop.classList.remove(PAD_BOTTOM);
     } else {
-      const key = list.map((hint) => hint.join(" ")).join("|");
+      const key = hintsKey(list);
       if (key !== hintsFor) {
         hintsFor = key;
-        hints.replaceChildren(...list.map(([keys, label]) => {
-          const item = doc.createElement("span");
-          item.className = "burrow-hint";
-          item.append(Object.assign(doc.createElement("kbd"), { textContent: keys }), label);
-          return item;
-        }));
+        renderHints(doc, hints, list);
       }
       pop.classList.add(PAD_BOTTOM);
     }
@@ -603,6 +686,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function detach() {
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
+    cancelRowPreview();
     preview.hide();
     hints.hidden = true;
     hintsFor = null;
@@ -668,6 +752,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.auto = false;
     st.chip = -1;
     st.scope = null;
+    if (st.prompt?.compose) composer.restore(st.prompt, st.ta);
+    st.prompt = null;
+    promptRows = [];
+    cancelRowPreview();
     model = null;
     scopeModel = null;
     tree.clear();
@@ -724,7 +812,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function onInput(event) {
     const ta = event.target;
     if (!isBlockInput(ta)) return;
+    if (st.prompt && (composer.input(event) || composer.stray(event))) return;
     if (st.ignoreNextInput) { st.ignoreNextInput = false; return; }
+    if (st.prompt) st.prompt = null;
     if (st.phase === "SCOPE") exitScope();
     if (!anyFeature()) { if (st.phase !== "IDLE") reset("off"); return; }
     scheduleEvaluate(ta);
@@ -748,15 +838,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   const ACTION_KEYS = new Set(["Enter", "Tab", "ArrowUp", "ArrowDown", "Escape"]);
 
   function onKeyDown(event) {
-    if (pendingTa && ACTION_KEYS.has(event.key) && event.target === pendingTa) flush();
+    if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    if (st.prompt && composer.key(event)) return;
     if (event.isComposing || st.composing || event.keyCode === 229) return;
     const ta = event.target;
     if (ta !== st.ta || !anyFeature()) { reset("foreign-key"); return; }
     if (ta.selectionStart !== ta.selectionEnd) return;
+    if (st.prompt) { promptKey(event); return; }
     const count = shown.length;
     const key = event.key;
     if (st.phase === "SCOPE") { scopeKey(event); return; }
+    if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
+      const page = aliasSource();
+      if (page) { openPrompt(page); consume(event); return; }
+    }
     if (st.phase === "OWNED" && chipKey(event)) return;
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (st.phase === "ARMED") {
@@ -833,7 +929,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const last = row.aliases.length - 1;
     if (plain && (key === "ArrowLeft" || key === "ArrowUp")) st.chip = Math.max(0, st.chip - 1);
     else if (plain && (key === "ArrowRight" || key === "ArrowDown")) st.chip = Math.min(last, st.chip + 1);
-    else if ((key === "ArrowUp" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) || (key === "Escape" && plain)) st.chip = -1;
+    else if (key === "Backspace" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && setting("aliasDelete")) {
+      st.prompt = { kind: "delete", page: { uid: row.uid, title: row.title }, alias: row.aliases[st.chip], saving: false, error: null };
+      trace({ ev: "confirm-delete", alias: st.prompt.alias });
+    } else if ((key === "ArrowUp" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) || (key === "Escape" && plain)) st.chip = -1;
     else if (plain && (key === "Enter" || key === "Tab")) {
       if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, st.chip), event)) return true;
       if (!commit(chipRow(row, st.chip))) reset("commit-refused");
@@ -847,6 +946,147 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     paintActive();
     consume(event);
     return true;
+  }
+
+  const isAltA = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyA";
+
+  // The page ⌥A names: Burrow's alias row when it holds the selection, else
+  // Roam's highlighted [[ row when its title is an existing page.
+  function aliasSource() {
+    if (st.phase === "OWNED") {
+      const row = shown[st.active];
+      return row?.kind === "alias" ? { uid: row.uid, title: row.title } : null;
+    }
+    const native = armedSource();
+    return native ? { uid: native.page.uid, title: native.page.title } : null;
+  }
+
+  function openPrompt(page) {
+    const ta = st.ta;
+    st.prompt = { kind: "add", page, text: st.token.query.trim(), fresh: true, saving: false, error: null,
+      block: { value: ta.value, start: ta.selectionStart, end: ta.selectionEnd } };
+    st.auto = false;
+    st.chip = -1;
+    trace({ ev: "prompt", uid: page.uid });
+    promptRows = shown.slice();
+    render();
+  }
+
+  let promptRows = [];
+  const promptNode = doc.createElement("div");
+  promptNode.className = "burrow-row burrow-prompt";
+  const composer = createPromptComposer({
+    prompt: () => st.prompt,
+    textarea: () => st.ta,
+    setValue: (ta, value) => valueSetter.call(ta, value),
+    render: () => renderPrompt(),
+  });
+  function renderPrompt() {
+    const p = st.prompt;
+    const input = Object.assign(doc.createElement("span"), { className: "burrow-prompt-input", textContent: p.saving ? `${p.text} …` : p.text });
+    input.classList.toggle("burrow-fresh", p.fresh && Boolean(p.text));
+    if (p.compose?.text) input.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-compose", textContent: p.compose.text }));
+    promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
+    if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error }));
+    if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
+    shown = [];
+    shownQuery = null;
+    chipsFor = null;
+    chipsNode.remove();
+    strip.hidden = false;
+    syncPanes(promptRows);
+    setPad(1, false);
+    layoutPop();
+    showPreview();
+  }
+
+  function promptKey(event) {
+    const p = st.prompt;
+    const key = event.key;
+    if (key === "Shift" || key === "Alt" || key === "Meta" || key === "Control" || key === "CapsLock") return;
+    if (p.kind === "delete") {
+      consume(event);
+      if (p.saving) return;
+      if (key === "Enter" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) { confirmDelete(); return; }
+      st.prompt = null;
+      paintActive();
+      return;
+    }
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && key.toLowerCase() === "v") return;          // the paste event below takes it
+    consume(event);
+    if (p.saving) return;
+    if (key === "Escape") { st.prompt = null; promptRows = []; render(); return; }
+    if (key === "Enter") { savePrompt(); return; }
+    if (mod) { if (key.toLowerCase() === "a") p.fresh = true; renderPrompt(); return; }
+    if (key === "Backspace") { p.text = p.fresh ? "" : [...p.text].slice(0, -1).join(""); p.fresh = false; p.error = null; }
+    else if (key === "ArrowLeft" || key === "ArrowRight" || key === "Home" || key === "End") p.fresh = false;
+    else if (key.length === 1 || [...key].length === 1) { p.text = p.fresh ? key : p.text + key; p.fresh = false; p.error = null; }
+    renderPrompt();
+  }
+
+  async function savePrompt() {
+    const p = st.prompt;
+    const check = validAlias(p.text);
+    if (!check.ok) { p.error = check.reason; renderPrompt(); return; }
+    p.saving = true; p.error = null; renderPrompt();
+    let result;
+    try { result = await addAliasToPage(api, { pageUid: p.page.uid, keyword: setting("aliasKeyword") || "Aliases", alias: check.alias }); }
+    catch (error) { result = { ok: false, error: String(error?.message || error) }; }
+    if (st.prompt !== p) return;                            // blur, Esc: closed meanwhile
+    if (!result.ok) { p.saving = false; p.error = result.error; renderPrompt(); return; }
+    composer.restore(p, st.ta);                             // a composition started while saving
+    st.prompt = null;
+    promptRows = [];
+    debug.lastWrite = { kind: "add", at: Date.now(), ...result };
+    trace({ ev: "alias-added", uid: p.page.uid, block: result.blockUid });
+    indexes.schedule();
+    const row = { kind: "alias", key: `alias-new:${p.page.uid}`, insertion: aliasInsertion({ alias: check.alias, title: p.page.title }, setting("aliasLinkFormat")), pick: null };
+    if (!commit(row)) reset("commit-refused");
+  }
+
+  async function confirmDelete() {
+    const p = st.prompt;
+    p.saving = true; p.error = null; paintActive();
+    let result;
+    try { result = await deleteAliasFromPage(api, { pageUid: p.page.uid, keyword: setting("aliasKeyword") || "Aliases", alias: p.alias }); }
+    catch (error) { result = { ok: false, error: String(error?.message || error) }; }
+    if (st.prompt !== p) return;
+    if (!result.ok) { p.saving = false; p.error = result.error; paintActive(); return; }
+    st.prompt = null;
+    debug.lastWrite = { kind: "delete", at: Date.now(), ...result };
+    trace({ ev: "alias-deleted", alias: p.alias, block: result.blockUid });
+    for (const r of new Set([...st.rows, ...shown])) {
+      if (r.kind === "alias" && r.uid === p.page.uid) r.aliases = r.aliases.filter((a) => a !== p.alias);
+    }
+    const row = shown[st.active];
+    st.chip = chipsAvailable(row) ? Math.min(st.chip, row.aliases.length - 1) : -1;
+    chipsFor = null;
+    indexes.schedule();
+    paintActive();
+  }
+
+  function onPaste(event) {
+    const p = st.prompt;
+    if (p?.kind !== "add" || event.target !== st.ta) return;
+    consume(event);
+    if (p.saving) return;
+    const text = (event.clipboardData?.getData("text/plain") ?? "").split(/\r?\n/)[0];
+    p.text = p.fresh ? text : p.text + text;
+    p.fresh = false;
+    p.error = null;
+    renderPrompt();
+  }
+
+  // A vertical wheel scrolls the chip line sideways; a horizontal trackpad
+  // swipe already does (overflow-x: auto).
+  function onChipsWheel(event) {
+    if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+    const max = chipsNode.scrollWidth - chipsNode.clientWidth;
+    if (max <= 0) return;
+    const step = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+    chipsNode.scrollLeft = Math.max(0, Math.min(max, chipsNode.scrollLeft + step));
+    event.preventDefault();
   }
 
   function chipRow(row, index) {
@@ -886,8 +1126,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!tree.children(source.uid).length) return false;
     st.scope = {
       rootLabel: st.token.kind === "[[" ? "Pages" : "Blocks",
-      levels: [{ ...source, query: "", active: 0 }],
+      levels: [{ ...source, query: "", active: 0, limit: setting("drillCap") ? CAP : Infinity }],
       rows: [],
+      all: [],
+      preview: setting("drillPreview"),
       returnTo: { phase: st.phase, active: st.active, chip: st.chip },
     };
     st.phase = "SCOPE";
@@ -896,6 +1138,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     trace({ ev: "scope-enter", uid: source.uid });
     strip.hidden = true;
     chipsNode.remove();
+    cancelRowPreview();
     preview.hide();
     st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
@@ -927,8 +1170,23 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // parent level after a pop.
   function scopeRefresh(keepActive) {
     const level = scopeLevel();
-    st.scope.rows = scopeRows(tree.twoLevels(level.uid), level.query, { strict: !setting("betterMatch"), text: readableText });
-    level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1)) : 0;
+    level.limit ??= setting("drillCap") ? CAP : Infinity;
+    st.scope.all = scopeRows(tree.twoLevels(level.uid), level.query, {
+      strict: !setting("betterMatch"), text: readableText, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty"),
+    });
+    st.scope.rows = capRows(st.scope.all, level.limit);
+    level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1))
+      : level.query ? 0 : firstReal(st.scope.rows);
+    scopePanel.show(st.scope, setting("keyHints"));
+    placeScope();
+  }
+
+  function scopeMore() {
+    const level = scopeLevel();
+    const at = level.limit;
+    level.limit += CAP;
+    st.scope.rows = capRows(st.scope.all, level.limit);
+    level.active = Math.min(at, st.scope.rows.length - 1);
     scopePanel.show(st.scope, setting("keyHints"));
     placeScope();
   }
@@ -947,15 +1205,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function showScopePreview() {
     const level = scopeLevel();
-    if (!setting("drillPreview")) { scopePreview.hide(); return; }
+    if (!st.scope.preview) { scopePreview.hide(); return; }
     const row = st.scope.rows[level.active];
-    const target = row ? row.node : (level.page?.uid === level.uid ? null : tree.get(level.uid));
+    const target = row && row.more == null ? row.node : (level.page?.uid === level.uid ? null : tree.get(level.uid));
     const first = tree.trail(level.uid)[0];
     const page = level.page || (first ? { uid: first.uid, title: first.title } : null);
     if (!page) { scopePreview.hide(); return; }
     const key = `${page.uid}:${target?.uid ?? ""}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree, readableText);
+      scopeModel = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });
@@ -971,8 +1229,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function scopeDeeper() {
     const level = scopeLevel();
     const row = st.scope.rows[level.active];
-    if (!row?.drillable) return;
-    st.scope.levels.push({ uid: row.uid, label: row.text || "(empty)", page: level.page, insertion: `((${row.uid}))`, query: "", active: 0 });
+    if (!row?.drillable || row.more != null) return;
+    st.scope.levels.push({
+      uid: row.uid, label: row.text || "(empty)", page: level.page, insertion: `((${row.uid}))`, query: "", active: 0,
+      limit: setting("drillCap") ? CAP : Infinity,
+    });
     scopeRefresh(false);
   }
 
@@ -985,6 +1246,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function scopeCommit() {
     const level = scopeLevel();
     const row = st.scope.rows[level.active];
+    if (row?.more != null) { scopeMore(); return true; }
+    if (row?.empty && row.drillable) { scopeDeeper(); return true; }
     return commit(row
       ? { kind: "scope", key: `scope:${row.uid}`, insertion: `((${row.uid}))` }
       : { kind: "scope", key: `scope:${level.uid}`, insertion: level.insertion });
@@ -992,6 +1255,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function scopeKey(event) {
     const key = event.key;
+    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.code === "KeyO") {
+      st.scope.preview = !st.scope.preview;
+      consume(event);
+      showScopePreview();
+      return;
+    }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const level = scopeLevel();
     if (key === "Tab") {
@@ -1012,13 +1281,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     }
     if (key === "Backspace") {
       consume(event);
-      if (level.query) { level.query = [...level.query].slice(0, -1).join(""); scopeRefresh(false); } else scopeBack();
+      if (level.query) {
+        level.query = [...level.query].slice(0, -1).join("");
+        level.limit = setting("drillCap") ? CAP : Infinity;
+        scopeRefresh(false);
+      } else scopeBack();
       return;
     }
     if (key.length === 1) {
       consume(event);
       if (key === ">" && st.scope.rows[level.active]?.drillable) { scopeDeeper(); return; }
       level.query += key;
+      level.limit = setting("drillCap") ? CAP : Infinity;
       scopeRefresh(false);
     }
   }
@@ -1063,6 +1337,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function onStripMouseDown(event) {
     event.preventDefault();
     event.stopPropagation();
+    if (st.prompt) return;
     const chip = event.target.closest?.(".burrow-chip");
     if (chip) {
       const row = shown[st.active];
@@ -1086,12 +1361,17 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     }
     const row = event.target.closest?.(".burrow-row");
     if (!row) return;
-    scopeLevel().active = Number(row.dataset.index);
-    if (!scopeCommit()) reset("click-refused");
+    const level = scopeLevel();
+    level.active = Number(row.dataset.index);
+    const clicked = st.scope.rows[level.active];
+    if (clicked?.more != null) scopeMore();
+    else if (clicked?.empty && clicked.drillable) scopeDeeper();
+    else if (!scopeCommit()) reset("click-refused");
   }
 
   function onCompositionStart(event) {
     if (!isBlockInput(event.target)) return;
+    if (st.prompt && composer.start(event)) return;
     st.composing = true;
     pendingTa = null;
     reset("composition");
@@ -1099,6 +1379,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function onCompositionEnd(event) {
     if (!isBlockInput(event.target)) return;
+    if (st.prompt && composer.end(event)) return;
     st.composing = false;
     if (anyFeature()) evaluate(event.target);
   }
@@ -1123,8 +1404,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.event(win, "keydown", guarded("keydown", onKeyDown), true);
   lifecycle.event(win, "input", guarded("input", onInput), true);
   lifecycle.event(win, "compositionstart", guarded("compositionstart", onCompositionStart), true);
+  lifecycle.event(win, "compositionupdate", guarded("compositionupdate", (event) => { if (st.prompt) composer.update(event); }), true);
   lifecycle.event(win, "compositionend", guarded("compositionend", onCompositionEnd), true);
+  lifecycle.event(win, "beforeinput", guarded("beforeinput", (event) => { if (st.prompt && !composer.input(event)) composer.insert(event); }), true);
+  lifecycle.event(win, "keyup", guarded("keyup", (event) => { if (st.prompt) composer.key(event); }), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
+  lifecycle.event(win, "paste", guarded("paste", onPaste), true);
+  lifecycle.event(chipsNode, "wheel", guarded("wheel", onChipsWheel), { passive: false });
+  lifecycle.event(chipsNode, "scroll", () => { chipsScrolled = chipsNode.scrollLeft > 0; }, { passive: true });
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
   lifecycle.add(() => reset("unload"));

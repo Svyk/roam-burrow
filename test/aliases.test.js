@@ -113,3 +113,7 @@ test("an ambiguous alias stays two rows, one per page", () => {
   const grouped = groupAliasHits(matchAliases(index, searchPlan("emp"), { limit: Infinity }), index);
   assert.deepEqual(grouped.map((r) => r.uid).sort(), ["u2", "u3"]);
 });
+
+test("parseAliasBlock reads the first line only", () => {
+  assert.deepEqual(parseAliasBlock("Aliases:: a, b\nnote"), ["a", "b"]);
+});
