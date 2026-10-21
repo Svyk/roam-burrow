@@ -4,6 +4,30 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-20
+
+### Added
+
+- Hint line, contextual (`keyHints`): it names only the keys that do something for what is highlighted, `↵ pick alias · ⌥↓ more aliases · ⇥ drill · ⌥A add alias` on an alias row, `↵ insert ref · ⇥ drill` on a referenced block, `⇥ drill · ⌥A add alias` on Roam's page row, `↑ alias rows` / `↑ referenced` on Roam's first row, and leaves Ctrl-O and ↵ to Roam's own footer. It stays while the picker is open, so it never comes and goes while typing.
+- Hover tips (`helpTips`, on): rows, chips, the alias field, the previews, the hint items and the drill panel show what they are and their keys, drawn in the popover's colors inverted (Blueprint's tooltip look), light and dark, never over the text being edited.
+- Key list (`helpSheet`, on): ⌥/ (Alt+/) or the `?` at the end of the hint line lists every Burrow key, grouped Pick, Aliases, Drill, Preview, for the switches that are on; ⌥A and ⌥⌫ are named when off, with the switches that turn them on. It takes the popover's place; Esc or ⌥/ closes it, any other key closes it and goes on.
+- First-run line (`helpNudge`, on): the first picker ends its hint line with `⌥/ all keys ✕`, once; seen is stored in the extension settings (`helpNudgeSeen`).
+- `perf-gate --cold "[[query"`: first draws of a large page's row preview, one cold popup at a time. `gate-all --notes "<window>"` picks the notes window when two are open.
+- Live gates: refused aliases (no page created), an alias added and removed outside Burrow, the chip wheel at both ends and over chips that fit, the drill hint with and without blocks, the key list, the first-run line, the hover tips, ⌥/ with the key list off. `tools/shots.mjs` shoots every hint state, the key list, the first-run line and the tips (`--only` for some).
+
+### Fixed
+
+- The alias field refuses `#` anywhere (`issue #42`, and `C#` too: once another alias follows it, `#,` is a tag), `[ ]`, `(( ))`, `{{ }}`, `::`, commas and line breaks, with the reason in the field (`no #: Roam would make a tag`); nothing is written and no page is created. The page name in the field gives way so the typed text and the reason stay readable.
+- The chip line takes a vertical wheel only while it can still scroll that way; at either end, and over Burrow's rows, the wheel scrolls Roam's list. Horizontal swipes and Shift+wheel stay the browser's.
+- The hint line says ⇥ drill only when the highlighted page or block has children (and Tab then drills).
+- Row preview within the 4 ms budget: bounded reads (child ids, then only the blocks shown), idle slices of at most 3 ms, one element per line, no forced layout in the slice. svy, `((ant man` with Roam's preview open: p95 2.7 ms, max 3.2 ms (was 5.9 / 12 ms). `perf-gate --preview` now holds it to the budget.
+- Aliases edited outside Burrow (by hand, roam-aliases, an undo) reach the index within a quarter of a second: a pull watch on each alias page fires only on alias blocks, the aliases are re-read with one pull and swapped in (alias rows, drill-by-alias, `((` alias expansion), and an open popup re-ranks. Was: up to 60 s.
+
+### Changed
+
+- Aliases are read with a pull of the alias page's references (1–2 ms in svy) instead of a datalog query that held svy's main thread for 70 ms; Burrow's own ⌥A and Alt+Backspace refresh the aliases the same way instead of a full rebuild.
+- The previews take the pointer while hover tips are on: they scroll with the wheel, and a click on them does nothing (it used to fall through to the page).
+
 ## [0.4.0] - 2026-10-19
 
 ### Added
