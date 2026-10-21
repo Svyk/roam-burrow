@@ -21,6 +21,17 @@ export function keywordTitles(keyword = "Aliases") {
   return [...new Set([kw, lower, lower[0]?.toUpperCase() + lower.slice(1), kw.toUpperCase()])];
 }
 
+// One alias page's ALIAS_PULL result (src/indexes.js) as buildAliasIndex rows.
+export function aliasRowsFromPull(pulled) {
+  const rows = [];
+  for (const ref of pulled?.[":block/_refs"] || []) {
+    const page = ref[":block/page"];
+    const string = ref[":block/string"];
+    if (typeof string === "string" && page?.[":node/title"] != null && page[":block/uid"]) rows.push([string, page[":node/title"], page[":block/uid"]]);
+  }
+  return rows;
+}
+
 // rows: [blockString, pageTitle, pageUid]. One alias may name several pages;
 // each stays its own entry and Burrow never guesses between them.
 export function buildAliasIndex(rows, keyword) {

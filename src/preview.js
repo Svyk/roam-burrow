@@ -11,40 +11,54 @@ const WIDTH = 400;
 const MAX_HEIGHT = 300;
 export const DRILL_CLASS = "burrow-drill";
 
+// A reader for previewModel: { trail(uid), window(uid, from, size) -> { total,
+// kids }, indexOf(parentUid, uid) } (src/pagetree.js full / bounded). A plain
+// tree with children() and trail() (the unit tests) is adapted.
+const readerOf = (tree) => (tree.window ? tree : {
+  trail: (uid) => tree.trail(uid),
+  window(uid, from, size) { const kids = tree.children(uid); return { total: kids.length, kids: kids.slice(from, from + size) }; },
+  indexOf: (parentUid, uid) => tree.children(parentUid).findIndex((k) => k.uid === uid),
+});
+
 // model: { key, trail: [text], items: [{ text, depth, heading, target }] }
+// Reads only what it shows: 16 children per level, 24 siblings around the
+// target, so a page with thousands of blocks costs as much as a small one.
 export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
+  const read = readerOf(tree);
   const { page, target } = result;
-  const trailNodes = target ? tree.trail(target.uid) : [];
+  const trailNodes = target ? read.trail(target.uid) : [];
   const parentUid = trailNodes.length ? trailNodes[trailNodes.length - 1].uid : page.uid;
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
+  // kids === null: has children not read yet (or not known).
+  const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
-    const kids = levels > 1 ? tree.twoLevels(uid) : tree.children(uid);
-    for (const kid of kids.slice(0, CHILD_LIMIT)) {
+    const { total, kids } = read.window(uid, 0, CHILD_LIMIT);
+    for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
       items.push({ uid: kid.uid, text: text(kid.string || ""), depth, heading: kid.heading, target: false });
-      if (levels > 1 && kid.kids?.length) pushKids(kid.uid, depth + 1, levels - 1);
+      if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
-    if (kids.length > CHILD_LIMIT) items.push({ more: kids.length - CHILD_LIMIT, depth });
+    if (total > CHILD_LIMIT) items.push({ more: total - CHILD_LIMIT, depth });
   };
   if (!target) {
     pushKids(page.uid, 0, 2);
     return { key: `page:${page.uid}`, trail, items };
   }
-  const siblings = tree.children(parentUid);
-  let at = siblings.findIndex((s) => s.uid === target.uid);
-  if (at < 0) at = 0;
-  const from = Math.max(0, Math.min(at - Math.floor(SIBLING_WINDOW / 2), siblings.length - SIBLING_WINDOW));
+  const at = Math.max(0, read.indexOf(parentUid, target.uid));
+  const { total } = read.window(parentUid, 0, 0);
+  const from = Math.max(0, Math.min(at - Math.floor(SIBLING_WINDOW / 2), total - SIBLING_WINDOW));
+  const siblings = read.window(parentUid, from, SIBLING_WINDOW).kids;
   if (from > 0) items.push({ more: from, depth: 0 });
-  for (const sib of siblings.slice(from, from + SIBLING_WINDOW)) {
+  for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
     items.push({ uid: sib.uid, text: text(sib.string || ""), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
-  if (from + SIBLING_WINDOW < siblings.length) items.push({ more: siblings.length - from - SIBLING_WINDOW, depth: 0 });
+  if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
   if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
@@ -63,6 +77,9 @@ export function createPreview({ doc, win, lifecycle }) {
   let shownKey = null;
   let pop = null;
 
+  // One element per line (the bullet is CSS): in svy's theme every node a
+  // render adds costs style work, so the 0.4.0 three spans per line were
+  // most of a draw.
   function render(model) {
     trailNode.replaceChildren();
     model.trail.forEach((part, i) => {
@@ -80,23 +97,27 @@ export function createPreview({ doc, win, lifecycle }) {
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
-      const bullet = Object.assign(doc.createElement("span"), { className: "burrow-bullet" });
-      const body = Object.assign(doc.createElement("span"), { className: "burrow-body", textContent: item.text || " " });
-      row.append(bullet, body);
+      row.textContent = item.text || " ";
       return row;
     });
     outline.replaceChildren(...rows);
   }
 
-  function place(avoid, beside) {
+  // Docked over Roam's preview: the rect is read before the pane is written,
+  // so a draw at idle lays out no new nodes before the frame does.
+  function dockRect(beside) {
+    if (beside || !pop.classList.contains("rm-autocomplete__results--expanded")) return null;
     const native = pop.querySelector(".rm-autocomplete__preview");
-    if (!beside && native && pop.classList.contains("rm-autocomplete__results--expanded")) {
-      const r = native.getBoundingClientRect();
-      Object.assign(pane.style, { left: `${Math.round(r.left)}px`, top: `${Math.round(r.top)}px`,
-        width: `${Math.round(r.width)}px`, height: `${Math.round(r.height)}px`, maxHeight: "" });
-      pane.classList.add("burrow-preview-docked");
-      return;
-    }
+    return native ? native.getBoundingClientRect() : null;
+  }
+
+  function dock(r) {
+    Object.assign(pane.style, { left: `${Math.round(r.left)}px`, top: `${Math.round(r.top)}px`,
+      width: `${Math.round(r.width)}px`, height: `${Math.round(r.height)}px`, maxHeight: "" });
+    pane.classList.add("burrow-preview-docked");
+  }
+
+  function place(avoid, beside) {
     // Beside the popover where Roam's own preview would open: right, then
     // left, then below or above it, never over it.
     const r = beside || pop.getBoundingClientRect();
@@ -121,26 +142,45 @@ export function createPreview({ doc, win, lifecycle }) {
 
   function scrollToTarget() {
     const target = outline.querySelector(".burrow-target");
-    if (!target) { pane.scrollTop = 0; return; }
+    if (!target) { if (pane.scrollTop) pane.scrollTop = 0; return; }
     const top = target.offsetTop - trailNode.offsetHeight;
     const bottom = target.offsetTop + target.offsetHeight;
     if (top < pane.scrollTop) pane.scrollTop = Math.max(0, top - 4);
     else if (bottom > pane.scrollTop + pane.clientHeight) pane.scrollTop = bottom - pane.clientHeight + 4;
   }
 
+  // The scroll to the highlighted line reads layout, so a docked draw leaves
+  // it to the next frame, where layout runs anyway; `onFrame(ms)` gets its cost.
+  let scrollFrame = null;
+  const cancelScroll = () => { if (scrollFrame != null) { win.cancelAnimationFrame(scrollFrame); scrollFrame = null; } };
+  lifecycle.add(cancelScroll);
+
   return {
     node: pane,
-    show(model, popover, { avoid = null, beside = null } = {}) {
+    show(model, popover, { avoid = null, beside = null, onFrame = null } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
+      // The class can grow the popover (min-height), so it goes on before the read.
       if (!beside) pop.classList.add(DRILL_CLASS);
+      const docked = dockRect(beside);
       const changed = model.key !== shownKey || pane.hidden;
       if (model.key !== shownKey) { render(model); shownKey = model.key; }
       pane.hidden = false;
-      place(avoid, beside);
-      if (changed) scrollToTarget();
+      if (docked) dock(docked);
+      else place(avoid, beside);
+      if (!changed) return;
+      cancelScroll();
+      if (!docked) { scrollToTarget(); return; }
+      scrollFrame = win.requestAnimationFrame(() => {
+        scrollFrame = null;
+        if (pane.hidden || shownKey !== model.key) return;
+        const t0 = performance.now();
+        scrollToTarget();
+        onFrame?.(performance.now() - t0);
+      });
     },
     hide() {
+      cancelScroll();
       pane.hidden = true;
       shownKey = null;
       if (pop) pop.classList.remove(DRILL_CLASS);

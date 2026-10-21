@@ -1,0 +1,145 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { aliasRowsFromPull, buildAliasIndex } from "../src/aliases.js";
+import { ALIAS_PULL, createIndexes } from "../src/indexes.js";
+import { createLifecycle } from "../src/lifecycle.js";
+import { createPerf } from "../src/perf.js";
+import { buildRefIndex, refreshAliasKeys } from "../src/refindex.js";
+import { buildTitleIndex } from "../src/titles.js";
+
+// A graph with one alias page "Aliases" whose refs are `aliasBlocks`.
+function fakeApi() {
+  const graph = {
+    aliasBlocks: [{ uid: "a1", string: "Aliases:: lori, lorinator", page: { title: "Lori Boyd", uid: "LB" } }],
+    refs: [["r1", "met [[Lori Boyd]] today", 2, "Daily"], ["r2", "plain text", 1, "Daily"]],
+    titles: [["Lori Boyd", "LB"], ["Daily", "D"], ["Aliases", "AL"]],
+  };
+  const watches = [];
+  const calls = { q: 0, pull: 0 };
+  const api = {
+    graph,
+    watches,
+    calls,
+    pull(pattern, eid) {
+      calls.pull += 1;
+      const title = eid?.[1];
+      if (pattern === "[:db/id]") return title === "Aliases" ? { ":db/id": 1 } : null;
+      if (pattern === ALIAS_PULL) {
+        if (title !== "Aliases") return null;
+        return { ":block/_refs": graph.aliasBlocks.map((b) => ({ ":block/uid": b.uid, ":block/string": b.string, ":block/page": { ":node/title": b.page.title, ":block/uid": b.page.uid } })) };
+      }
+      return null;
+    },
+    data: {
+      fast: { q: () => [] },
+      async: {
+        fast: {
+          q: async (query) => {
+            calls.q += 1;
+            if (query.includes("(count ?r) ?pt")) return graph.refs;
+            if (query.includes("?t ?u")) return graph.titles;
+            if (query.includes("(count ?r)")) return [["LB", 526]];
+            return [];
+          },
+        },
+      },
+      addPullWatch: (pattern, entity, cb) => watches.push({ pattern, entity, cb }),
+      removePullWatch: (pattern, entity, cb) => { const i = watches.findIndex((w) => w.entity === entity && w.cb === cb); if (i >= 0) watches.splice(i, 1); },
+    },
+  };
+  return api;
+}
+
+const timers = () => {
+  const pending = new Set();
+  return {
+    setTimeout: (fn, ms) => { const t = { fn, ms }; pending.add(t); return t; },
+    clearTimeout: (t) => pending.delete(t),
+    flush() { for (const t of [...pending]) { pending.delete(t); t.fn(); } },
+    get size() { return pending.size; },
+  };
+};
+
+test("aliasRowsFromPull skips refs without a page (an orphan block)", () => {
+  const rows = aliasRowsFromPull({ ":block/_refs": [
+    { ":block/string": "Aliases:: a", ":block/page": { ":node/title": "P", ":block/uid": "p" } },
+    { ":block/string": "Aliases:: hunter" },
+  ] });
+  assert.deepEqual(rows, [["Aliases:: a", "P", "p"]]);
+  assert.deepEqual(aliasRowsFromPull(null), []);
+});
+
+test("an alias edited outside Burrow reaches the index through the watch, without a rebuild", async () => {
+  const api = fakeApi();
+  const lifecycle = createLifecycle();
+  const win = timers();
+  const settings = { aliasKeyword: "Aliases" };
+  const indexes = createIndexes({ api, perf: createPerf(), setting: (id) => settings[id], idle: (fn) => fn(), lifecycle, win });
+  await indexes.build();
+  const queries = api.calls.q;
+  assert.deepEqual(indexes.watched, ["Aliases"]);
+  assert.equal(api.watches.length, 1);
+  assert.equal(api.watches[0].entity, '[:node/title "Aliases"]');
+  assert.equal(indexes.titles.resolve("lorinator")?.uid, "LB");
+  let heard = 0;
+  indexes.listen(() => { heard += 1; });
+
+  // By hand: a new alias on the page; Roam's watch fires (several times in a burst).
+  api.graph.aliasBlocks[0].string = "Aliases:: lori, lorinator, lb";
+  api.watches[0].cb();
+  api.watches[0].cb();
+  assert.equal(win.size, 1, "a burst of edits coalesces into one refresh");
+  win.flush();
+  assert.equal(api.calls.q, queries, "no datalog query, no rebuild");
+  assert.equal(heard, 1);
+  assert.ok(indexes.aliases.entries.some((e) => e.alias === "lb"));
+  assert.equal(indexes.titles.resolve("lb")?.uid, "LB");
+  // The page's reference count is kept from the last build.
+  assert.equal(indexes.aliases.entries.find((e) => e.alias === "lb").refs, 526);
+  // (( alias expansion follows: the block linking Lori Boyd now carries the new alias.
+  assert.match(indexes.refs.byUid.get("r1").aliasKey.spaced, /\blb\b/);
+
+  // Removed (roam-aliases, an undo): gone from every index.
+  api.graph.aliasBlocks[0].string = "Aliases:: lori";
+  api.watches[0].cb();
+  win.flush();
+  assert.equal(indexes.titles.resolve("lorinator"), null);
+  assert.doesNotMatch(indexes.refs.byUid.get("r1").aliasKey.spaced, /lorinator/);
+
+  await lifecycle.dispose();
+  assert.equal(api.watches.length, 0, "the watch goes with the extension");
+});
+
+test("no alias row is listed twice when two spellings or blocks repeat a tuple", async () => {
+  const api = fakeApi();
+  api.graph.aliasBlocks.push({ uid: "a2", string: "Aliases:: lori, lorinator", page: { title: "Lori Boyd", uid: "LB" } });
+  const lifecycle = createLifecycle();
+  const indexes = createIndexes({ api, perf: createPerf(), setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win: timers() });
+  await indexes.build();
+  assert.deepEqual(indexes.aliases.entries.map((e) => e.alias), ["lori", "lorinator"]);
+  await lifecycle.dispose();
+});
+
+test("refreshAliasKeys re-keys only blocks whose linked pages' aliases changed", () => {
+  const index = buildRefIndex([["r1", "met [[P]]", 3, "D"], ["r2", "about #Q", 1, "D"], ["r3", "nothing", 1, "D"]], new Map([["P", ["pea"]]]));
+  assert.equal(index.byUid.get("r1").aliasKey.spaced, "pea");
+  assert.equal(index.byUid.get("r2").aliasKey, null);
+  index.prefilter = new Map([["x", []]]);
+  assert.equal(refreshAliasKeys(index, new Map([["P", ["pea"]], ["Q", ["queue"]]])), 1);
+  assert.equal(index.byUid.get("r2").aliasKey.spaced, "queue");
+  assert.ok(index.words.get("queue").includes(index.byUid.get("r2")));
+  assert.equal(index.prefilter, null, "cached prefilter sets are dropped");
+  assert.equal(refreshAliasKeys(index, new Map([["Q", ["queue"]]])), 1);
+  assert.equal(index.byUid.get("r1").aliasKey, null);
+  assert.equal(index.words.has("pea"), false);
+});
+
+test("titles.setAliases swaps the alias spellings alone", () => {
+  const titles = buildTitleIndex([["Lori Boyd", "LB"]], buildAliasIndex([["Aliases:: lori", "Lori Boyd", "LB"]]));
+  assert.equal(titles.resolve("lori")?.uid, "LB");
+  titles.setAliases(buildAliasIndex([["Aliases:: boyd", "Lori Boyd", "LB"]]));
+  assert.equal(titles.resolve("lori"), null);
+  assert.equal(titles.resolve("boyd")?.uid, "LB");
+  assert.equal(titles.resolve("Lori Boyd")?.uid, "LB");
+});

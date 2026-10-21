@@ -6,11 +6,11 @@ import { createRefSearch } from "./refsearch.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 
 let activeLifecycle = null;
 
-const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge"];
 
 function safeLocalStorage() {
   try { return globalThis.localStorage ?? null; } catch { return null; }
@@ -85,9 +85,9 @@ export async function onload({ extensionAPI, extension }) {
     });
     await syncRefCommand();
     if (api && globalThis.document) {
-      indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle) });
+      indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle), lifecycle, win: globalThis.window });
       const picks = createPickMemory({ storage: safeLocalStorage(), key: `burrow:picks:${api.graph?.name ?? "graph"}` });
-      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks });
+      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks, saveSetting: (id, value) => extensionAPI.settings.set(id, value) });
       refSearch = createRefSearch({ api, lifecycle, setting });
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();

@@ -36,8 +36,12 @@ test("validAlias trims and gives the exact reasons", () => {
   assert.deepEqual(validAlias("  Lori  "), { ok: true, alias: "Lori" });
   assert.deepEqual(validAlias("  "), { ok: false, reason: "type an alias" });
   assert.deepEqual(validAlias("a, b"), { ok: false, reason: "no commas: Roam splits aliases on them" });
-  for (const bad of ["a\nb", "[x]", "a]b", "a ((b", "a)) b"]) assert.deepEqual(validAlias(bad), { ok: false, reason: "no brackets or line breaks" }, bad);
-  assert.equal(validAlias("a (b) c").ok, true);
+  assert.deepEqual(validAlias("a\nb"), { ok: false, reason: "no line breaks" });
+  for (const bad of ["[x]", "a]b", "[[Page]]", "a [b"]) assert.deepEqual(validAlias(bad), { ok: false, reason: "no [ ]: Roam would make a link" }, bad);
+  for (const bad of ["a ((b", "a)) b", "((abcdefghi))"]) assert.deepEqual(validAlias(bad), { ok: false, reason: "no (( )): Roam would make a block ref" }, bad);
+  for (const bad of ["{{TODO}}", "a {{b", "a}} b"]) assert.deepEqual(validAlias(bad), { ok: false, reason: "no {{ }}: Roam would make a component" }, bad);
+  for (const bad of ["a::b", "Aliases:: x", "x ::"]) assert.deepEqual(validAlias(bad), { ok: false, reason: "no double colon: Roam would make an attribute" }, bad);
+  for (const ok of ["a (b) c", "a: b", "ratio 3:2", "a { b }", "a ( b ) c", "x^2", "**bold**", "@lori"]) assert.equal(validAlias(ok).ok, true, ok);
 });
 
 test("isAliasBlock reads the keyword without case", () => {
@@ -141,10 +145,26 @@ test("alias values live on the block's first line only", () => {
   assert.equal(removeAlias("Aliases:: a, b\nnote", "Aliases", "note"), null);
 });
 
-test("validAlias rejects # right before text", () => {
-  for (const a of ["#word", "  #word", "issue #42", "c#x", "a #b", "C#/F#"]) {
+test("validAlias refuses # anywhere in the alias", () => {
+  for (const a of ["#word", "  #word", "issue #42", "c#x", "a #b", "a #b c", "C#/F#", "C#", "C# lang", "F#", "#", "a # b", "#[[x]]"]) {
     assert.equal(validAlias(a).ok, false, a);
-    assert.equal(validAlias(a).reason, "no # right before text: Roam reads it as a tag", a);
+    assert.equal(validAlias(a).reason, "no #: Roam would make a tag", a);
   }
-  for (const a of ["C#", "C# lang", "F#", "a (b) c"]) assert.equal(validAlias(a).ok, true, a);
+});
+
+test("a valid alias can never make Roam link or create a page", () => {
+  // Every ref syntax Roam parses: tags, page links, block refs, components, attributes.
+  const refs = /#|\[\[|\]\]|\(\(|\)\)|\{\{|\}\}|::|\[[^\]]*\]\(/;
+  const parts = ["a", " ", "#", "[", "]", "(", ")", "{", "}", ":", ",", "x", "\n"];
+  let checked = 0;
+  for (const p of parts) for (const q of parts) for (const r of parts) {
+    const alias = `${p}${q}${r}`;
+    const v = validAlias(alias);
+    if (!v.ok) continue;
+    checked += 1;
+    // As written into the block, after another alias and before one.
+    const block = `Aliases:: one, ${v.alias}, two`;
+    assert.doesNotMatch(block.slice("Aliases::".length), refs, JSON.stringify(alias));
+  }
+  assert.ok(checked > 100);
 });

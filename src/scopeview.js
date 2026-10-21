@@ -17,6 +17,15 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
   list.className = "burrow-scope-list";
   const hintsLine = doc.createElement("div");
   hintsLine.className = "burrow-scope-hints";
+  const hintsList = doc.createElement("span");
+  hintsList.className = "burrow-hints-list";
+  const helpButton = doc.createElement("span");
+  helpButton.className = "burrow-help-button";
+  helpButton.setAttribute("role", "button");
+  helpButton.setAttribute("aria-keyshortcuts", "Alt+/");
+  helpButton.setAttribute("aria-label", `Burrow keys (${keyLabel("altSlash")})`);
+  helpButton.textContent = "?";
+  hintsLine.append(hintsList, helpButton);
   node.append(crumb, list, hintsLine);
   lifecycle.node(node, doc.body);
   let listKey = null;
@@ -78,21 +87,29 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
   }
 
   let hintsShown = null;
-  function renderHints(scope, on) {
+  let hintItems = [];
+  function renderHints(scope, on, help) {
     hintsLine.hidden = !on;
+    helpButton.hidden = !help;
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
     const active = scope.rows[level.active];
     const items = [];
-    if (active?.drillable) items.push(["⇥/>", "drill"]);
-    items.push(["⇧⇥", "back"], [keyLabel("ctrlO"), "preview"], ["↵", active?.more != null ? "more" : "insert"], ["esc", "results"]);
+    if (active?.drillable) items.push(["⇥/>", "drill", "Go into the highlighted block: its children are listed here"]);
+    items.push(
+      ["⇧⇥", "back", "One level back (Backspace on an empty filter too); from the first level, back to the results"],
+      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
+      ["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"],
+      ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
+    );
     const key = hintsKey(items);
     if (key === hintsShown) return;
     hintsShown = key;
-    paintHints(doc, hintsLine, items);
+    hintItems = items;
+    paintHints(doc, hintsList, items);
   }
 
-  function paintActive(scope, hintsOn) {
+  function paintActive(scope, hintsOn, helpOn = false) {
     const level = scope.levels[scope.levels.length - 1];
     list.querySelectorAll(".burrow-row").forEach((item, i) => {
       const on = i === level.active;
@@ -100,7 +117,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
       item.setAttribute("aria-selected", String(on));
       if (on) item.scrollIntoView?.({ block: "nearest" });
     });
-    renderHints(scope, hintsOn);
+    renderHints(scope, hintsOn, helpOn);
   }
 
   // anchor: the rect the panel takes over; below: the popover opens under the
@@ -120,12 +137,13 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
 
   return {
     node,
-    show(scope, hintsOn) {
+    show(scope, hintsOn, helpOn = false) {
       renderCrumb(scope);
       renderList(scope);
       node.hidden = false;
-      paintActive(scope, hintsOn);
+      paintActive(scope, hintsOn, helpOn);
     },
+    get hintItems() { return hintItems; },
     paintActive,
     place,
     hide() {

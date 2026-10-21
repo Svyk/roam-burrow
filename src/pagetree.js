@@ -18,11 +18,22 @@ const HEADING = "[:block/uid :block/string :block/heading :block/order]";
 
 // A DFS for "first heading in the outline" stops after this many nodes.
 const FIRST_SCAN_LIMIT = 3000;
+// Bounded reads for the row preview: a node's children in outline order as
+// ids only (about 8 µs per child), then one small pull per child it shows,
+// whose `limit` keeps a child with thousands of children as cheap as a leaf.
+const SLOTS = "[{:block/children [:db/id :block/order]}]";
+const BRIEF = "[:block/uid :block/string :block/heading :block/order {(limit :block/children 1) [:db/id]}]";
+const EID = "[:db/id]";
+// Thrown by a bounded reader when its time slice is used up before a read.
+export const PAUSE = Symbol("burrow-preview-pause");
 
 export function createTreeSource({ pull, q, onFetch }) {
   const nodes = new Map();
   const headingsByPage = new Map();
   const trails = new Map();
+  const slots = new Map();
+  const byEid = new Map();
+  const eids = new Map();
 
   const node = (raw) => {
     const uid = raw[":block/uid"];
@@ -124,14 +135,73 @@ export function createTreeSource({ pull, q, onFetch }) {
     })[0];
   }
 
+  // The reader previewModel walks (src/preview.js). Full: the drill reads
+  // above (whole levels, two at a time). Bounded: ids, then only the shown
+  // children; before each read that is not cached it asks `expired()`, and
+  // throws PAUSE when the slice is used up, so the caller can go on in a
+  // later task with everything read so far kept.
+  const full = {
+    trail,
+    window(uid, from, size) {
+      const kids = children(uid);
+      return { total: kids.length, kids: kids.slice(from, from + size) };
+    },
+    indexOf(parentUid, uid) { return children(parentUid).findIndex((k) => k.uid === uid); },
+  };
+
+  function bounded(expired = () => false) {
+    const read = (fn) => { if (expired()) throw PAUSE; onFetch?.("pull"); return fn(); };
+    const slotIds = (uid) => {
+      if (!slots.has(uid)) {
+        const raw = read(() => pull(SLOTS, [":block/uid", uid]));
+        slots.set(uid, [...(raw?.[":block/children"] || [])].sort((a, b) => (a[":block/order"] ?? 0) - (b[":block/order"] ?? 0)).map((k) => k[":db/id"]));
+      }
+      return slots.get(uid);
+    };
+    const brief = (eid) => {
+      if (!byEid.has(eid)) {
+        const raw = read(() => pull(BRIEF, eid));
+        const n = raw?.[":block/uid"] ? node(raw) : null;
+        if (n && !Array.isArray(n.kids) && !raw[":block/children"]?.length) n.kids = [];
+        if (n) eids.set(n.uid, eid);
+        byEid.set(eid, n);
+      }
+      return byEid.get(eid);
+    };
+    const eidOf = (uid) => {
+      if (!eids.has(uid)) eids.set(uid, read(() => pull(EID, [":block/uid", uid]))?.[":db/id"] ?? null);
+      return eids.get(uid);
+    };
+    return {
+      trail(uid) {
+        if (!trails.has(uid) && expired()) throw PAUSE;
+        return trail(uid);
+      },
+      window(uid, from, size) {
+        const known = nodes.get(uid)?.kids;
+        if (Array.isArray(known)) return { total: known.length, kids: known.slice(from, from + size) };
+        const ids = slotIds(uid);
+        return { total: ids.length, kids: ids.slice(from, from + size).map(brief).filter(Boolean) };
+      },
+      indexOf(parentUid, uid) {
+        const known = nodes.get(parentUid)?.kids;
+        if (Array.isArray(known)) return known.findIndex((k) => k.uid === uid);
+        const ids = slotIds(parentUid);
+        return ids.indexOf(eidOf(uid));
+      },
+    };
+  }
+
   return {
     children,
     twoLevels,
     headings,
     trail,
     first,
+    full,
+    bounded,
     get: (uid) => nodes.get(uid) || null,
-    clear() { nodes.clear(); headingsByPage.clear(); trails.clear(); },
+    clear() { nodes.clear(); headingsByPage.clear(); trails.clear(); slots.clear(); byEid.clear(); eids.clear(); },
     get size() { return nodes.size; },
   };
 }
