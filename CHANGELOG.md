@@ -21,7 +21,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 - The chip line takes a vertical wheel only while it can still scroll that way; at either end, and over Burrow's rows, the wheel scrolls Roam's list. Horizontal swipes and Shift+wheel stay the browser's.
 - The hint line says ⇥ drill only when the highlighted page or block has children (and Tab then drills).
 - Row preview within the 4 ms budget: bounded reads (child ids, then only the blocks shown), idle slices of at most 3 ms, one element per line, no forced layout in the slice. svy, `((ant man` with Roam's preview open: p95 2.7 ms, max 3.2 ms (was 5.9 / 12 ms). `perf-gate --preview` now holds it to the budget.
-- Aliases edited outside Burrow (by hand, roam-aliases, an undo) reach the index within a quarter of a second: a pull watch on each alias page fires only on alias blocks, the aliases are re-read with one pull and swapped in (alias rows, drill-by-alias, `((` alias expansion), and an open popup re-ranks. Was: up to 60 s.
+- Aliases edited outside Burrow (by hand, roam-aliases, an undo) reach the index in under half a second (0.37–0.39 s measured in svy and notes): a pull watch on each alias page fires only on alias blocks, the aliases are re-read with one pull and swapped in (alias rows, drill-by-alias, `((` alias expansion), and an open popup re-ranks. Was: up to 60 s.
 
 ### Changed
 
