@@ -503,7 +503,7 @@ async function runKeys(keys, snaps = []) {
     else if (k.startsWith("hover:")) {
       const point = await centerOf(k.slice(6), null);
       if (!point) misses.push(`missing hover target: ${k}`);
-      else await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x, y: point.y });
+      else for (const dx of [-20, 0]) await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: point.x + dx, y: point.y });
     } else if (k === "mouse-away") await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
     else if (k.startsWith("outside-alias:")) await setAliasBlock(c, fx.chipsAliasUid, k.slice(14));
     else if (k === "ctrl+o") await ctrlO();

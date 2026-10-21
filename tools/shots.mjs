@@ -182,7 +182,9 @@ async function runKeys(keys) {
     else if (k === "alt+slash") await altSlash();
     else if (k.startsWith("hover:")) {
       const p = await point(k.slice(6), null);
-      if (p) await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y });
+      // From a little to the left, as a hand would come: a jump onto a node
+      // that just appeared under a still pointer may fire no mouseover.
+      if (p) for (const dx of [-20, 0]) await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x + dx, y: p.y });
     }
     else if (k.startsWith("wheel:chips:")) {
       const p = await point(".burrow-chips", null);
