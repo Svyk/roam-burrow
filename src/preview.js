@@ -155,22 +155,35 @@ export function createPreview({ doc, win, lifecycle }) {
   const cancelScroll = () => { if (scrollFrame != null) { win.cancelAnimationFrame(scrollFrame); scrollFrame = null; } };
   lifecycle.add(cancelScroll);
 
+  // Content written by fill() that show() has not placed and scrolled yet.
+  let filled = false;
   return {
     node: pane,
-    show(model, popover, { avoid = null, beside = null, onFrame = null } = {}) {
+    // The model's lines only, no layout read: show() places them (in a frame).
+    fill(model, popover) {
+      if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
+      pop = popover;
+      if (model.key === shownKey) return;
+      render(model);
+      shownKey = model.key;
+      filled = true;
+    },
+    // inFrame: called from a frame callback, so the scroll runs now, in this frame.
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       // The class can grow the popover (min-height), so it goes on before the read.
       if (!beside) pop.classList.add(DRILL_CLASS);
       const docked = dockRect(beside);
-      const changed = model.key !== shownKey || pane.hidden;
+      const changed = model.key !== shownKey || pane.hidden || filled;
+      filled = false;
       if (model.key !== shownKey) { render(model); shownKey = model.key; }
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);
       if (!changed) return;
       cancelScroll();
-      if (!docked) { scrollToTarget(); return; }
+      if (!docked || inFrame) { scrollToTarget(); return; }
       scrollFrame = win.requestAnimationFrame(() => {
         scrollFrame = null;
         if (pane.hidden || shownKey !== model.key) return;
@@ -183,6 +196,7 @@ export function createPreview({ doc, win, lifecycle }) {
       cancelScroll();
       pane.hidden = true;
       shownKey = null;
+      filled = false;
       if (pop) pop.classList.remove(DRILL_CLASS);
       pop = null;
     },

@@ -459,7 +459,7 @@ function startRefIndex(rows) {
   for (const [uid, string, refs, page] of rows || []) {
     byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0, page: page ?? null });
   }
-  return { entries: [...byUid.values()], byUid, words: /* @__PURE__ */ new Map(), builtAt: Date.now() };
+  return { entries: [...byUid.values()], byUid, words: /* @__PURE__ */ new Map(), byLinked: /* @__PURE__ */ new Map(), builtAt: Date.now() };
 }
 function keyEntry(entry, index, aliasesByPage) {
   const { byUid } = index;
@@ -474,6 +474,11 @@ function keyEntry(entry, index, aliasesByPage) {
   entry.pureQuote = quotes.length === 1 && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, "")) ? quotes[0] : null;
   const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
+  for (const title of new Set(linked)) {
+    const list = index.byLinked.get(title);
+    if (list) list.push(entry);
+    else index.byLinked.set(title, [entry]);
+  }
   entry.aliasKey = aliasKeyOf(entry, aliasesByPage);
   if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
     const seen = new Set(entry.aliasKey ? entry.key.tokens.concat(entry.aliasKey.tokens) : entry.key.tokens);
@@ -511,7 +516,10 @@ function aliasKeyTargets(index, aliasesByPage, previousByPage = null) {
     for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
     if (!pages.size) return [];
   }
-  return index.entries.filter((entry) => entry.linked && (!pages || entry.linked.some((title) => pages.has(title))));
+  if (!pages) return index.entries.filter((entry) => entry.linked);
+  const out = /* @__PURE__ */ new Set();
+  for (const title of pages) for (const entry of index.byLinked.get(title) || []) out.add(entry);
+  return [...out];
 }
 function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => false, keys = /* @__PURE__ */ new Map() } = {}) {
   let at = from;
@@ -2035,14 +2043,26 @@ function createPreview({ doc, win, lifecycle }) {
     }
   };
   lifecycle.add(cancelScroll);
+  let filled = false;
   return {
     node: pane,
-    show(model, popover, { avoid = null, beside = null, onFrame = null } = {}) {
+    // The model's lines only, no layout read: show() places them (in a frame).
+    fill(model, popover) {
+      if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
+      pop = popover;
+      if (model.key === shownKey) return;
+      render(model);
+      shownKey = model.key;
+      filled = true;
+    },
+    // inFrame: called from a frame callback, so the scroll runs now, in this frame.
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       if (!beside) pop.classList.add(DRILL_CLASS);
       const docked = dockRect(beside);
-      const changed = model.key !== shownKey || pane.hidden;
+      const changed = model.key !== shownKey || pane.hidden || filled;
+      filled = false;
       if (model.key !== shownKey) {
         render(model);
         shownKey = model.key;
@@ -2052,7 +2072,7 @@ function createPreview({ doc, win, lifecycle }) {
       else place(avoid, beside);
       if (!changed) return;
       cancelScroll();
-      if (!docked) {
+      if (!docked || inFrame) {
         scrollToTarget();
         return;
       }
@@ -2068,6 +2088,7 @@ function createPreview({ doc, win, lifecycle }) {
       cancelScroll();
       pane.hidden = true;
       shownKey = null;
+      filled = false;
       if (pop) pop.classList.remove(DRILL_CLASS);
       pop = null;
     }
@@ -2738,12 +2759,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       if (model?.drillKey !== st.drill.key) {
         model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
-      } else if (!preview.node.hidden) {
+      }
+      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
+      else {
+        preview.fill(model, st.pop);
         redock = true;
         requestPlace();
-        return;
       }
-      preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
       return;
     }
     const row = previewTarget();
@@ -2756,13 +2778,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         return;
       }
       cancelRowPreview();
-      if (model?.drillKey?.startsWith("row:") !== true) preview.hide();
+      if (model?.drillKey?.startsWith("row:") !== true) hidePreview();
       rowPreviewKey = row.key;
       scheduleRowPreview(row);
       return;
     }
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
   }
   function scheduleRowPreview(row) {
     const run = () => {
@@ -3003,7 +3025,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     chipsNode.remove();
     chipsFor = null;
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
   function clearPopover() {
@@ -3019,7 +3041,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     chipsFor = null;
     hints.hidden = true;
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     clearPopover();
   }
   function foldedByRow(item, rows) {
@@ -3129,6 +3151,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   let inFrame = false;
   let placeId = null;
   let redock = false;
+  function hidePreview() {
+    redock = false;
+    preview.hide();
+  }
   const inFrameDo = (fn) => {
     inFrame = true;
     try {
@@ -3158,7 +3184,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const t0 = performance.now();
     if (redock) {
       redock = false;
-      if (model && !preview.node.hidden) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect() });
+      if (model) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
     }
     if (!strip.hidden || hintsLine) {
       const rect = listColumn(pop).getBoundingClientRect();
@@ -3264,7 +3290,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     hints.hidden = true;
     hintsFor = null;
     clearPopover();
@@ -3773,7 +3799,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     strip.hidden = true;
     chipsNode.remove();
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
     hints.hidden = true;

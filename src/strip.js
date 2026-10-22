@@ -342,8 +342,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       if (model?.drillKey !== st.drill.key) {
         model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
-      } else if (!preview.node.hidden) { redock = true; requestPlace(); return; }
-      preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+      }
+      // The lines now; their place (a layout read) in the frame.
+      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
+      else { preview.fill(model, st.pop); redock = true; requestPlace(); }
       return;
     }
     const row = previewTarget();
@@ -355,13 +357,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       // The pane keeps the last row's outline until this one is drawn, so
       // moving between Burrow's rows does not flash it (or resize Roam's popover).
       cancelRowPreview();
-      if (model?.drillKey?.startsWith("row:") !== true) preview.hide();
+      if (model?.drillKey?.startsWith("row:") !== true) hidePreview();
       rowPreviewKey = row.key;
       scheduleRowPreview(row);
       return;
     }
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
   }
 
   // Drawn at idle, after the strip, like Roam's own preview a moment later:
@@ -628,7 +630,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsNode.remove();
     chipsFor = null;
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
 
@@ -647,7 +649,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsFor = null;
     hints.hidden = true;
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     clearPopover();
   }
 
@@ -666,7 +668,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         || (chips && row.aliases.some((a) => a === alias || a.toLowerCase() === lower))));
   }
 
-  // Classes only; layoutPop() reads geometry once after every write.
+  // Classes only; the geometry read is placePanes', in a frame.
   function syncPanes(rows) {
     const pop = st.pop;
     if (!pop) return;
@@ -776,6 +778,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   let inFrame = false;
   let placeId = null;
   let redock = false;
+  // A hidden preview stays hidden: no place pending for it.
+  function hidePreview() { redock = false; preview.hide(); }
   const inFrameDo = (fn) => { inFrame = true; try { fn(); } finally { inFrame = false; } };
   function requestPlace() {
     if (inFrame) { placePanes(); return; }
@@ -790,7 +794,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     // An unchanged preview follows the popover (src/preview.js reads before it writes).
     if (redock) {
       redock = false;
-      if (model && !preview.node.hidden) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect() });
+      if (model) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
     }
     if (!strip.hidden || hintsLine) {
       const rect = listColumn(pop).getBoundingClientRect();
@@ -911,7 +915,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     hints.hidden = true;
     hintsFor = null;
     clearPopover();
@@ -1381,7 +1385,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.hidden = true;
     chipsNode.remove();
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
     hints.hidden = true;

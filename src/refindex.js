@@ -35,7 +35,7 @@ function startRefIndex(rows) {
   for (const [uid, string, refs, page] of rows || []) {
     byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0, page: page ?? null });
   }
-  return { entries: [...byUid.values()], byUid, words: new Map(), builtAt: Date.now() };
+  return { entries: [...byUid.values()], byUid, words: new Map(), byLinked: new Map(), builtAt: Date.now() };
 }
 
 function keyEntry(entry, index, aliasesByPage) {
@@ -55,6 +55,12 @@ function keyEntry(entry, index, aliasesByPage) {
   // The pages it links, kept so an alias edit can re-key it (refreshAliasKeys).
   const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
+  // Page title -> the blocks that link it, for aliasKeyTargets.
+  for (const title of new Set(linked)) {
+    const list = index.byLinked.get(title);
+    if (list) list.push(entry);
+    else index.byLinked.set(title, [entry]);
+  }
   entry.aliasKey = aliasKeyOf(entry, aliasesByPage);
   // Word -> entries, for the recall pass (it needs one exact word).
   if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
@@ -102,7 +108,10 @@ export function aliasKeyTargets(index, aliasesByPage, previousByPage = null) {
     for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
     if (!pages.size) return [];
   }
-  return index.entries.filter((entry) => entry.linked && (!pages || entry.linked.some((title) => pages.has(title))));
+  if (!pages) return index.entries.filter((entry) => entry.linked);
+  const out = new Set();
+  for (const title of pages) for (const entry of index.byLinked.get(title) || []) out.add(entry);
+  return [...out];
 }
 
 // Gives entries[from..] their alias key from aliasesByPage until stop()
