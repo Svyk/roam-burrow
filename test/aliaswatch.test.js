@@ -111,6 +111,28 @@ test("an alias edited outside Burrow reaches the index through the watch, withou
   assert.equal(api.watches.length, 0, "the watch goes with the extension");
 });
 
+test("a watch firing with the aliases unchanged reads them and swaps nothing", async () => {
+  const api = fakeApi();
+  const lifecycle = createLifecycle();
+  const win = timers();
+  const perf = createPerf();
+  const indexes = createIndexes({ api, perf, setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win });
+  await indexes.build();
+  const before = indexes.aliases;
+  let heard = 0;
+  indexes.listen(() => { heard += 1; });
+  api.watches[0].cb();
+  win.flush();
+  assert.equal(indexes.aliases, before, "same rows: the index is kept");
+  assert.equal(heard, 0, "and no popup re-ranks");
+  assert.equal(perf.counters.aliasRefreshes || 0, 0);
+  // perf-gate's forced refresh swaps anyway.
+  indexes.refreshAliases({ force: true });
+  assert.notEqual(indexes.aliases, before);
+  assert.equal(heard, 1);
+  await lifecycle.dispose();
+});
+
 test("no alias row is listed twice when two spellings or blocks repeat a tuple", async () => {
   const api = fakeApi();
   api.graph.aliasBlocks.push({ uid: "a2", string: "Aliases:: lori, lorinator", page: { title: "Lori Boyd", uid: "LB" } });
@@ -133,6 +155,50 @@ test("refreshAliasKeys re-keys only blocks whose linked pages' aliases changed",
   assert.equal(refreshAliasKeys(index, new Map([["Q", ["queue"]]])), 1);
   assert.equal(index.byUid.get("r1").aliasKey, null);
   assert.equal(index.words.has("pea"), false);
+});
+
+test("refreshAliasKeys with the previous map touches only the changed pages' blocks", () => {
+  const before = new Map([["P", ["pea"]], ["R", ["arr"]]]);
+  const index = buildRefIndex([["r1", "met [[P]]", 3, "D"], ["r2", "about [[R]]", 1, "D"]], before);
+  // A key no rebuild would write: it stays only if r2 is never looked at.
+  const marker = index.byUid.get("r2").aliasKey;
+  marker.marked = true;
+  index.prefilter = new Map();
+  assert.equal(refreshAliasKeys(index, new Map(before), before), 0, "nothing changed: nothing re-keyed");
+  assert.notEqual(index.prefilter, null, "and the prefilter cache is kept");
+  const after = new Map([["P", ["pea", "pod"]], ["R", ["arr"]]]);
+  assert.equal(refreshAliasKeys(index, after, before), 1);
+  assert.equal(index.byUid.get("r1").aliasKey.spaced, "pea pod");
+  assert.equal(index.byUid.get("r2").aliasKey.marked, true, "R's blocks were not touched");
+  // A page that lost all its aliases counts as changed.
+  assert.equal(refreshAliasKeys(index, new Map([["R", ["arr"]]]), after), 1);
+  assert.equal(index.byUid.get("r1").aliasKey, null);
+});
+
+test("an alias page created after the build is watched from the next popup", async () => {
+  const api = fakeApi();
+  let exists = false;
+  const pull = api.pull;
+  api.pull = (pattern, eid) => (!exists && eid?.[1] === "Aliases" ? null : pull(pattern, eid));
+  const lifecycle = createLifecycle();
+  const win = timers();
+  const indexes = createIndexes({ api, perf: createPerf(), setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win });
+  await indexes.build();
+  assert.deepEqual(indexes.watched, []);
+  assert.equal(indexes.titles.resolve("lorinator"), null);
+  const queries = api.calls.q;
+  indexes.refreshIfStale();
+  assert.equal(win.size, 0, "still no alias page: nothing to read");
+  // The first alias typed by hand creates the page.
+  exists = true;
+  indexes.refreshIfStale();
+  assert.deepEqual(indexes.watched, ["Aliases"]);
+  win.flush();
+  assert.equal(indexes.titles.resolve("lorinator")?.uid, "LB");
+  assert.equal(api.calls.q, queries, "read by the pull, no rebuild");
+  indexes.refreshIfStale();
+  assert.equal(win.size, 0, "watched already: the next popup reads nothing");
+  await lifecycle.dispose();
 });
 
 test("titles.setAliases swaps the alias spellings alone", () => {

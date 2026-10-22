@@ -14,6 +14,12 @@ export function keyLabel(name, mac = IS_MAC) {
   return pair ? pair[mac ? 0 : 1] : name;
 }
 
+// ⌥/ by the character, not the key's position: on a mac ⌥/ types ÷ (⌥⇧/ ¿),
+// elsewhere Alt+/ keeps the /. On a layout where the US / position holds
+// another key (German -), ⌥ with that key still types its own character.
+const ALT_SLASH = new Set(["/", "÷", "?", "¿"]);
+export const isAltSlash = (e) => e.altKey && !e.ctrlKey && !e.metaKey && ALT_SLASH.has(e.key);
+
 export function hintsKey(items) {
   return items.map(([keys, label]) => `${keys}\u0000${label}`).join("\u0001");
 }

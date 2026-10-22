@@ -3,7 +3,7 @@ import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js"
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
 import { createHelpSheet, helpGroups } from "./help.js";
-import { hintsKey, keyLabel, pickerHints, renderHints } from "./hints.js";
+import { hintsKey, isAltSlash, keyLabel, pickerHints, renderHints } from "./hints.js";
 import { createTreeSource, PAUSE } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { rankRefs } from "./refindex.js";
@@ -742,9 +742,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const pop = st.pop;
     if (!pop) return;
     const list = setting("keyHints") ? hintList() : [];
-    // While the popup is open the line stays (with the ? at least), so it
-    // never comes and goes under the typing.
-    const line = setting("keyHints") && st.phase !== "SCOPE" && !st.help && Boolean(st.token) && (list.length > 0 || setting("helpSheet"));
+    // While the popup is open the line stays, even with nothing to name for
+    // the highlighted row and the key list off, so it never comes and goes
+    // under the typing.
+    const line = setting("keyHints") && st.phase !== "SCOPE" && !st.help && Boolean(st.token);
     if (!line) {
       hints.hidden = true;
       hintsFor = null;
@@ -774,8 +775,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   let hintItems = [];
 
   // ---- key list (⌥/ or the ?) ----
-
-  const isAltSlash = (e) => e.altKey && !e.ctrlKey && !e.metaKey && e.code === "Slash";
 
   function openHelp() {
     if (!st.pop || !setting("helpSheet")) return false;
@@ -1286,14 +1285,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // scrolls (src/wheel.js).
   function onStripWheel(event) {
     const overChips = chipsNode.isConnected && chipsNode.contains(event.target);
-    const plan = wheelPlan(event, overChips ? { left: chipsNode.scrollLeft, max: chipsNode.scrollWidth - chipsNode.clientWidth } : null);
+    const list = st.pop?.querySelector(".rm-autocomplete__results-scroll");
+    const plan = wheelPlan(event,
+      overChips ? { left: chipsNode.scrollLeft, max: chipsNode.scrollWidth - chipsNode.clientWidth } : null,
+      list ? { top: list.scrollTop, max: list.scrollHeight - list.clientHeight } : null);
     trace({ ev: "wheel", to: plan.to });
     if (plan.to === "chips") {
       chipsNode.scrollLeft = plan.left;
       event.preventDefault();
     } else if (plan.to === "list") {
-      const list = st.pop?.querySelector(".rm-autocomplete__results-scroll");
-      if (!list) return;
       list.scrollTop += plan.by;
       event.preventDefault();
     }

@@ -81,12 +81,23 @@ function addWord(index, word, entry) {
 
 // An alias block changed (Burrow's watch on the alias pages): re-key only the
 // blocks that link a page whose aliases differ now, so (( alias expansion
-// follows without a rebuild. Returns how many blocks changed.
-export function refreshAliasKeys(index, aliasesByPage) {
+// follows without a rebuild. Given the previous map, only blocks that link a
+// page whose aliases changed are looked at, not every linking block (4,400 in
+// svy). Returns how many blocks changed.
+export function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
   if (!index) return 0;
+  let pages = null;
+  if (previousByPage) {
+    pages = new Set();
+    const same = (title) => (previousByPage.get(title) || []).join("\u0000") === (aliasesByPage.get(title) || []).join("\u0000");
+    for (const title of previousByPage.keys()) if (!same(title)) pages.add(title);
+    for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
+    if (!pages.size) return 0;
+  }
   let changed = 0;
   for (const entry of index.entries) {
     if (!entry.linked) continue;
+    if (pages && !entry.linked.some((title) => pages.has(title))) continue;
     const next = aliasKeyOf(entry, aliasesByPage);
     if ((next?.spaced ?? null) === (entry.aliasKey?.spaced ?? null)) continue;
     if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {

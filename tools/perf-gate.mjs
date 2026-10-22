@@ -12,6 +12,10 @@
 // --preview: Roam's preview open, so Burrow's selected row draws its own
 // preview at idle; every idle slice of that draw is a "preview" sample and its
 // p95 is held to the same 4 ms budget.
+// With Burrow on, every run also times the alias refresh an alias edit outside
+// Burrow sets off (src/indexes.js refreshAliases; read only, 8 refreshes 250
+// ms apart, as the watch's settle spaces them): the p95 of each of its two
+// idle tasks is held to 4 ms too.
 // --cold "[[plexus": first draws only. Opens that popup --runs x 4 times with
 // Roam's preview open (each popup starts with nothing read), selects the alias
 // row and times every slice of its preview draw and the time until it shows.
@@ -119,6 +123,26 @@ async function endRun() {
     };
   });
 }
+
+// What an alias edit outside Burrow costs: the refresh its watch runs, two
+// idle tasks (the read, then the swap, forced here: nothing changed).
+const timeAliasRefresh = () => c.evaluate(async () => {
+  const perf = window.__BURROW_PERF;
+  const read = [];
+  const swap = [];
+  for (let i = 0; i < 8; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const n = perf.counters.aliasRefreshes || 0;
+    const r0 = perf.samples.aliasRead?.length || 0;
+    const s0 = perf.samples.aliasRefresh?.length || 0;
+    window.__BURROW.indexes.refreshAliases({ force: true });
+    const t0 = performance.now();
+    while ((perf.counters.aliasRefreshes || 0) === n && performance.now() - t0 < 5000) await new Promise((resolve) => setTimeout(resolve, 10));
+    read.push(...(perf.samples.aliasRead || []).slice(r0));
+    swap.push(...(perf.samples.aliasRefresh || []).slice(s0));
+  }
+  return { read, swap };
+});
 
 const isExpanded = () => c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results--expanded")));
 const ctrlO = async () => {
@@ -266,6 +290,7 @@ try {
       // The preview is checked before the last Backspaces close it.
       const r = await endRun();
       r.aborted = await guardReport(c);
+      if (arm === "on") r.aliasRefresh = await timeAliasRefresh();
       await c.key("Escape");
       await sleep(300);
       // Roam saved the typed `[[…]]` on Escape; empty the block so a page it
@@ -282,6 +307,8 @@ try {
         burrowP50: pct(r.burrowInput, 0.5), burrowP95: pct(r.burrowInput, 0.95), burrowMax: pct(r.burrowInput, 1),
         renderP95: pct(r.burrowRender, 0.95), previewP95: r.preview?.p95 ?? null, previewMax: r.preview?.max ?? null, previewSamples: r.preview?.n ?? 0, burrowSamples: r.burrowInput?.length ?? 0,
         kidChecks: r.kidChecks,
+        aliasReadP95: pct(r.aliasRefresh?.read, 0.95), aliasSwapP95: pct(r.aliasRefresh?.swap, 0.95),
+        aliasRefreshMax: pct([...(r.aliasRefresh?.read || []), ...(r.aliasRefresh?.swap || [])], 1),
         queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
         pagesDeleted: r.pages?.deleted,
       });
@@ -305,6 +332,9 @@ report.summary = {
   previewP95: by("on", "previewP95"),
   previewMax: by("on", "previewMax"),
   kidChecks: by("on", "kidChecks"),
+  aliasReadP95: by("on", "aliasReadP95"),
+  aliasSwapP95: by("on", "aliasSwapP95"),
+  aliasRefreshMax: by("on", "aliasRefreshMax"),
   queriesPerKey: by("on", "queriesDuringRun"),
 };
 // Budget (spec §6): Burrow JS <= 4 ms p95 per input, input-to-paint p95
@@ -328,6 +358,8 @@ const verdict = {
   burrowP95Max: Math.max(...report.summary.burrowP95),
   // The row preview's idle slices: the same 4 ms budget (spec §14).
   previewP95Max: previews.length ? Math.max(...previews) : null,
+  // The alias refresh after an outside edit: one idle task, same budget.
+  aliasRefreshP95Max: Math.max(...report.summary.aliasReadP95, ...report.summary.aliasSwapP95),
   paintP50Delta: +median(report.summary.paintP50Deltas).toFixed(2),
   paintP95Delta: +median(report.summary.paintP95Deltas).toFixed(2),
   queries: Math.max(...report.summary.queriesPerKey),
@@ -338,6 +370,7 @@ const verdict = {
 verdict.emptyRuns = report.results.filter((r) => !r.keys || (r.arm === "on" && !r.burrowSamples)).length
   + Math.max(0, runs * 2 - report.results.length);
 verdict.pass = !report.error && verdict.emptyRuns === 0 && verdict.burrowP95Max <= 4 && verdict.paintP95Delta <= 5 && verdict.queries === 0 && verdict.strayKeys === 0
+  && verdict.aliasRefreshP95Max <= 4
   && (!withPreview || (verdict.previewP95Max != null && verdict.previewP95Max <= 4));
 report.verdict = verdict;
 if (args.includes("--json")) {
@@ -347,6 +380,7 @@ if (args.includes("--json")) {
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
   console.log(`  has-children checks for the hint line: ${report.summary.kidChecks.join(" / ")} per run`);
+  console.log(`  alias refresh after an outside edit, idle tasks p95: read ${report.summary.aliasReadP95.join(" / ")} ms, swap ${report.summary.aliasSwapP95.join(" / ")} ms (budget <= 4); max ${report.summary.aliasRefreshMax.join(" / ")} ms`);
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);
   console.log(`  per-run p95 deltas: ${report.summary.paintP95Deltas.join(" / ")} ms; Burrow-absent paint p50 ${report.summary.paintP50.gone.join(" / ")} ms`);
   console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);

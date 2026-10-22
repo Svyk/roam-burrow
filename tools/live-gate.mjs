@@ -268,6 +268,7 @@ async function state() {
           aliasEntries: window.__BURROW?.indexes?.aliases?.entries.map((e) => e.alias) ?? null,
           nudgeSeen: window.__burrowDev?.values?.helpNudgeSeen ?? null,
           listScrollable: (() => { const l = document.querySelector(".rm-autocomplete__results-scroll"); return l ? l.scrollHeight > l.clientHeight + 4 : null; })(),
+          listMax: (() => { const l = document.querySelector(".rm-autocomplete__results-scroll"); return l ? l.scrollHeight - l.clientHeight : null; })(),
           popoverHidden: Boolean(document.querySelector(".rm-autocomplete__results.burrow-scope-open")),
           foldedAliases: column ? getComputedStyle(column).display === "none" || items.every((i) => !shown(i)) : true,
           roamAliasesVisibleRows: items.filter(shown).length,
@@ -676,14 +677,38 @@ const ALIAS_CASES = [
     keys: [`wheel-until:chips:${CHIP_LONG}`, "snap", "wheel:chips:120", "wait:250", "snap", "wheel:chips:-120", "wait:250", "snap", "Escape"],
     check: ({ snaps: [a, b, d] }) => {
       if (!(a?.chipsScroll > 0) || a.lastWheel !== "chips") return `the line did not scroll to its end: ${a?.chipsScroll} ${a?.lastWheel}`;
-      if (b?.chipsScroll !== a.chipsScroll || b.lastWheel !== "list") return `at the end: scroll ${b?.chipsScroll} (was ${a.chipsScroll}), sent to ${b?.lastWheel}`;
+      // Past the chips: Roam's list, or the browser when that list cannot move down.
+      const past = a.listScrollable && a.listScroll < a.listMax - 0.5 ? "list" : "native";
+      if (b?.chipsScroll !== a.chipsScroll || b.lastWheel !== past) return `at the end: scroll ${b?.chipsScroll} (was ${a.chipsScroll}), sent to ${b?.lastWheel}, expected ${past}`;
       return d?.chipsScroll < b.chipsScroll && d.lastWheel === "chips" ? null : `back: scroll ${d?.chipsScroll}, sent to ${d?.lastWheel}`;
+    },
+  },
+  {
+    name: "chips: a wheel Roam's list cannot take is left to the browser", query: config.wheelList.query, mayCreatePage: true,
+    keys: ["alt+ArrowDown", "snap", "wheel:chips:-240", "wait:250", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (!(a?.chips?.length >= 2)) return `no chips ${JSON.stringify(a?.chips)}`;
+      if (a.chipsScroll !== 0) return `the chips start scrolled ${a.chipsScroll}`;
+      // Roam may have scrolled its list to its active row: then up is still the list's.
+      const want = a.listScroll > 0.5 ? "list" : "native";
+      if (b?.lastWheel !== want) return `list at ${a.listScroll}: sent to ${b?.lastWheel}, expected ${want}`;
+      if (want === "native" && b.listScroll !== a.listScroll) return `the list moved ${a.listScroll} -> ${b.listScroll}`;
+      return b.chipsScroll === 0 ? null : `the chips moved ${b.chipsScroll}`;
     },
   },
   {
     name: "hint line: no ⇥ drill on a page without blocks", query: `[[${FIXTURE_PAGE} Empty`, settings: { aliasCreate: false }, noRows: true,
     keys: ["snap", "Escape"],
     check: ({ snaps: [a] }) => (a?.hints === "" && a.helpButton === "?" ? null : `hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`),
+  },
+  {
+    name: "hint line: with the key list off it stays while typing, also with nothing to name", query: `[[${FIXTURE_PAGE} Empty`,
+    settings: { aliasCreate: false, helpSheet: false }, noRows: true,
+    keys: ["snap", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "wait:300", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (a?.hints !== "" || a.helpButton !== null) return `on the empty page: hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`;
+      return b?.hints === "⇥ drill" && b.helpButton === null ? null : `on the page with blocks: hints ${JSON.stringify(b?.hints)} button ${JSON.stringify(b?.helpButton)}`;
+    },
   },
   {
     name: "hint line: ⇥ drill on a page with blocks", query: `[[${FIXTURE_PAGE}`, noRows: true,

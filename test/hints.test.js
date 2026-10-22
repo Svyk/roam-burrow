@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { hintsKey, keyLabel, pickerHints, renderHints } from "../src/hints.js";
+import { hintsKey, isAltSlash, keyLabel, pickerHints, renderHints } from "../src/hints.js";
 
 function fakeDoc() {
   const make = () => {
@@ -89,4 +89,16 @@ test("renderHints numbers its items for the hover tips", () => {
   const node = doc.createElement("div");
   renderHints(doc, node, [["↵", "insert"], ["esc", "rows"]]);
   assert.deepEqual(node.children.filter((c) => c.className === "burrow-hint").map((c) => c.dataset.hint), ["0", "1"]);
+});
+
+test("isAltSlash goes by the typed character, not the key's position", () => {
+  const alt = (key, code = "Slash", more = {}) => ({ key, code, altKey: true, ctrlKey: false, metaKey: false, ...more });
+  assert.equal(isAltSlash(alt("÷")), true); // mac US ⌥/
+  assert.equal(isAltSlash(alt("¿")), true); // mac US ⌥⇧/
+  assert.equal(isAltSlash(alt("/")), true); // Alt+/ elsewhere
+  assert.equal(isAltSlash(alt("/", "Digit7")), true); // / on another key
+  assert.equal(isAltSlash(alt("–")), false); // mac German ⌥ and the key at the US / position
+  assert.equal(isAltSlash(alt("÷", "Slash", { altKey: false })), false);
+  assert.equal(isAltSlash(alt("÷", "Slash", { metaKey: true })), false);
+  assert.equal(isAltSlash(alt("/", "Slash", { ctrlKey: true })), false);
 });

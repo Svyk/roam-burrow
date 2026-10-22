@@ -488,11 +488,20 @@ function addWord(index, word, entry) {
   if (!list) index.words.set(word, [entry]);
   else if (!list.includes(entry)) list.push(entry);
 }
-function refreshAliasKeys(index, aliasesByPage) {
+function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
   if (!index) return 0;
+  let pages = null;
+  if (previousByPage) {
+    pages = /* @__PURE__ */ new Set();
+    const same = (title) => (previousByPage.get(title) || []).join("\0") === (aliasesByPage.get(title) || []).join("\0");
+    for (const title of previousByPage.keys()) if (!same(title)) pages.add(title);
+    for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
+    if (!pages.size) return 0;
+  }
   let changed = 0;
   for (const entry of index.entries) {
     if (!entry.linked) continue;
+    if (pages && !entry.linked.some((title) => pages.has(title))) continue;
     const next = aliasKeyOf(entry, aliasesByPage);
     if ((next?.spaced ?? null) === (entry.aliasKey?.spaced ?? null)) continue;
     if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
@@ -685,9 +694,9 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     const asyncQ = api.data.async?.fast?.q;
     return asyncQ ? asyncQ(query, ...args) : Promise.resolve(api.data.fast.q(query, ...args));
   };
-  const readAliasRows = (kw) => {
+  const readAliasRows = (kw, only = null) => {
     const rows = /* @__PURE__ */ new Map();
-    for (const title of keywordTitles(kw)) {
+    for (const title of only?.length ? only : keywordTitles(kw)) {
       perf.counters.aliasPulls = (perf.counters.aliasPulls || 0) + 1;
       for (const row of aliasRowsFromPull(api.pull(ALIAS_PULL, [":node/title", title]))) rows.set(row.join("\0"), row);
     }
@@ -704,7 +713,8 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
   };
   const syncWatches = (kw) => {
     const addWatch = api.data?.addPullWatch;
-    if (!lifecycle || lifecycle.disposed || typeof addWatch !== "function") return;
+    if (!lifecycle || lifecycle.disposed || typeof addWatch !== "function") return false;
+    let added = false;
     const wanted = new Set(keywordTitles(kw).filter((t) => api.pull("[:db/id]", [":node/title", t])));
     for (const [title, entity] of watches) {
       if (wanted.has(title)) continue;
@@ -716,7 +726,9 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
       const entity = `[:node/title ${JSON.stringify(title)}]`;
       api.data.addPullWatch(ALIAS_PULL, entity, onWatch);
       watches.set(title, entity);
+      added = true;
     }
+    return added;
   };
   lifecycle?.add(() => {
     if (settleTimer != null) win.clearTimeout(settleTimer);
@@ -724,20 +736,34 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     watches.clear();
     listeners.clear();
   });
-  function refreshAliases() {
-    if (lifecycle?.disposed) return;
-    const kw = setting("aliasKeyword") || "Aliases";
-    if (!aliases || !titles || !refs || kw !== keyword) {
-      schedule();
-      return;
-    }
+  let aliasPrint = null;
+  const printOf = (rows) => rows.map((row) => row.join("\0")).join("");
+  function refreshAliases({ force = false } = {}) {
+    idle(() => {
+      if (lifecycle?.disposed) return;
+      const kw = setting("aliasKeyword") || "Aliases";
+      if (!aliases || !titles || !refs || kw !== keyword) {
+        schedule();
+        return;
+      }
+      const t0 = performance.now();
+      const rows = readAliasRows(kw, [...watches.keys()]);
+      const print = printOf(rows);
+      perf.push("aliasRead", performance.now() - t0);
+      if (print === aliasPrint && !force) return;
+      idle(() => swapAliases(kw, rows, print));
+    });
+  }
+  function swapAliases(kw, rows, print) {
+    if (lifecycle?.disposed || !aliases || kw !== keyword) return;
     const t0 = performance.now();
-    const next = buildAliasIndex(readAliasRows(kw), kw);
+    const next = buildAliasIndex(rows, kw);
     setAliasRefs(next, [...aliases.refsByPage]);
     titles.setAliases(next);
-    refreshAliasKeys(refs, next.byPage);
+    refreshAliasKeys(refs, next.byPage, aliases.byPage);
     aliases = next;
-    syncWatches(kw);
+    aliasPrint = print;
+    if (!watches.size) syncWatches(kw);
     perf.counters.aliasRefreshes = (perf.counters.aliasRefreshes || 0) + 1;
     perf.push("aliasRefresh", performance.now() - t0);
     notify();
@@ -760,6 +786,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
     refs = nextRefs;
     aliases = nextAliases;
+    aliasPrint = printOf(aliasRows);
     keyword = nextKeyword;
     builtAt = Date.now();
     perf.counters.builds += 1;
@@ -800,7 +827,11 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
       return [...watches.keys()];
     },
     refreshIfStale() {
-      if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) schedule();
+      if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) {
+        schedule();
+        return;
+      }
+      if (syncWatches(keyword)) onWatch();
     }
   };
 }
@@ -1459,6 +1490,8 @@ function keyLabel(name, mac = IS_MAC) {
   const pair = NAMED[name];
   return pair ? pair[mac ? 0 : 1] : name;
 }
+var ALT_SLASH = /* @__PURE__ */ new Set(["/", "÷", "?", "¿"]);
+var isAltSlash = (e) => e.altKey && !e.ctrlKey && !e.metaKey && ALT_SLASH.has(e.key);
 function hintsKey(items) {
   return items.map(([keys, label]) => `${keys}\0${label}`).join("");
 }
@@ -2317,7 +2350,7 @@ function tokenStillValid(value, selStart, selEnd, token) {
 }
 
 // src/wheel.js
-function wheelPlan({ deltaX = 0, deltaY = 0, deltaMode = 0, shiftKey = false }, chips) {
+function wheelPlan({ deltaX = 0, deltaY = 0, deltaMode = 0, shiftKey = false }, chips, list = null) {
   const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? 300 : 1;
   const dx = deltaX * unit;
   const dy = deltaY * unit;
@@ -2326,6 +2359,7 @@ function wheelPlan({ deltaX = 0, deltaY = 0, deltaMode = 0, shiftKey = false }, 
   if (chips && chips.max > 0 && (dy > 0 && chips.left < chips.max - 0.5 || dy < 0 && chips.left > 0.5)) {
     return { to: "chips", left: Math.max(0, Math.min(chips.max, chips.left + dy)) };
   }
+  if (!list || !(dy > 0 && list.top < list.max - 0.5 || dy < 0 && list.top > 0.5)) return { to: "native" };
   return { to: "list", by: dy };
 }
 
@@ -3015,7 +3049,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const pop = st.pop;
     if (!pop) return;
     const list = setting("keyHints") ? hintList() : [];
-    const line = setting("keyHints") && st.phase !== "SCOPE" && !st.help && Boolean(st.token) && (list.length > 0 || setting("helpSheet"));
+    const line = setting("keyHints") && st.phase !== "SCOPE" && !st.help && Boolean(st.token);
     if (!line) {
       hints.hidden = true;
       hintsFor = null;
@@ -3043,7 +3077,6 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
   }
   let hintItems = [];
-  const isAltSlash = (e) => e.altKey && !e.ctrlKey && !e.metaKey && e.code === "Slash";
   function openHelp() {
     if (!st.pop || !setting("helpSheet")) return false;
     st.help = true;
@@ -3586,14 +3619,17 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   }
   function onStripWheel(event) {
     const overChips = chipsNode.isConnected && chipsNode.contains(event.target);
-    const plan = wheelPlan(event, overChips ? { left: chipsNode.scrollLeft, max: chipsNode.scrollWidth - chipsNode.clientWidth } : null);
+    const list = st.pop?.querySelector(".rm-autocomplete__results-scroll");
+    const plan = wheelPlan(
+      event,
+      overChips ? { left: chipsNode.scrollLeft, max: chipsNode.scrollWidth - chipsNode.clientWidth } : null,
+      list ? { top: list.scrollTop, max: list.scrollHeight - list.clientHeight } : null
+    );
     trace({ ev: "wheel", to: plan.to });
     if (plan.to === "chips") {
       chipsNode.scrollLeft = plan.left;
       event.preventDefault();
     } else if (plan.to === "list") {
-      const list = st.pop?.querySelector(".rm-autocomplete__results-scroll");
-      if (!list) return;
       list.scrollTop += plan.by;
       event.preventDefault();
     }
