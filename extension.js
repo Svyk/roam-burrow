@@ -480,51 +480,63 @@ function keyEntry(entry, index, aliasesByPage) {
     for (const word of seen) addWord(index, word, entry);
   }
 }
-function aliasKeyOf(entry, aliasesByPage) {
+function aliasKeyOf(entry, aliasesByPage, keys = null) {
   if (!entry.linked || !aliasesByPage?.size) return null;
   const aliases = [];
   for (const title of entry.linked) {
     const found = aliasesByPage.get(title);
     if (found) aliases.push(...found);
   }
-  return aliases.length ? searchKey(aliases.join(" ")) : null;
+  if (!aliases.length) return null;
+  const joined = aliases.join(" ");
+  let key = keys?.get(joined);
+  if (!key) {
+    key = searchKey(joined);
+    keys?.set(joined, key);
+  }
+  return key;
 }
 function addWord(index, word, entry) {
   const list = index.words.get(word);
   if (!list) index.words.set(word, [entry]);
   else if (!list.includes(entry)) list.push(entry);
 }
-function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
-  if (!index) return 0;
+function aliasKeyTargets(index, aliasesByPage, previousByPage = null) {
+  if (!index) return [];
   let pages = null;
   if (previousByPage) {
     pages = /* @__PURE__ */ new Set();
     const same = (title) => (previousByPage.get(title) || []).join("\0") === (aliasesByPage.get(title) || []).join("\0");
     for (const title of previousByPage.keys()) if (!same(title)) pages.add(title);
     for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
-    if (!pages.size) return 0;
+    if (!pages.size) return [];
   }
+  return index.entries.filter((entry) => entry.linked && (!pages || entry.linked.some((title) => pages.has(title))));
+}
+function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => false, keys = /* @__PURE__ */ new Map() } = {}) {
+  let at = from;
   let changed = 0;
-  for (const entry of index.entries) {
-    if (!entry.linked) continue;
-    if (pages && !entry.linked.some((title) => pages.has(title))) continue;
-    const next = aliasKeyOf(entry, aliasesByPage);
-    if ((next?.spaced ?? null) === (entry.aliasKey?.spaced ?? null)) continue;
-    if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
-      const keep = new Set(next ? entry.key.tokens.concat(next.tokens) : entry.key.tokens);
-      for (const word of entry.aliasKey?.tokens || []) {
-        if (keep.has(word)) continue;
-        const list = index.words.get(word)?.filter((e) => e !== entry);
-        if (list?.length) index.words.set(word, list);
-        else index.words.delete(word);
+  while (at < entries.length) {
+    const entry = entries[at++];
+    const next = aliasKeyOf(entry, aliasesByPage, keys);
+    if ((next?.spaced ?? null) !== (entry.aliasKey?.spaced ?? null)) {
+      if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
+        const keep = new Set(next ? entry.key.tokens.concat(next.tokens) : entry.key.tokens);
+        for (const word of entry.aliasKey?.tokens || []) {
+          if (keep.has(word)) continue;
+          const list = index.words.get(word)?.filter((e) => e !== entry);
+          if (list?.length) index.words.set(word, list);
+          else index.words.delete(word);
+        }
+        for (const word of next?.tokens || []) addWord(index, word, entry);
       }
-      for (const word of next?.tokens || []) addWord(index, word, entry);
+      entry.aliasKey = next;
+      changed += 1;
     }
-    entry.aliasKey = next;
-    changed += 1;
+    if (stop()) break;
   }
   if (changed) index.prefilter = null;
-  return changed;
+  return { next: at, changed };
 }
 function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
   if (!index || !plan) return [];
@@ -671,6 +683,7 @@ function buildTitleIndex(rows, aliases, withContent = null) {
 // src/indexes.js
 var TTL_MS = 6e4;
 var ALIAS_SETTLE_MS = 250;
+var REKEY_SLICE_MS = 3;
 var REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
   :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
 var TITLES = "[:find ?t ?u :where [?p :node/title ?t] [?p :block/uid ?u]]";
@@ -769,18 +782,33 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
       idle(() => swapAliases(kw, rows, print));
     });
   }
+  let rekey = null;
   function swapAliases(kw, rows, print) {
     if (lifecycle?.disposed || !aliases || kw !== keyword) return;
     const t0 = performance.now();
     const next = buildAliasIndex(rows, kw, aliases.memo);
     setAliasRefs(next, [...aliases.refsByPage]);
     titles.setAliases(next);
-    refreshAliasKeys(refs, next.byPage, aliases.byPage);
+    const left = rekey?.refs === refs ? rekey.entries.slice(rekey.at) : [];
+    const entries = [.../* @__PURE__ */ new Set([...left, ...aliasKeyTargets(refs, next.byPage, aliases.byPage)])];
     aliases = next;
     aliasPrint = print;
     if (!watches.size) syncWatches(kw);
-    perf.counters.aliasRefreshes = (perf.counters.aliasRefreshes || 0) + 1;
     perf.push("aliasRefresh", performance.now() - t0);
+    const run = rekey = { refs, entries, at: 0, keys: /* @__PURE__ */ new Map() };
+    idle(() => rekeyStep(run));
+  }
+  function rekeyStep(run) {
+    if (lifecycle?.disposed || rekey !== run || refs !== run.refs) return;
+    const t0 = performance.now();
+    run.at = rekeyAliases(refs, run.entries, aliases.byPage, { from: run.at, stop: () => performance.now() - t0 > REKEY_SLICE_MS, keys: run.keys }).next;
+    perf.push("aliasRekey", performance.now() - t0);
+    if (run.at < run.entries.length) {
+      idle(() => rekeyStep(run));
+      return;
+    }
+    rekey = null;
+    perf.counters.aliasRefreshes = (perf.counters.aliasRefreshes || 0) + 1;
     notify();
   }
   const build = async () => {
@@ -800,6 +828,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
+    rekey = null;
     refs = nextRefs;
     aliases = nextAliases;
     aliasPrint = printOf(aliasRows);

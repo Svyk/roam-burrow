@@ -1,11 +1,14 @@
 import { aliasRowsFromPull, buildAliasIndex, keywordTitles, setAliasRefs } from "./aliases.js";
-import { buildRefIndexSliced, refreshAliasKeys } from "./refindex.js";
+import { aliasKeyTargets, buildRefIndexSliced, rekeyAliases } from "./refindex.js";
 import { buildTitleIndex } from "./titles.js";
 
 const TTL_MS = 60_000;
 // An alias edit outside Burrow (by hand, roam-aliases, an undo) reaches the
 // index this long after Roam's watch reports it; edits in a burst coalesce.
 const ALIAS_SETTLE_MS = 250;
+// The re-key after an alias edit runs in idle slices this long at most (plus
+// the one block in hand).
+const REKEY_SLICE_MS = 3;
 
 const REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
   :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
@@ -103,9 +106,10 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
   // Aliases alone, from the pulls: the alias index, the titles' alias
   // spellings and the (( alias expansion. Reference counts of pages already
   // known are kept; a new alias page gets its count at the next full build.
-  // Two idle tasks: the rows (from the watches' last pulls; a pull only when
-  // no page is watched yet), then, only if they differ from the last ones
-  // read, the swap. force: swap even so (perf-gate times it that way).
+  // Idle tasks: the rows (from the watches' last pulls; a pull only when no
+  // page is watched yet); then, only if they differ from the last ones read,
+  // the swap; then the new alias keys of the blocks that link a changed page,
+  // in slices, and an open popup re-ranks. force: swap even so (perf-gate).
   let aliasPrint = null;
   const printOf = (rows) => rows.map((row) => row.join("\u0000")).join("\u0001");
   function refreshAliases({ force = false, fresh = false } = {}) {
@@ -121,19 +125,33 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
       idle(() => swapAliases(kw, rows, print));
     });
   }
+  // The re-key in progress: { refs, entries, at, keys }. A newer swap takes
+  // over the blocks it has not reached; a full build drops it.
+  let rekey = null;
   function swapAliases(kw, rows, print) {
     if (lifecycle?.disposed || !aliases || kw !== keyword) return;
     const t0 = performance.now();
     const next = buildAliasIndex(rows, kw, aliases.memo);
     setAliasRefs(next, [...aliases.refsByPage]);
     titles.setAliases(next);
-    refreshAliasKeys(refs, next.byPage, aliases.byPage);
+    const left = rekey?.refs === refs ? rekey.entries.slice(rekey.at) : [];
+    const entries = [...new Set([...left, ...aliasKeyTargets(refs, next.byPage, aliases.byPage)])];
     aliases = next;
     aliasPrint = print;
     // Burrow's own first alias in a graph without an alias page made one.
     if (!watches.size) syncWatches(kw);
-    perf.counters.aliasRefreshes = (perf.counters.aliasRefreshes || 0) + 1;
     perf.push("aliasRefresh", performance.now() - t0);
+    const run = rekey = { refs, entries, at: 0, keys: new Map() };
+    idle(() => rekeyStep(run));
+  }
+  function rekeyStep(run) {
+    if (lifecycle?.disposed || rekey !== run || refs !== run.refs) return;
+    const t0 = performance.now();
+    run.at = rekeyAliases(refs, run.entries, aliases.byPage, { from: run.at, stop: () => performance.now() - t0 > REKEY_SLICE_MS, keys: run.keys }).next;
+    perf.push("aliasRekey", performance.now() - t0);
+    if (run.at < run.entries.length) { idle(() => rekeyStep(run)); return; }
+    rekey = null;
+    perf.counters.aliasRefreshes = (perf.counters.aliasRefreshes || 0) + 1;
     notify();
   }
 
@@ -154,6 +172,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
+    rekey = null;
     refs = nextRefs;
     aliases = nextAliases;
     aliasPrint = printOf(aliasRows);

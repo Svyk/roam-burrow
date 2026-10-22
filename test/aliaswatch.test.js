@@ -5,7 +5,7 @@ import { aliasRowsFromPull, buildAliasIndex } from "../src/aliases.js";
 import { ALIAS_PULL, createIndexes } from "../src/indexes.js";
 import { createLifecycle } from "../src/lifecycle.js";
 import { createPerf } from "../src/perf.js";
-import { buildRefIndex, refreshAliasKeys } from "../src/refindex.js";
+import { aliasKeyTargets, buildRefIndex, refreshAliasKeys, rekeyAliases } from "../src/refindex.js";
 import { buildTitleIndex } from "../src/titles.js";
 
 // A graph with one alias page "Aliases" whose refs are `aliasBlocks`.
@@ -230,6 +230,64 @@ test("an alias page created after the build is watched from the next popup", asy
   assert.equal(api.calls.q, queries, "read by the pull, no rebuild");
   indexes.refreshIfStale();
   assert.equal(win.size, 0, "watched already: the next popup reads nothing");
+  await lifecycle.dispose();
+});
+
+test("rekeyAliases resumes where it paused and ends where one pass would", () => {
+  const rows = [["r1", "met [[P]]", 3, "D"], ["r2", "about [[P]] and [[Q]]", 1, "D"], ["r3", "[[Q]] again", 1, "D"], ["r4", "plain", 1, "D"]];
+  const before = new Map([["P", ["pea"]]]);
+  const after = new Map([["P", ["pea", "pod"]], ["Q", ["queue"]]]);
+  const sliced = buildRefIndex(rows, before);
+  const whole = buildRefIndex(rows, before);
+  const entries = aliasKeyTargets(sliced, after, before);
+  assert.deepEqual(entries.map((e) => e.uid), ["r1", "r2", "r3"]);
+  let at = 0;
+  let steps = 0;
+  while (at < entries.length) {
+    at = rekeyAliases(sliced, entries, after, { from: at, stop: () => true }).next;
+    steps += 1;
+  }
+  assert.equal(steps, 3, "one block per slice when every slice is out of time");
+  refreshAliasKeys(whole, after, before);
+  for (const uid of ["r1", "r2", "r3", "r4"]) assert.equal(sliced.byUid.get(uid).aliasKey?.spaced ?? null, whole.byUid.get(uid).aliasKey?.spaced ?? null, uid);
+  assert.deepEqual([...sliced.words.keys()].sort(), [...whole.words.keys()].sort());
+});
+
+test("a newer alias refresh takes over the blocks an unfinished re-key had not reached", async () => {
+  const api = fakeApi();
+  api.graph.aliasBlocks.push({ uid: "a2", string: "Aliases:: mcu", page: { title: "Marvel", uid: "MV" } });
+  api.graph.refs.push(["r3", "also [[Lori Boyd]]", 1, "Daily"], ["r4", "watched [[Marvel]]", 1, "Daily"]);
+  const lifecycle = createLifecycle();
+  const win = timers();
+  const queue = [];
+  let manual = false;
+  const idle = (fn) => (manual ? queue.push(fn) : fn());
+  const indexes = createIndexes({ api, perf: createPerf(), setting: () => "Aliases", idle, lifecycle, win });
+  await indexes.build();
+  manual = true;
+  let heard = 0;
+  indexes.listen(() => { heard += 1; });
+  // First edit (Lori Boyd's aliases): read, then swap; its re-key is queued.
+  api.graph.aliasBlocks[0].string = "Aliases:: lori, lb";
+  fire(api);
+  win.flush();
+  queue.shift()();
+  queue.shift()();
+  assert.equal(queue.length, 1);
+  const firstStep = queue.shift();
+  // Second edit, on another page (Marvel), is read and swapped before that step runs.
+  api.graph.aliasBlocks[1].string = "Aliases:: mcu, marvel universe";
+  fire(api);
+  win.flush();
+  queue.shift()();
+  queue.shift()();
+  firstStep(); // superseded: does nothing
+  assert.equal(heard, 0);
+  while (queue.length) queue.shift()();
+  assert.equal(heard, 1, "one re-rank, when the last re-key is done");
+  // Lori Boyd's blocks were the first run's; the second run took them over.
+  for (const uid of ["r1", "r3"]) assert.equal(indexes.refs.byUid.get(uid).aliasKey.spaced, "lori lb", uid);
+  assert.equal(indexes.refs.byUid.get("r4").aliasKey.spaced, "mcu marvel universe");
   await lifecycle.dispose();
 });
 
