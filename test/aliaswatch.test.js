@@ -51,6 +51,13 @@ function fakeApi() {
   return api;
 }
 
+// Roam calls a pull watch with the pull before and after the change.
+const fire = (api, i = 0) => {
+  const watch = api.watches[i];
+  const title = JSON.parse(watch.entity.slice("[:node/title ".length, -1));
+  watch.cb(null, api.pull(watch.pattern, [":node/title", title]));
+};
+
 const timers = () => {
   const pending = new Set();
   return {
@@ -87,11 +94,13 @@ test("an alias edited outside Burrow reaches the index through the watch, withou
 
   // By hand: a new alias on the page; Roam's watch fires (several times in a burst).
   api.graph.aliasBlocks[0].string = "Aliases:: lori, lorinator, lb";
-  api.watches[0].cb();
-  api.watches[0].cb();
+  fire(api);
+  fire(api);
   assert.equal(win.size, 1, "a burst of edits coalesces into one refresh");
+  const pulls = api.calls.pull;
   win.flush();
   assert.equal(api.calls.q, queries, "no datalog query, no rebuild");
+  assert.equal(api.calls.pull, pulls, "no pull either: the rows come from the watch's own");
   assert.equal(heard, 1);
   assert.ok(indexes.aliases.entries.some((e) => e.alias === "lb"));
   assert.equal(indexes.titles.resolve("lb")?.uid, "LB");
@@ -102,7 +111,7 @@ test("an alias edited outside Burrow reaches the index through the watch, withou
 
   // Removed (roam-aliases, an undo): gone from every index.
   api.graph.aliasBlocks[0].string = "Aliases:: lori";
-  api.watches[0].cb();
+  fire(api);
   win.flush();
   assert.equal(indexes.titles.resolve("lorinator"), null);
   assert.doesNotMatch(indexes.refs.byUid.get("r1").aliasKey.spaced, /lorinator/);
@@ -121,7 +130,7 @@ test("a watch firing with the aliases unchanged reads them and swaps nothing", a
   const before = indexes.aliases;
   let heard = 0;
   indexes.listen(() => { heard += 1; });
-  api.watches[0].cb();
+  fire(api);
   win.flush();
   assert.equal(indexes.aliases, before, "same rows: the index is kept");
   assert.equal(heard, 0, "and no popup re-ranks");

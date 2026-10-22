@@ -694,17 +694,22 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     const asyncQ = api.data.async?.fast?.q;
     return asyncQ ? asyncQ(query, ...args) : Promise.resolve(api.data.fast.q(query, ...args));
   };
-  const readAliasRows = (kw, only = null) => {
+  const pulled = /* @__PURE__ */ new Map();
+  const readAliasRows = (kw, only = null, fresh = true) => {
     const rows = /* @__PURE__ */ new Map();
     for (const title of only?.length ? only : keywordTitles(kw)) {
-      perf.counters.aliasPulls = (perf.counters.aliasPulls || 0) + 1;
-      for (const row of aliasRowsFromPull(api.pull(ALIAS_PULL, [":node/title", title]))) rows.set(row.join("\0"), row);
+      if (fresh || !pulled.has(title)) {
+        perf.counters.aliasPulls = (perf.counters.aliasPulls || 0) + 1;
+        pulled.set(title, api.pull(ALIAS_PULL, [":node/title", title]));
+      }
+      for (const row of aliasRowsFromPull(pulled.get(title))) rows.set(row.join("\0"), row);
     }
     return [...rows.values()];
   };
   const watches = /* @__PURE__ */ new Map();
   let settleTimer = null;
-  const onWatch = () => {
+  const watchOf = (title) => (_before, after) => {
+    pulled.set(title, after);
     if (settleTimer != null) win.clearTimeout(settleTimer);
     settleTimer = win.setTimeout(() => {
       settleTimer = null;
@@ -716,29 +721,31 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     if (!lifecycle || lifecycle.disposed || typeof addWatch !== "function") return false;
     let added = false;
     const wanted = new Set(keywordTitles(kw).filter((t) => api.pull("[:db/id]", [":node/title", t])));
-    for (const [title, entity] of watches) {
+    for (const [title, watch] of watches) {
       if (wanted.has(title)) continue;
-      api.data.removePullWatch(ALIAS_PULL, entity, onWatch);
+      api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
       watches.delete(title);
+      pulled.delete(title);
     }
     for (const title of wanted) {
       if (watches.has(title)) continue;
-      const entity = `[:node/title ${JSON.stringify(title)}]`;
-      api.data.addPullWatch(ALIAS_PULL, entity, onWatch);
-      watches.set(title, entity);
+      const watch = { entity: `[:node/title ${JSON.stringify(title)}]`, cb: watchOf(title) };
+      api.data.addPullWatch(ALIAS_PULL, watch.entity, watch.cb);
+      watches.set(title, watch);
       added = true;
     }
     return added;
   };
   lifecycle?.add(() => {
     if (settleTimer != null) win.clearTimeout(settleTimer);
-    for (const entity of watches.values()) api.data.removePullWatch(ALIAS_PULL, entity, onWatch);
+    for (const watch of watches.values()) api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
     watches.clear();
+    pulled.clear();
     listeners.clear();
   });
   let aliasPrint = null;
   const printOf = (rows) => rows.map((row) => row.join("\0")).join("");
-  function refreshAliases({ force = false } = {}) {
+  function refreshAliases({ force = false, fresh = false } = {}) {
     idle(() => {
       if (lifecycle?.disposed) return;
       const kw = setting("aliasKeyword") || "Aliases";
@@ -747,7 +754,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
         return;
       }
       const t0 = performance.now();
-      const rows = readAliasRows(kw, [...watches.keys()]);
+      const rows = readAliasRows(kw, [...watches.keys()], fresh || !watches.size);
       const print = printOf(rows);
       perf.push("aliasRead", performance.now() - t0);
       if (print === aliasPrint && !force) return;
@@ -831,7 +838,9 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
         schedule();
         return;
       }
-      if (syncWatches(keyword)) onWatch();
+      idle(() => {
+        if (keyword && syncWatches(keyword)) refreshAliases({ fresh: true });
+      });
     }
   };
 }

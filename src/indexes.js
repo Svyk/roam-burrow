@@ -39,14 +39,21 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     return asyncQ ? asyncQ(query, ...args) : Promise.resolve(api.data.fast.q(query, ...args));
   };
 
+  // The last pull of each alias page's refs: read here, or handed over by
+  // that page's watch, which pulls the same pattern on every change.
+  const pulled = new Map();
   // [blockString, pageTitle, pageUid] for every block on an alias page's
   // refs, each tuple once (as the datalog query it replaces returned them).
   // only: the spellings to read (the watched pages), else every spelling.
-  const readAliasRows = (kw, only = null) => {
+  // fresh: pull them now, else take the watches' last pulls.
+  const readAliasRows = (kw, only = null, fresh = true) => {
     const rows = new Map();
     for (const title of only?.length ? only : keywordTitles(kw)) {
-      perf.counters.aliasPulls = (perf.counters.aliasPulls || 0) + 1;
-      for (const row of aliasRowsFromPull(api.pull(ALIAS_PULL, [":node/title", title]))) rows.set(row.join("\u0000"), row);
+      if (fresh || !pulled.has(title)) {
+        perf.counters.aliasPulls = (perf.counters.aliasPulls || 0) + 1;
+        pulled.set(title, api.pull(ALIAS_PULL, [":node/title", title]));
+      }
+      for (const row of aliasRowsFromPull(pulled.get(title))) rows.set(row.join("\u0000"), row);
     }
     return [...rows.values()];
   };
@@ -54,9 +61,11 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
   // One pull watch per alias page that exists: it fires when a block that
   // references the page is created, edited, moved or deleted, and when a
   // block gains or loses the `Keyword::` prefix; edits elsewhere never fire it.
+  // Roam calls it with the pull before and after the change.
   const watches = new Map();
   let settleTimer = null;
-  const onWatch = () => {
+  const watchOf = (title) => (_before, after) => {
+    pulled.set(title, after);
     if (settleTimer != null) win.clearTimeout(settleTimer);
     settleTimer = win.setTimeout(() => { settleTimer = null; refreshAliases(); }, ALIAS_SETTLE_MS);
   };
@@ -66,43 +75,44 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     if (!lifecycle || lifecycle.disposed || typeof addWatch !== "function") return false;
     let added = false;
     const wanted = new Set(keywordTitles(kw).filter((t) => api.pull("[:db/id]", [":node/title", t])));
-    for (const [title, entity] of watches) {
+    for (const [title, watch] of watches) {
       if (wanted.has(title)) continue;
-      api.data.removePullWatch(ALIAS_PULL, entity, onWatch);
+      api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
       watches.delete(title);
+      pulled.delete(title);
     }
     for (const title of wanted) {
       if (watches.has(title)) continue;
-      const entity = `[:node/title ${JSON.stringify(title)}]`;
-      api.data.addPullWatch(ALIAS_PULL, entity, onWatch);
-      watches.set(title, entity);
+      const watch = { entity: `[:node/title ${JSON.stringify(title)}]`, cb: watchOf(title) };
+      api.data.addPullWatch(ALIAS_PULL, watch.entity, watch.cb);
+      watches.set(title, watch);
       added = true;
     }
     return added;
   };
   lifecycle?.add(() => {
     if (settleTimer != null) win.clearTimeout(settleTimer);
-    for (const entity of watches.values()) api.data.removePullWatch(ALIAS_PULL, entity, onWatch);
+    for (const watch of watches.values()) api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
     watches.clear();
+    pulled.clear();
     listeners.clear();
   });
 
   // Aliases alone, from the pulls: the alias index, the titles' alias
   // spellings and the (( alias expansion. Reference counts of pages already
   // known are kept; a new alias page gets its count at the next full build.
-  // Two idle tasks, each well under the 4 ms budget: the pull of the watched
-  // pages (one in most graphs; which pages exist is looked at again when a
-  // popup opens, refreshIfStale), then, only if those rows differ from the
-  // last read, the swap. force: swap even so (perf-gate times it that way).
+  // Two idle tasks: the rows (from the watches' last pulls; a pull only when
+  // no page is watched yet), then, only if they differ from the last ones
+  // read, the swap. force: swap even so (perf-gate times it that way).
   let aliasPrint = null;
   const printOf = (rows) => rows.map((row) => row.join("\u0000")).join("\u0001");
-  function refreshAliases({ force = false } = {}) {
+  function refreshAliases({ force = false, fresh = false } = {}) {
     idle(() => {
       if (lifecycle?.disposed) return;
       const kw = setting("aliasKeyword") || "Aliases";
       if (!aliases || !titles || !refs || kw !== keyword) { schedule(); return; }
       const t0 = performance.now();
-      const rows = readAliasRows(kw, [...watches.keys()]);
+      const rows = readAliasRows(kw, [...watches.keys()], fresh || !watches.size);
       const print = printOf(rows);
       perf.push("aliasRead", performance.now() - t0);
       if (print === aliasPrint && !force) return;
@@ -177,9 +187,9 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     refreshIfStale() {
       if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) { schedule(); return; }
       // An alias page that did not exist at the build (the first alias typed
-      // by hand creates it): look again, one [:db/id] pull per spelling, and
-      // once it is there watch it and read its aliases.
-      if (syncWatches(keyword)) onWatch();
+      // by hand creates it): look again at idle, one [:db/id] pull per
+      // spelling, and once it is there watch it and read its aliases.
+      idle(() => { if (keyword && syncWatches(keyword)) refreshAliases({ fresh: true }); });
     },
   };
 }
