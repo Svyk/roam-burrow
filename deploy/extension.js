@@ -1,4 +1,4 @@
-/* Burrow v0.4.0 | MIT | generated; edit src/ */
+/* Burrow v0.5.0 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -359,23 +359,38 @@ function keywordTitles(keyword = "Aliases") {
   const lower = kw.toLowerCase();
   return [.../* @__PURE__ */ new Set([kw, lower, lower[0]?.toUpperCase() + lower.slice(1), kw.toUpperCase()])];
 }
-function buildAliasIndex(rows, keyword) {
+function aliasRowsFromPull(pulled) {
+  const rows = [];
+  for (const ref of pulled?.[":block/_refs"] || []) {
+    const page = ref[":block/page"];
+    const string = ref[":block/string"];
+    if (typeof string === "string" && page?.[":node/title"] != null && page[":block/uid"]) rows.push([string, page[":node/title"], page[":block/uid"]]);
+  }
+  return rows;
+}
+function buildAliasIndex(rows, keyword, memo = null) {
   const entries = [];
   const byPage = /* @__PURE__ */ new Map();
   const pageAliases = /* @__PURE__ */ new Map();
+  const parsed = /* @__PURE__ */ new Map();
+  const keys = /* @__PURE__ */ new Map();
   const exact = `${String(keyword || "Aliases").trim()}::`;
   for (const [string, title, uid] of rows || []) {
     const seenByRoamAliases = String(string).startsWith(exact);
-    for (const alias of parseAliasBlock(string, keyword)) {
+    const list = parsed.get(string) || memo?.parsed.get(string) || parseAliasBlock(string, keyword);
+    parsed.set(string, list);
+    for (const alias of list) {
       if (alias.toLowerCase() === String(title).toLowerCase()) continue;
-      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases, refs: null });
+      const key = keys.get(alias) || memo?.keys.get(alias) || searchKey(alias);
+      keys.set(alias, key);
+      entries.push({ alias, title, uid, key, seenByRoamAliases, refs: null });
       if (!byPage.has(title)) byPage.set(title, []);
       byPage.get(title).push(alias);
       if (!pageAliases.has(uid)) pageAliases.set(uid, []);
       if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map() };
+  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map(), memo: { parsed, keys } };
 }
 function setAliasRefs(index, rows) {
   const refsByPage = new Map(rows || []);
@@ -444,7 +459,7 @@ function startRefIndex(rows) {
   for (const [uid, string, refs, page] of rows || []) {
     byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0, page: page ?? null });
   }
-  return { entries: [...byUid.values()], byUid, words: /* @__PURE__ */ new Map(), builtAt: Date.now() };
+  return { entries: [...byUid.values()], byUid, words: /* @__PURE__ */ new Map(), byLinked: /* @__PURE__ */ new Map(), builtAt: Date.now() };
 }
 function keyEntry(entry, index, aliasesByPage) {
   const { byUid } = index;
@@ -457,22 +472,79 @@ function keyEntry(entry, index, aliasesByPage) {
   entry.key = searchKey(stripRoamMarkup(resolved));
   entry.quotes = quotes;
   entry.pureQuote = quotes.length === 1 && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, "")) ? quotes[0] : null;
-  const aliases = [];
-  if (aliasesByPage?.size) {
-    for (const m of entry.string.matchAll(PAGE_REF)) {
-      const found = aliasesByPage.get(m[1] || m[2]);
-      if (found) aliases.push(...found);
-    }
+  const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  entry.linked = linked.length ? linked : null;
+  for (const title of new Set(linked)) {
+    const list = index.byLinked.get(title);
+    if (list) list.push(entry);
+    else index.byLinked.set(title, [entry]);
   }
-  entry.aliasKey = aliases.length ? searchKey(aliases.join(" ")) : null;
+  entry.aliasKey = aliasKeyOf(entry, aliasesByPage);
   if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
     const seen = new Set(entry.aliasKey ? entry.key.tokens.concat(entry.aliasKey.tokens) : entry.key.tokens);
-    for (const word of seen) {
-      const list = index.words.get(word);
-      if (list) list.push(entry);
-      else index.words.set(word, [entry]);
-    }
+    for (const word of seen) addWord(index, word, entry);
   }
+}
+function aliasKeyOf(entry, aliasesByPage, keys = null) {
+  if (!entry.linked || !aliasesByPage?.size) return null;
+  const aliases = [];
+  for (const title of entry.linked) {
+    const found = aliasesByPage.get(title);
+    if (found) aliases.push(...found);
+  }
+  if (!aliases.length) return null;
+  const joined = aliases.join(" ");
+  let key = keys?.get(joined);
+  if (!key) {
+    key = searchKey(joined);
+    keys?.set(joined, key);
+  }
+  return key;
+}
+function addWord(index, word, entry) {
+  const list = index.words.get(word);
+  if (!list) index.words.set(word, [entry]);
+  else if (!list.includes(entry)) list.push(entry);
+}
+function aliasKeyTargets(index, aliasesByPage, previousByPage = null) {
+  if (!index) return [];
+  let pages = null;
+  if (previousByPage) {
+    pages = /* @__PURE__ */ new Set();
+    const same = (title) => (previousByPage.get(title) || []).join("\0") === (aliasesByPage.get(title) || []).join("\0");
+    for (const title of previousByPage.keys()) if (!same(title)) pages.add(title);
+    for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
+    if (!pages.size) return [];
+  }
+  if (!pages) return index.entries.filter((entry) => entry.linked);
+  const out = /* @__PURE__ */ new Set();
+  for (const title of pages) for (const entry of index.byLinked.get(title) || []) out.add(entry);
+  return [...out];
+}
+function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => false, keys = /* @__PURE__ */ new Map() } = {}) {
+  let at = from;
+  let changed = 0;
+  while (at < entries.length) {
+    const entry = entries[at++];
+    const next = aliasKeyOf(entry, aliasesByPage, keys);
+    if ((next?.spaced ?? null) !== (entry.aliasKey?.spaced ?? null)) {
+      if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
+        const keep = new Set(next ? entry.key.tokens.concat(next.tokens) : entry.key.tokens);
+        for (const word of entry.aliasKey?.tokens || []) {
+          if (keep.has(word)) continue;
+          const list = index.words.get(word)?.filter((e) => e !== entry);
+          if (list?.length) index.words.set(word, list);
+          else index.words.delete(word);
+        }
+        for (const word of next?.tokens || []) addWord(index, word, entry);
+      }
+      entry.aliasKey = next;
+      changed += 1;
+    }
+    if (stop()) break;
+  }
+  if (changed) index.prefilter = null;
+  return { next: at, changed };
 }
 function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
   if (!index || !plan) return [];
@@ -576,17 +648,23 @@ function buildTitleIndex(rows, aliases, withContent = null) {
     const compact = searchKey(title).compact;
     if (compact) add(byCompact, compact, page);
   }
-  const aliasLower = /* @__PURE__ */ new Map();
-  const aliasCompact = /* @__PURE__ */ new Map();
-  for (const entry of aliases?.entries || []) {
-    const page = { title: entry.title, uid: entry.uid };
-    add(aliasLower, entry.alias.toLowerCase(), page);
-    if (entry.key?.compact) add(aliasCompact, entry.key.compact, page);
-  }
+  let aliasLower = /* @__PURE__ */ new Map();
+  let aliasCompact = /* @__PURE__ */ new Map();
+  const setAliases = (next) => {
+    aliasLower = /* @__PURE__ */ new Map();
+    aliasCompact = /* @__PURE__ */ new Map();
+    for (const entry of next?.entries || []) {
+      const page = { title: entry.title, uid: entry.uid };
+      add(aliasLower, entry.alias.toLowerCase(), page);
+      if (entry.key?.compact) add(aliasCompact, entry.key.compact, page);
+    }
+  };
+  setAliases(aliases);
   const sorted = [...byLower.keys()].filter((t) => /[#>]/.test(t)).sort();
   const one = (list) => list?.length === 1 ? list[0] : null;
   return {
     size: byRaw.size,
+    setAliases,
     // Exact title, then case-insensitive, then separator-insensitive, then
     // an alias; an ambiguous spelling resolves to nothing.
     resolve(text) {
@@ -612,32 +690,140 @@ function buildTitleIndex(rows, aliases, withContent = null) {
 
 // src/indexes.js
 var TTL_MS = 6e4;
+var ALIAS_SETTLE_MS = 250;
+var REKEY_SLICE_MS = 3;
 var REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
   :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
 var TITLES = "[:find ?t ?u :where [?p :node/title ?t] [?p :block/uid ?u]]";
 var WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] [?p :block/children ?c]]";
-var ALIAS_PAGES = "[:find [?a ...] :in $ [?t ...] :where [?a :node/title ?t]]";
-var ALIAS_BLOCKS = `[:find ?s ?pt ?pu :in $ [?a ...]
-  :where [?b :block/refs ?a] [?b :block/string ?s] [?b :block/page ?p] [?p :node/title ?pt] [?p :block/uid ?pu]]`;
+var ALIAS_PULL = "[{:block/_refs [:block/string {:block/page [:node/title :block/uid]}]}]";
 var ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p]]";
 var yieldTo = () => new Promise((resolve) => setTimeout(resolve, 0));
-function createIndexes({ api, perf, setting, idle }) {
+function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globalThis }) {
   let aliases = null;
   let refs = null;
   let titles = null;
   let builtAt = 0;
   let keyword = null;
   let pending = false;
+  const listeners = /* @__PURE__ */ new Set();
+  const notify = () => {
+    for (const fn of listeners) {
+      try {
+        fn();
+      } catch (error) {
+        console.error("[burrow] index listener failed", error);
+      }
+    }
+  };
   const q = (query, ...args) => {
     perf.counters.queries += 1;
     const asyncQ = api.data.async?.fast?.q;
     return asyncQ ? asyncQ(query, ...args) : Promise.resolve(api.data.fast.q(query, ...args));
   };
+  const pulled = /* @__PURE__ */ new Map();
+  const readAliasRows = (kw, only = null, fresh = true) => {
+    const rows = /* @__PURE__ */ new Map();
+    for (const title of only?.length ? only : keywordTitles(kw)) {
+      if (fresh || !pulled.has(title)) {
+        perf.counters.aliasPulls = (perf.counters.aliasPulls || 0) + 1;
+        pulled.set(title, api.pull(ALIAS_PULL, [":node/title", title]));
+      }
+      for (const row of aliasRowsFromPull(pulled.get(title))) rows.set(row.join("\0"), row);
+    }
+    return [...rows.values()];
+  };
+  const watches = /* @__PURE__ */ new Map();
+  let settleTimer = null;
+  let watchCalls = 0;
+  const watchOf = (title) => (_before, after) => {
+    pulled.set(title, after);
+    watchCalls += 1;
+    if (settleTimer != null) win.clearTimeout(settleTimer);
+    settleTimer = win.setTimeout(() => {
+      settleTimer = null;
+      refreshAliases();
+    }, ALIAS_SETTLE_MS);
+  };
+  const syncWatches = (kw) => {
+    const addWatch = api.data?.addPullWatch;
+    if (!lifecycle || lifecycle.disposed || typeof addWatch !== "function") return false;
+    let added = false;
+    const wanted = new Set(keywordTitles(kw).filter((t) => api.pull("[:db/id]", [":node/title", t])));
+    for (const [title, watch] of watches) {
+      if (wanted.has(title)) continue;
+      api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
+      watches.delete(title);
+      pulled.delete(title);
+    }
+    for (const title of wanted) {
+      if (watches.has(title)) continue;
+      const watch = { entity: `[:node/title ${JSON.stringify(title)}]`, cb: watchOf(title) };
+      api.data.addPullWatch(ALIAS_PULL, watch.entity, watch.cb);
+      watches.set(title, watch);
+      added = true;
+    }
+    return added;
+  };
+  lifecycle?.add(() => {
+    if (settleTimer != null) win.clearTimeout(settleTimer);
+    for (const watch of watches.values()) api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
+    watches.clear();
+    pulled.clear();
+    listeners.clear();
+  });
+  let aliasPrint = null;
+  const printOf = (rows) => rows.map((row) => row.join("\0")).join("");
+  function refreshAliases({ force = false, fresh = false } = {}) {
+    idle(() => {
+      if (lifecycle?.disposed) return;
+      const kw = setting("aliasKeyword") || "Aliases";
+      if (!aliases || !titles || !refs || kw !== keyword) {
+        schedule();
+        return;
+      }
+      const t0 = performance.now();
+      const rows = readAliasRows(kw, [...watches.keys()], fresh || !watches.size);
+      const print = printOf(rows);
+      perf.push("aliasRead", performance.now() - t0);
+      if (print === aliasPrint && !force) return;
+      idle(() => swapAliases(kw, rows, print));
+    });
+  }
+  let rekey = null;
+  function swapAliases(kw, rows, print) {
+    if (lifecycle?.disposed || !aliases || kw !== keyword) return;
+    const t0 = performance.now();
+    const next = buildAliasIndex(rows, kw, aliases.memo);
+    setAliasRefs(next, [...aliases.refsByPage]);
+    titles.setAliases(next);
+    const left = rekey?.refs === refs ? rekey.entries.slice(rekey.at) : [];
+    const entries = [.../* @__PURE__ */ new Set([...left, ...aliasKeyTargets(refs, next.byPage, aliases.byPage)])];
+    aliases = next;
+    aliasPrint = print;
+    if (!watches.size) syncWatches(kw);
+    perf.push("aliasRefresh", performance.now() - t0);
+    const run = rekey = { refs, entries, at: 0, keys: /* @__PURE__ */ new Map() };
+    idle(() => rekeyStep(run));
+  }
+  function rekeyStep(run) {
+    if (lifecycle?.disposed || rekey !== run || refs !== run.refs) return;
+    const t0 = performance.now();
+    run.at = rekeyAliases(refs, run.entries, aliases.byPage, { from: run.at, stop: () => performance.now() - t0 > REKEY_SLICE_MS, keys: run.keys }).next;
+    perf.push("aliasRekey", performance.now() - t0);
+    if (run.at < run.entries.length) {
+      idle(() => rekeyStep(run));
+      return;
+    }
+    rekey = null;
+    perf.counters.aliasRefreshes = (perf.counters.aliasRefreshes || 0) + 1;
+    notify();
+  }
   const build = async () => {
     const t0 = performance.now();
+    const calls = watchCalls;
     const nextKeyword = setting("aliasKeyword") || "Aliases";
-    const pageIds = await q(ALIAS_PAGES, keywordTitles(nextKeyword));
-    const aliasRows = pageIds?.length ? await q(ALIAS_BLOCKS, pageIds) : [];
+    const aliasRows = readAliasRows(nextKeyword);
     const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
     const aliasRefRows = aliasUids.length ? await q(ALIAS_REFS, aliasUids) : [];
     const rows = await q(REFERENCED_BLOCKS);
@@ -650,14 +836,19 @@ function createIndexes({ api, perf, setting, idle }) {
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
+    rekey = null;
     refs = nextRefs;
     aliases = nextAliases;
+    aliasPrint = printOf(aliasRows);
     keyword = nextKeyword;
     builtAt = Date.now();
     perf.counters.builds += 1;
     perf.push("buildQuery", t1 - t0);
     perf.push("buildKeys", performance.now() - t1);
     if (!refs.entries.length) perf.counters.emptyBuilds = (perf.counters.emptyBuilds || 0) + 1;
+    syncWatches(nextKeyword);
+    notify();
+    if (watchCalls !== calls) refreshAliases();
   };
   const schedule = () => {
     if (pending) return;
@@ -680,8 +871,23 @@ function createIndexes({ api, perf, setting, idle }) {
     },
     schedule,
     build,
+    refreshAliases,
+    // fn() runs after a build or an alias refresh.
+    listen(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    get watched() {
+      return [...watches.keys()];
+    },
     refreshIfStale() {
-      if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) schedule();
+      if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) {
+        schedule();
+        return;
+      }
+      idle(() => {
+        if (keyword && syncWatches(keyword)) refreshAliases({ fresh: true });
+      });
     }
   };
 }
@@ -938,6 +1144,11 @@ var DEFAULTS = Object.freeze({
   drillCap: true,
   refSearch: true,
   refSearchHotkey: false,
+  helpTips: true,
+  helpSheet: true,
+  helpNudge: true,
+  // Not a switch: set once the first-run line has been shown.
+  helpNudgeSeen: false,
   aliasKeyword: "Aliases",
   aliasLinkFormat: "[alias]([[Page]])",
   perfHud: false
@@ -955,7 +1166,10 @@ var SWITCHES = [
   ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
   ["tabDrill", "Tab drills in", "Tab on the highlighted page, or on a referenced block with children, lists its blocks in place under a breadcrumb. Type to filter, ↑/↓ to move, Enter inserts the block's ((uid)), Tab goes one level deeper, Shift+Tab or Backspace on an empty filter goes back, Esc returns to the results. With nothing to drill into, Tab does what Roam does."],
   ["paneLayout", "Keep panes apart", "Roam's preview, roam-aliases' column and the result list each get their own space in the picker; nothing is drawn over anything else."],
-  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys Burrow adds, RefX style: ⌥A alias · ⌥↓ pick alias · ⇥/> drill · ⇧⇥ back · ⌃O preview · ↵ insert."],
+  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys that do something for the highlighted row, RefX style: on an alias row ↵ pick alias · ⌥↓ more aliases · ⇥ drill (only when the page has blocks) · ⌥A add alias; in a drill ⇥/> drill · ⇧⇥ back · ⌃O preview."],
+  ["helpTips", "Hover tips", "Hovering a Burrow row, alias chip, preview or key hint shows what it is and which key does what with it, in Roam's colors."],
+  ["helpSheet", "Key list (⌥/ or ?)", "⌥/ (Alt+/) while the picker is open, or the ? at the end of the hint line, lists every key Burrow adds, grouped, for the switches that are on. Esc or ⌥/ closes it; any other key closes it and goes on as usual."],
+  ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],
   ["aliasDelete", "Delete aliases from the chips (writes to your graph)", "Alt+Backspace on the selected alias chip asks to confirm; Enter removes only that alias from the page's alias block, Esc keeps it. Off by default."],
@@ -1010,12 +1224,19 @@ async function initializeSettings(extensionAPI) {
 // src/aliasedit.js
 var kwOf = (keyword) => String(keyword || "Aliases").trim();
 var clean = (value) => value.trim().replace(/^#?\[\[(.*)\]\]$/, "$1").replace(/^#/, "").trim();
+var REFUSED = [
+  [/[\r\n]/, "no line breaks"],
+  [/,/, "no commas: Roam splits aliases on them"],
+  [/#/, "no #: Roam would make a tag"],
+  [/\(\(|\)\)/, "no (( )): Roam would make a block ref"],
+  [/\{\{|\}\}/, "no {{ }}: Roam would make a component"],
+  [/::/, "no double colon: Roam would make an attribute"],
+  [/[[\]]/, "no [ ]: Roam would make a link"]
+];
 function validAlias(text) {
   const alias = String(text ?? "").trim();
   if (!alias) return { ok: false, reason: "type an alias" };
-  if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
-  if (/#\S/.test(alias)) return { ok: false, reason: "no # right before text: Roam reads it as a tag" };
-  if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
+  for (const [re, reason] of REFUSED) if (re.test(alias)) return { ok: false, reason };
   return { ok: true, alias };
 }
 function isAliasBlock(string, keyword) {
@@ -1317,14 +1538,60 @@ var NAMED = {
   altA: ["⌥A", "Alt+A"],
   altDown: ["⌥↓", "Alt+↓"],
   altBackspace: ["⌥⌫", "Alt+⌫"],
-  ctrlO: ["⌃O", "Ctrl+O"]
+  ctrlO: ["⌃O", "Ctrl+O"],
+  altSlash: ["⌥/", "Alt+/"],
+  altShift9: ["⌥⇧9", "Alt+Shift+9"]
 };
 function keyLabel(name, mac = IS_MAC) {
   const pair = NAMED[name];
   return pair ? pair[mac ? 0 : 1] : name;
 }
+var ALT_SLASH = /* @__PURE__ */ new Set(["/", "÷", "?", "¿"]);
+var isAltSlash = (e) => e.altKey && !e.ctrlKey && !e.metaKey && ALT_SLASH.has(e.key);
 function hintsKey(items) {
   return items.map(([keys, label]) => `${keys}\0${label}`).join("");
+}
+function pickerHints(s, mac = IS_MAC) {
+  const on = s.on || {};
+  const k = (name) => keyLabel(name, mac);
+  const drillHint = (what) => ["⇥", "drill", `Tab lists ${what} in place: type to filter, ↵ inserts one, ⇧⇥ comes back`];
+  const addAlias = [k("altA"), "add alias", "Add an alias to this page's Aliases:: block and insert it (writes to your graph)"];
+  if (s.prompt === "add") return [["↵", "save alias", "Add it to the page's Aliases:: block, then insert the link"], ["esc", "cancel", "Back to the picker; nothing is written"]];
+  if (s.prompt === "delete") return [["↵", "delete", "Remove only this alias from the page's alias block"], ["esc", "keep", "Keep the alias"]];
+  const items = [];
+  const row = s.row;
+  if (row && s.chips) {
+    items.push(["←→", "alias", "Choose another alias of this page"]);
+    if (on.aliasDelete) items.push([k("altBackspace"), "delete", "Delete the selected alias from the page (asks first)"]);
+    items.push(["↵", "insert", "Insert the page shown as the selected alias"]);
+    if (row.drill && on.tabDrill) items.push(drillHint("the page's blocks"));
+    items.push(["esc", "rows", "Back to the rows"]);
+    return items;
+  }
+  if (row?.kind === "alias") {
+    items.push(["↵", "pick alias", on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
+    if (row.chips) items.push([k("altDown"), "more aliases", "Move into the page's other aliases: ←→ choose, ↵ inserts the page shown as that alias"]);
+    if (row.drill && on.tabDrill) items.push(drillHint("the page's blocks"));
+    if (row.aliasNew) items.push(addAlias);
+    return items;
+  }
+  if (row?.kind === "ref") {
+    items.push(["↵", "insert ref", "Insert this block's ((uid)): the original other blocks already reference"]);
+    if (row.drill && on.tabDrill) items.push(drillHint("its child blocks"));
+    return items;
+  }
+  if (row?.kind === "drill") {
+    items.push(["↵", "insert block", "Insert the ((uid)) of the block the drill-down reaches"]);
+    if (row.drill && on.tabDrill) items.push(["⇥/>", "drill", "Tab lists its child blocks; typing > goes one level down"]);
+    else if (row.drill && on.drill) items.push([">", "next level", "Type > and a few words to reach one of its child blocks"]);
+    return items;
+  }
+  if (s.rowsAbove) items.push(["↑", s.kind === "((" ? "referenced" : "alias rows", "From Roam's first row, ↑ moves into Burrow's rows above it"]);
+  if (s.kind === "[[" && s.native) {
+    if (s.native.drill && on.tabDrill) items.push(drillHint("the highlighted page's blocks"));
+    if (s.native.aliasNew) items.push(addAlias);
+  }
+  return items;
 }
 function renderHints(doc, node, items) {
   const span = (className, textContent) => Object.assign(doc.createElement("span"), { className, textContent });
@@ -1332,10 +1599,111 @@ function renderHints(doc, node, items) {
   items.forEach(([keys, label], i) => {
     if (i) parts.push(span("burrow-hint-sep", " · "));
     const item = span("burrow-hint", "");
+    item.dataset.hint = String(i);
     item.append(span("burrow-hint-key", keys), ` ${label}`);
     parts.push(item);
   });
   node.replaceChildren(...parts);
+}
+
+// src/help.js
+var WIDE = 620;
+function helpGroups(setting, mac = IS_MAC) {
+  const k = (name) => keyLabel(name, mac);
+  const on = (id) => Boolean(setting(id));
+  const groups = [];
+  const pick = { title: "Pick", items: [], notes: [] };
+  if (on("aliasPages") || on("refRanking")) pick.items.push(["↑ ↓", "move; ↑ on Roam's first row enters Burrow's"]);
+  pick.items.push(["↵", "insert the selected row, or click it"], ["esc", "back to Roam's rows"]);
+  if (on("refRanking")) pick.items.push(["((", "referenced blocks first"]);
+  if (on("refSearch") && on("refSearchHotkey")) pick.items.push([k("altShift9"), "open (( at the caret"]);
+  groups.push(pick);
+  const aliases = { title: "Aliases", items: [], notes: [] };
+  if (on("aliasPages")) aliases.items.push(["[[alias", setting("aliasLinkFormat") === "[[Page]]" ? "↵ inserts [[Page]]" : "↵ inserts [alias]([[Page]])"]);
+  if (on("aliasPages") && on("aliasChips")) aliases.items.push([k("altDown"), "the page's other aliases, ←→"]);
+  if (on("aliasCreate")) aliases.items.push([k("altA"), "add an alias to the page"]);
+  if (on("aliasDelete") && on("aliasChips")) aliases.items.push([k("altBackspace"), "delete the selected alias"]);
+  const off = [];
+  if (!on("aliasCreate")) off.push(`${k("altA")} add (Create aliases)`);
+  if (!on("aliasDelete")) off.push(`${k("altBackspace")} delete (Delete aliases)`);
+  if (off.length) aliases.notes.push(`Off, they write to your graph: ${off.join(", ")}. Settings → Burrow turns them on.`);
+  groups.push(aliases);
+  const drill = { title: "Drill", items: [], notes: [] };
+  if (on("tabDrill")) {
+    drill.items.push(["⇥ or >", "list the page's blocks"], ["⇧⇥ or ⌫", "one level back"], ["type", "filter the list"]);
+    if (on("drillOrdinals")) drill.items.push(["1 (b) iii", "numbered blocks first"]);
+    drill.items.push(["esc", "back to the results"]);
+  }
+  if (on("drill")) drill.items.push(["# >", "[[Page#heading > child"]);
+  if (drill.items.length) groups.push(drill);
+  const preview = { title: "Preview", items: [], notes: [] };
+  preview.items.push([k("ctrlO"), on("rowPreview") ? "Roam's preview, for Burrow's rows too" : "Roam's preview"]);
+  if (on("tabDrill") && on("drillPreview")) preview.items.push([k("ctrlO"), "in a drill: its own preview"]);
+  groups.push(preview);
+  return groups;
+}
+function createHelpSheet({ doc, win, lifecycle }) {
+  const node = doc.createElement("div");
+  node.className = "burrow-help bp3-elevation-3";
+  node.setAttribute("role", "dialog");
+  node.setAttribute("aria-label", "Burrow keys");
+  node.hidden = true;
+  lifecycle.node(node, doc.body);
+  let shownKey = null;
+  const el = (tag, className, textContent) => Object.assign(doc.createElement(tag), { className, ...textContent != null ? { textContent } : {} });
+  function render(groups, closeKey) {
+    const head = el("div", "burrow-help-head");
+    head.append(el("span", "burrow-help-title", "Burrow keys"), el("span", "burrow-help-close", `${closeKey} or esc closes`));
+    const grid = el("div", "burrow-help-grid");
+    for (const group of groups) {
+      const box = el("div", "burrow-help-group");
+      box.append(el("div", "burrow-help-group-title", group.title));
+      for (const [keys, what] of group.items) {
+        const line = el("div", "burrow-help-item");
+        line.append(el("span", "burrow-help-key", keys), el("span", "burrow-help-what", what));
+        box.append(line);
+      }
+      for (const note of group.notes) box.append(el("div", "burrow-help-note", note));
+      grid.append(box);
+    }
+    const foot = el("div", "burrow-help-foot", "Every key has its own switch in Settings → Burrow.");
+    node.replaceChildren(head, grid, foot);
+  }
+  function place(anchor, taRect) {
+    const above = taRect ? anchor.top + anchor.height / 2 < taRect.top : false;
+    const width = Math.min(Math.max(anchor.width, WIDE), win.innerWidth - 16);
+    node.style.left = `${Math.round(Math.max(0, Math.min(anchor.left, win.innerWidth - width)))}px`;
+    node.style.width = `${Math.round(width)}px`;
+    node.classList.toggle("burrow-wide", width >= WIDE);
+    if (above) {
+      node.style.top = "auto";
+      node.style.bottom = `${Math.round(win.innerHeight - anchor.bottom)}px`;
+      node.style.maxHeight = `${Math.round(Math.min(440, anchor.bottom - 8))}px`;
+    } else {
+      node.style.bottom = "auto";
+      node.style.top = `${Math.round(anchor.top)}px`;
+      node.style.maxHeight = `${Math.round(Math.min(440, win.innerHeight - anchor.top - 8))}px`;
+    }
+  }
+  return {
+    node,
+    get open() {
+      return !node.hidden;
+    },
+    show(groups, closeKey, anchor, taRect) {
+      const key = JSON.stringify(groups) + closeKey;
+      if (key !== shownKey) {
+        render(groups, closeKey);
+        shownKey = key;
+      }
+      place(anchor, taRect);
+      node.hidden = false;
+      node.scrollTop = 0;
+    },
+    hide() {
+      node.hidden = true;
+    }
+  };
 }
 
 // src/pagetree.js
@@ -1347,10 +1715,17 @@ var PAGE_ID = "[:db/id]";
 var HEADINGS = "[:find ?b ?h :in $ ?p :where [?b :block/page ?p] [?b :block/heading ?h]]";
 var HEADING = "[:block/uid :block/string :block/heading :block/order]";
 var FIRST_SCAN_LIMIT = 3e3;
+var SLOTS = "[{:block/children [:db/id :block/order]}]";
+var BRIEF = "[:block/uid :block/string :block/heading :block/order {(limit :block/children 1) [:db/id]}]";
+var EID = "[:db/id]";
+var PAUSE = /* @__PURE__ */ Symbol("burrow-preview-pause");
 function createTreeSource({ pull, q, onFetch }) {
   const nodes = /* @__PURE__ */ new Map();
   const headingsByPage = /* @__PURE__ */ new Map();
   const trails = /* @__PURE__ */ new Map();
+  const slots = /* @__PURE__ */ new Map();
+  const byEid = /* @__PURE__ */ new Map();
+  const eids = /* @__PURE__ */ new Map();
   const node = (raw) => {
     const uid = raw[":block/uid"];
     let n = nodes.get(uid);
@@ -1446,17 +1821,78 @@ function createTreeSource({ pull, q, onFetch }) {
       return pa.length - pb.length;
     })[0];
   }
+  const full = {
+    trail,
+    window(uid, from, size) {
+      const kids = children(uid);
+      return { total: kids.length, kids: kids.slice(from, from + size) };
+    },
+    indexOf(parentUid, uid) {
+      return children(parentUid).findIndex((k) => k.uid === uid);
+    }
+  };
+  function bounded(expired = () => false) {
+    const read = (fn) => {
+      if (expired()) throw PAUSE;
+      onFetch?.("pull");
+      return fn();
+    };
+    const slotIds = (uid) => {
+      if (!slots.has(uid)) {
+        const raw = read(() => pull(SLOTS, [":block/uid", uid]));
+        slots.set(uid, [...raw?.[":block/children"] || []].sort((a, b) => (a[":block/order"] ?? 0) - (b[":block/order"] ?? 0)).map((k) => k[":db/id"]));
+      }
+      return slots.get(uid);
+    };
+    const brief = (eid) => {
+      if (!byEid.has(eid)) {
+        const raw = read(() => pull(BRIEF, eid));
+        const n = raw?.[":block/uid"] ? node(raw) : null;
+        if (n && !Array.isArray(n.kids) && !raw[":block/children"]?.length) n.kids = [];
+        if (n) eids.set(n.uid, eid);
+        byEid.set(eid, n);
+      }
+      return byEid.get(eid);
+    };
+    const eidOf = (uid) => {
+      if (!eids.has(uid)) eids.set(uid, read(() => pull(EID, [":block/uid", uid]))?.[":db/id"] ?? null);
+      return eids.get(uid);
+    };
+    return {
+      trail(uid) {
+        if (!trails.has(uid) && expired()) throw PAUSE;
+        return trail(uid);
+      },
+      window(uid, from, size) {
+        const known = nodes.get(uid)?.kids;
+        if (Array.isArray(known)) return { total: known.length, kids: known.slice(from, from + size) };
+        const ids = slotIds(uid);
+        return { total: ids.length, kids: ids.slice(from, from + size).map(brief).filter(Boolean) };
+      },
+      indexOf(parentUid, uid) {
+        const known = nodes.get(parentUid)?.kids;
+        if (Array.isArray(known)) return known.findIndex((k) => k.uid === uid);
+        const ids = slotIds(parentUid);
+        return ids.indexOf(eidOf(uid));
+      }
+    };
+  }
   return {
     children,
     twoLevels,
     headings,
     trail,
     first,
+    full,
+    bounded,
     get: (uid) => nodes.get(uid) || null,
     clear() {
       nodes.clear();
       headingsByPage.clear();
       trails.clear();
+      slots.clear();
+      byEid.clear();
+      eids.clear();
     },
     get size() {
       return nodes.size;
@@ -1472,39 +1908,49 @@ var GAP = 4;
 var WIDTH = 400;
 var MAX_HEIGHT = 300;
 var DRILL_CLASS = "burrow-drill";
+var readerOf = (tree) => tree.window ? tree : {
+  trail: (uid) => tree.trail(uid),
+  window(uid, from, size) {
+    const kids = tree.children(uid);
+    return { total: kids.length, kids: kids.slice(from, from + size) };
+  },
+  indexOf: (parentUid, uid) => tree.children(parentUid).findIndex((k) => k.uid === uid)
+};
 function previewModel(result, tree, text, { hideEmpty = false } = {}) {
+  const read = readerOf(tree);
   const { page, target } = result;
-  const trailNodes = target ? tree.trail(target.uid) : [];
+  const trailNodes = target ? read.trail(target.uid) : [];
   const parentUid = trailNodes.length ? trailNodes[trailNodes.length - 1].uid : page.uid;
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
+  const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
-    const kids = levels > 1 ? tree.twoLevels(uid) : tree.children(uid);
-    for (const kid of kids.slice(0, CHILD_LIMIT)) {
+    const { total: total2, kids } = read.window(uid, 0, CHILD_LIMIT);
+    for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
       items.push({ uid: kid.uid, text: text(kid.string || ""), depth, heading: kid.heading, target: false });
-      if (levels > 1 && kid.kids?.length) pushKids(kid.uid, depth + 1, levels - 1);
+      if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
-    if (kids.length > CHILD_LIMIT) items.push({ more: kids.length - CHILD_LIMIT, depth });
+    if (total2 > CHILD_LIMIT) items.push({ more: total2 - CHILD_LIMIT, depth });
   };
   if (!target) {
     pushKids(page.uid, 0, 2);
     return { key: `page:${page.uid}`, trail, items };
   }
-  const siblings = tree.children(parentUid);
-  let at = siblings.findIndex((s) => s.uid === target.uid);
-  if (at < 0) at = 0;
-  const from = Math.max(0, Math.min(at - Math.floor(SIBLING_WINDOW / 2), siblings.length - SIBLING_WINDOW));
+  const at = Math.max(0, read.indexOf(parentUid, target.uid));
+  const { total } = read.window(parentUid, 0, 0);
+  const from = Math.max(0, Math.min(at - Math.floor(SIBLING_WINDOW / 2), total - SIBLING_WINDOW));
+  const siblings = read.window(parentUid, from, SIBLING_WINDOW).kids;
   if (from > 0) items.push({ more: from, depth: 0 });
-  for (const sib of siblings.slice(from, from + SIBLING_WINDOW)) {
+  for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
     items.push({ uid: sib.uid, text: text(sib.string || ""), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
-  if (from + SIBLING_WINDOW < siblings.length) items.push({ more: siblings.length - from - SIBLING_WINDOW, depth: 0 });
+  if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
   if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
@@ -1538,27 +1984,27 @@ function createPreview({ doc, win, lifecycle }) {
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
-      const bullet = Object.assign(doc.createElement("span"), { className: "burrow-bullet" });
-      const body = Object.assign(doc.createElement("span"), { className: "burrow-body", textContent: item.text || " " });
-      row.append(bullet, body);
+      row.textContent = item.text || " ";
       return row;
     });
     outline.replaceChildren(...rows);
   }
-  function place(avoid, beside) {
+  function dockRect(beside) {
+    if (beside || !pop.classList.contains("rm-autocomplete__results--expanded")) return null;
     const native = pop.querySelector(".rm-autocomplete__preview");
-    if (!beside && native && pop.classList.contains("rm-autocomplete__results--expanded")) {
-      const r2 = native.getBoundingClientRect();
-      Object.assign(pane.style, {
-        left: `${Math.round(r2.left)}px`,
-        top: `${Math.round(r2.top)}px`,
-        width: `${Math.round(r2.width)}px`,
-        height: `${Math.round(r2.height)}px`,
-        maxHeight: ""
-      });
-      pane.classList.add("burrow-preview-docked");
-      return;
-    }
+    return native ? native.getBoundingClientRect() : null;
+  }
+  function dock(r) {
+    Object.assign(pane.style, {
+      left: `${Math.round(r.left)}px`,
+      top: `${Math.round(r.top)}px`,
+      width: `${Math.round(r.width)}px`,
+      height: `${Math.round(r.height)}px`,
+      maxHeight: ""
+    });
+    pane.classList.add("burrow-preview-docked");
+  }
+  function place(avoid, beside) {
     const r = beside || pop.getBoundingClientRect();
     const height = Math.min(MAX_HEIGHT, pane.scrollHeight || MAX_HEIGHT);
     let left = r.right + GAP;
@@ -1581,7 +2027,7 @@ function createPreview({ doc, win, lifecycle }) {
   function scrollToTarget() {
     const target = outline.querySelector(".burrow-target");
     if (!target) {
-      pane.scrollTop = 0;
+      if (pane.scrollTop) pane.scrollTop = 0;
       return;
     }
     const top = target.offsetTop - trailNode.offsetHeight;
@@ -1589,24 +2035,60 @@ function createPreview({ doc, win, lifecycle }) {
     if (top < pane.scrollTop) pane.scrollTop = Math.max(0, top - 4);
     else if (bottom > pane.scrollTop + pane.clientHeight) pane.scrollTop = bottom - pane.clientHeight + 4;
   }
+  let scrollFrame = null;
+  const cancelScroll = () => {
+    if (scrollFrame != null) {
+      win.cancelAnimationFrame(scrollFrame);
+      scrollFrame = null;
+    }
+  };
+  lifecycle.add(cancelScroll);
+  let filled = false;
   return {
     node: pane,
-    show(model, popover, { avoid = null, beside = null } = {}) {
+    // The model's lines only, no layout read: show() places them (in a frame).
+    fill(model, popover) {
+      if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
+      pop = popover;
+      if (model.key === shownKey) return;
+      render(model);
+      shownKey = model.key;
+      filled = true;
+    },
+    // inFrame: called from a frame callback, so the scroll runs now, in this frame.
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       if (!beside) pop.classList.add(DRILL_CLASS);
-      const changed = model.key !== shownKey || pane.hidden;
+      const docked = dockRect(beside);
+      const changed = model.key !== shownKey || pane.hidden || filled;
+      filled = false;
       if (model.key !== shownKey) {
         render(model);
         shownKey = model.key;
       }
       pane.hidden = false;
-      place(avoid, beside);
-      if (changed) scrollToTarget();
+      if (docked) dock(docked);
+      else place(avoid, beside);
+      if (!changed) return;
+      cancelScroll();
+      if (!docked || inFrame) {
+        scrollToTarget();
+        return;
+      }
+      scrollFrame = win.requestAnimationFrame(() => {
+        scrollFrame = null;
+        if (pane.hidden || shownKey !== model.key) return;
+        const t0 = performance.now();
+        scrollToTarget();
+        onFrame?.(performance.now() - t0);
+      });
     },
     hide() {
+      cancelScroll();
       pane.hidden = true;
       shownKey = null;
+      filled = false;
       if (pop) pop.classList.remove(DRILL_CLASS);
       pop = null;
     }
@@ -1656,6 +2138,15 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
   list.className = "burrow-scope-list";
   const hintsLine = doc.createElement("div");
   hintsLine.className = "burrow-scope-hints";
+  const hintsList = doc.createElement("span");
+  hintsList.className = "burrow-hints-list";
+  const helpButton = doc.createElement("span");
+  helpButton.className = "burrow-help-button";
+  helpButton.setAttribute("role", "button");
+  helpButton.setAttribute("aria-keyshortcuts", "Alt+/");
+  helpButton.setAttribute("aria-label", `Burrow keys (${keyLabel("altSlash")})`);
+  helpButton.textContent = "?";
+  hintsLine.append(hintsList, helpButton);
   node.append(crumb, list, hintsLine);
   lifecycle.node(node, doc.body);
   let listKey = null;
@@ -1713,20 +2204,28 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     }));
   }
   let hintsShown = null;
-  function renderHints2(scope, on) {
+  let hintItems = [];
+  function renderHints2(scope, on, help) {
     hintsLine.hidden = !on;
+    helpButton.hidden = !help;
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
     const active = scope.rows[level.active];
     const items = [];
-    if (active?.drillable) items.push(["⇥/>", "drill"]);
-    items.push(["⇧⇥", "back"], [keyLabel("ctrlO"), "preview"], ["↵", active?.more != null ? "more" : "insert"], ["esc", "results"]);
+    if (active?.drillable) items.push(["⇥/>", "drill", "Go into the highlighted block: its children are listed here"]);
+    items.push(
+      ["⇧⇥", "back", "One level back (Backspace on an empty filter too); from the first level, back to the results"],
+      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
+      ["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"],
+      ["esc", "results", "Back to Roam's results; the text stays as you typed it"]
+    );
     const key = hintsKey(items);
     if (key === hintsShown) return;
     hintsShown = key;
-    renderHints(doc, hintsLine, items);
+    hintItems = items;
+    renderHints(doc, hintsList, items);
   }
-  function paintActive(scope, hintsOn) {
+  function paintActive(scope, hintsOn, helpOn = false) {
     const level = scope.levels[scope.levels.length - 1];
     list.querySelectorAll(".burrow-row").forEach((item, i) => {
       const on = i === level.active;
@@ -1734,7 +2233,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       item.setAttribute("aria-selected", String(on));
       if (on) item.scrollIntoView?.({ block: "nearest" });
     });
-    renderHints2(scope, hintsOn);
+    renderHints2(scope, hintsOn, helpOn);
   }
   function place(anchor, popRect, taRect) {
     const above = popRect.top + popRect.height / 2 < taRect.top;
@@ -1750,11 +2249,14 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
   }
   return {
     node,
-    show(scope, hintsOn) {
+    show(scope, hintsOn, helpOn = false) {
       renderCrumb(scope);
       renderList(scope);
       node.hidden = false;
-      paintActive(scope, hintsOn);
+      paintActive(scope, hintsOn, helpOn);
+    },
+    get hintItems() {
+      return hintItems;
     },
     paintActive,
     place,
@@ -1796,6 +2298,99 @@ function isDarkHost(doc = globalThis.document) {
   return Boolean(bg && bg.a > 0 && luminance(bg) < 0.2);
 }
 
+// src/tips.js
+var DELAY_MS = 450;
+var GAP2 = 6;
+var MAX_WIDTH = 320;
+function createTips({ doc, win, lifecycle, enabled, avoid = () => null }) {
+  const node = doc.createElement("div");
+  node.className = "burrow-tip";
+  node.setAttribute("role", "tooltip");
+  node.hidden = true;
+  lifecycle.node(node, doc.body);
+  let timer = null;
+  let anchor = null;
+  let stash = null;
+  function hide() {
+    if (timer != null) {
+      win.clearTimeout(timer);
+      timer = null;
+    }
+    if (stash) {
+      if (!stash.el.hasAttribute("title")) stash.el.setAttribute("title", stash.title);
+      stash = null;
+    }
+    anchor = null;
+    if (!node.hidden) node.hidden = true;
+  }
+  lifecycle.add(hide);
+  function render({ title, lines }) {
+    const parts = [];
+    if (title) parts.push(Object.assign(doc.createElement("div"), { className: "burrow-tip-title", textContent: title }));
+    for (const [keys, what] of lines || []) {
+      const line = Object.assign(doc.createElement("div"), { className: "burrow-tip-line" });
+      if (keys) line.append(Object.assign(doc.createElement("span"), { className: "burrow-tip-key", textContent: keys }));
+      line.append(what);
+      parts.push(line);
+    }
+    node.replaceChildren(...parts);
+  }
+  function place(rect, styleFrom) {
+    for (const name of ["--burrow-bg", "--burrow-fg"]) node.style.setProperty(name, styleFrom.style.getPropertyValue(name) || "");
+    node.style.zIndex = String((Number.parseInt(styleFrom.style.zIndex, 10) || 30) + 2);
+    node.style.maxWidth = `${MAX_WIDTH}px`;
+    node.style.left = "0px";
+    node.style.top = "0px";
+    node.hidden = false;
+    const box = node.getBoundingClientRect();
+    const ta = avoid();
+    const hits = (top2) => ta && top2 < ta.bottom && top2 + box.height > ta.top && rect.left < ta.right && rect.left + box.width > ta.left;
+    let top = rect.bottom + GAP2;
+    if (top + box.height > win.innerHeight || hits(top)) top = rect.top - GAP2 - box.height;
+    if (top < 0 || hits(top)) top = Math.min(win.innerHeight - box.height, rect.bottom + GAP2);
+    const left = Math.max(4, Math.min(rect.left, win.innerWidth - box.width - 4));
+    node.style.left = `${Math.round(left)}px`;
+    node.style.top = `${Math.round(Math.max(0, top))}px`;
+  }
+  function attach(container, resolve) {
+    lifecycle.event(container, "mouseover", (event) => {
+      if (!enabled()) {
+        if (anchor) hide();
+        return;
+      }
+      const hit = resolve(event.target);
+      if (!hit) {
+        hide();
+        return;
+      }
+      if (hit.el === anchor) return;
+      hide();
+      anchor = hit.el;
+      if (hit.el.hasAttribute("title")) {
+        stash = { el: hit.el, title: hit.el.getAttribute("title") };
+        hit.el.removeAttribute("title");
+      }
+      timer = win.setTimeout(() => {
+        timer = null;
+        if (anchor !== hit.el || !hit.el.isConnected) return;
+        render(hit);
+        place(hit.el.getBoundingClientRect(), hit.themeFrom || container);
+      }, DELAY_MS);
+    });
+    lifecycle.event(container, "mouseleave", hide);
+    lifecycle.event(container, "mousedown", hide, true);
+    lifecycle.event(container, "wheel", hide, { passive: true });
+  }
+  return {
+    node,
+    attach,
+    hide,
+    get visible() {
+      return anchor != null;
+    }
+  };
+}
+
 // src/token.js
 function findToken(value, caret) {
   if (typeof value !== "string" || !Number.isInteger(caret) || caret < 2) return null;
@@ -1823,6 +2418,20 @@ function tokenStillValid(value, selStart, selEnd, token) {
   return true;
 }
 
+// src/wheel.js
+function wheelPlan({ deltaX = 0, deltaY = 0, deltaMode = 0, shiftKey = false }, chips, list = null) {
+  const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? 300 : 1;
+  const dx = deltaX * unit;
+  const dy = deltaY * unit;
+  const horizontal = shiftKey || Math.abs(dx) > Math.abs(dy);
+  if (horizontal || !dy) return { to: "native" };
+  if (chips && chips.max > 0 && (dy > 0 && chips.left < chips.max - 0.5 || dy < 0 && chips.left > 0.5)) {
+    return { to: "chips", left: Math.max(0, Math.min(chips.max, chips.left + dy)) };
+  }
+  if (!list || !(dy > 0 && list.top < list.max - 0.5 || dy < 0 && list.top > 0.5)) return { to: "native" };
+  return { to: "list", by: dy };
+}
+
 // src/strip.js
 var POPUP = ".rm-autocomplete__results";
 var NATIVE_ROWS = ".rm-autocomplete__results-scroll > div";
@@ -1832,18 +2441,21 @@ var PAD_BOTTOM = "burrow-pad-foot";
 var FOLD_ALIASES = "burrow-fold-aliases";
 var LAYOUT = "burrow-layout";
 var SCOPE_OPEN = "burrow-scope-open";
+var HELP_OPEN = "burrow-help-open";
 var FOLDED = "data-burrow-folded";
 var EXPANDED = "rm-autocomplete__results--expanded";
 var HINTS_HEIGHT = 22;
 var CHIPS_INSET = 8;
 var ROW_LIMIT = 3;
 var PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
-var POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN];
+var POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
+var HAS_KIDS = "[(limit :block/children 1)]";
 var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
 var POPUP_WAIT_FRAMES = 12;
+var PREVIEW_SLICE_MS = 3;
 var valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
-function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc = document, win = window }) {
+function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, saveSetting = null, doc = document, win = window }) {
   const st = {
     phase: "IDLE",
     ta: null,
@@ -1862,7 +2474,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     auto: false,
     chip: -1,
     scope: null,
-    prompt: null
+    prompt: null,
+    help: false
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -1879,7 +2492,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
+  const hintsList = doc.createElement("span");
+  hintsList.className = "burrow-hints-list";
+  const helpButton = doc.createElement("span");
+  helpButton.className = "burrow-help-button";
+  helpButton.setAttribute("role", "button");
+  helpButton.setAttribute("aria-keyshortcuts", "Alt+/");
+  hints.append(hintsList, helpButton);
   lifecycle.node(hints, doc.body);
+  const sheet = createHelpSheet({ doc, win, lifecycle });
+  const tips = createTips({ doc, win, lifecycle, enabled: () => setting("helpTips"), avoid: () => st.ta?.isConnected ? st.ta.getBoundingClientRect() : null });
   const preview = createPreview({ doc, win, lifecycle });
   const scopePreview = createPreview({ doc, win, lifecycle });
   const scopePanel = createScopePanel({ doc, win, lifecycle, highlight: (text, query) => highlight(text, query) });
@@ -1891,7 +2513,18 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1;
     }
   });
-  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints");
+  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet");
+  const kidsKnown = /* @__PURE__ */ new Map();
+  function hasKids(uid) {
+    if (!uid) return false;
+    const kids = tree.get(uid)?.kids;
+    if (Array.isArray(kids)) return kids.length > 0;
+    if (!kidsKnown.has(uid)) {
+      perf.counters.kidChecks = (perf.counters.kidChecks || 0) + 1;
+      kidsKnown.set(uid, Boolean(api.pull(HAS_KIDS, [":block/uid", uid])?.[":block/children"]?.length));
+    }
+    return kidsKnown.get(uid);
+  }
   const isBlockInput = (el) => el?.tagName === "TEXTAREA" && el.classList.contains("rm-block-input");
   function rank(token) {
     st.drill = null;
@@ -1986,10 +2619,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   let roamAliasesSheet = null;
   let blockHighlight = null;
   const detectRoamAliases = () => {
-    for (const sheet of doc.styleSheets) {
+    for (const sheet2 of doc.styleSheets) {
       let rules;
       try {
-        rules = sheet.cssRules;
+        rules = sheet2.cssRules;
       } catch {
         continue;
       }
@@ -1997,7 +2630,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
         if (!blockHighlight && rule.selectorText === ".block-highlight-blue" && rule.style?.backgroundColor) {
           blockHighlight = rule.style.backgroundColor;
         }
-        if (!roamAliasesSheet && rule.selectorText?.includes(".rm-aliases")) roamAliasesSheet = sheet.ownerNode;
+        if (!roamAliasesSheet && rule.selectorText?.includes(".rm-aliases")) roamAliasesSheet = sheet2.ownerNode;
       }
     }
   };
@@ -2106,12 +2739,14 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   let model = null;
   let rowPreviewKey = null;
   let rowPreviewId = null;
+  let rowPreviewReady = null;
   function cancelRowPreview() {
     if (rowPreviewId != null) {
       (win.cancelIdleCallback || win.clearTimeout).call(win, rowPreviewId);
       rowPreviewId = null;
     }
     rowPreviewKey = null;
+    rowPreviewReady = null;
   }
   function previewTarget() {
     if (st.prompt) return { kind: "alias", key: `page:${st.prompt.page.uid}`, uid: st.prompt.page.uid, title: st.prompt.page.title };
@@ -2122,45 +2757,85 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree, readableText, { hideEmpty: setting("drillEmpty") });
+        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
       }
-      preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
+      else {
+        preview.fill(model, st.pop);
+        redock = true;
+        requestPlace();
+      }
       return;
     }
     const row = previewTarget();
     if (row && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
       if (rowPreviewKey === row.key) {
-        if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+        if (model && !preview.node.hidden) {
+          redock = true;
+          requestPlace();
+        }
         return;
       }
       cancelRowPreview();
-      preview.hide();
+      if (model?.drillKey?.startsWith("row:") !== true) hidePreview();
       rowPreviewKey = row.key;
-      const run = () => {
-        rowPreviewId = null;
-        perf.time("preview", () => drawRowPreview(row));
-      };
-      rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 150 }) : win.setTimeout(run, 50);
+      scheduleRowPreview(row);
       return;
     }
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
+  }
+  function scheduleRowPreview(row) {
+    const run = () => {
+      rowPreviewId = null;
+      drawRowPreview(row);
+    };
+    rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 150 }) : win.setTimeout(run, 50);
   }
   function drawRowPreview(row) {
     if (previewTarget()?.key !== row.key || !st.pop?.classList.contains(EXPANDED)) return;
+    const t0 = performance.now();
+    const elapsed = () => performance.now() - t0;
+    let next = rowPreviewReady?.key === row.key ? rowPreviewReady.model : null;
+    if (!next) {
+      try {
+        next = rowModel(row, tree.bounded(() => elapsed() > PREVIEW_SLICE_MS));
+      } catch (error) {
+        if (error !== PAUSE) throw error;
+        perf.push("preview", elapsed());
+        scheduleRowPreview(row);
+        return;
+      }
+      if (!next) {
+        perf.push("preview", elapsed());
+        return;
+      }
+      if (elapsed() > PREVIEW_SLICE_MS / 2) {
+        rowPreviewReady = { key: row.key, model: next };
+        perf.push("preview", elapsed());
+        scheduleRowPreview(row);
+        return;
+      }
+    }
+    rowPreviewReady = null;
+    model = next;
+    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => perf.push("preview", ms) });
+    perf.push("preview", elapsed());
+  }
+  function rowModel(row, read) {
     let page;
     let target = null;
     if (row.kind === "alias") page = { uid: row.uid, title: row.title };
     else {
-      const first = tree.trail(row.uid)[0];
-      if (!first) return;
+      const first = read.trail(row.uid)[0];
+      if (!first) return null;
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    model = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
-    model.drillKey = `row:${row.key}`;
-    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty") });
+    next.drillKey = `row:${row.key}`;
+    return next;
   }
   function rowNode(row, i) {
     const node = doc.createElement("div");
@@ -2315,6 +2990,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       if (blockHighlight) p.node.style.setProperty("--burrow-highlight", dark ? `color-mix(in srgb, ${blockHighlight} 28%, transparent)` : blockHighlight);
       else p.node.style.removeProperty("--burrow-highlight");
       p.node.classList.toggle("burrow-dark", dark);
+      p.node.classList.toggle("burrow-tips", Boolean(setting("helpTips")));
     }
     const panel = scopePanel.node;
     for (const name of ["--burrow-bg", "--burrow-fg", "--burrow-active"]) {
@@ -2349,7 +3025,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     chipsNode.remove();
     chipsFor = null;
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
   }
   function clearPopover() {
@@ -2365,7 +3041,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     chipsFor = null;
     hints.hidden = true;
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     clearPopover();
   }
   function foldedByRow(item, rows) {
@@ -2397,48 +3073,193 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     pop.classList.toggle(LAYOUT, setting("paneLayout") && visible > 0);
   }
   function hintList() {
-    if (st.phase === "SCOPE") return [];
-    if (st.prompt?.kind === "add") return [["↵", "save alias"], ["esc", "cancel"]];
-    if (st.prompt?.kind === "delete") return [["↵", "delete"], ["esc", "keep"]];
-    const row = shown[st.active];
-    if (chipsAvailable(row) && st.chip >= 0) {
-      return [["←→", "alias"], ...setting("aliasDelete") ? [[keyLabel("altBackspace"), "delete"]] : [], ["↵", "insert"], ["esc", "rows"]];
+    if (st.phase === "SCOPE" || !st.token) return [];
+    const row = st.phase === "OWNED" ? shown[st.active] : null;
+    const kind = st.token.kind;
+    const aliasNew = (page) => Boolean(page) && setting("aliasCreate") && kind === "[[";
+    const canDrill = (source) => Boolean(source) && (setting("tabDrill") || setting("drill")) && hasKids(source.uid);
+    const state = {
+      kind,
+      prompt: st.prompt?.kind ?? null,
+      chips: Boolean(row) && chipsAvailable(row) && st.chip >= 0,
+      row: row ? {
+        kind: row.kind,
+        chips: chipsAvailable(row),
+        aliasNew: aliasNew(row.kind === "alias"),
+        drill: canDrill(ownedSource(row, st.chip))
+      } : null,
+      native: !row && kind === "[[" ? (() => {
+        const source = armedSource();
+        return source ? { drill: canDrill(source), aliasNew: aliasNew(source) } : null;
+      })() : null,
+      rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]" }
+    };
+    return pickerHints(state);
+  }
+  let nudgeShown = false;
+  let nudgeDone = false;
+  const nudgeWanted = () => !nudgeDone && setting("helpSheet") && setting("helpNudge") && !setting("helpNudgeSeen");
+  function nudgeSeen() {
+    nudgeShown = false;
+    if (nudgeDone || setting("helpNudgeSeen")) {
+      nudgeDone = true;
+      return;
     }
-    const list = [];
-    if (setting("aliasCreate") && st.token?.kind === "[[" && aliasSource()) list.push([keyLabel("altA"), "alias"]);
-    if (chipsAvailable(row)) list.push([keyLabel("altDown"), "pick alias"]);
-    if (setting("tabDrill") && st.token?.kind === "[[") list.push(["⇥/>", "drill"]);
-    else if (setting("tabDrill") && st.phase === "OWNED" && row?.kind === "ref") list.push(["⇥", "drill"]);
-    if (!list.length) return [];
-    list.push([keyLabel("ctrlO"), "preview"], ["↵", "insert"]);
-    return list;
+    nudgeDone = true;
+    void Promise.resolve(saveSetting?.("helpNudgeSeen", true)).catch((error) => console.error("[burrow] could not save the tip as seen", error));
+  }
+  function paintHelpButton(nudge) {
+    const want = !setting("helpSheet") ? "" : nudge ? "nudge" : "help";
+    if (helpButton.dataset.mode === want) return;
+    helpButton.dataset.mode = want;
+    helpButton.hidden = !want;
+    helpButton.classList.toggle("burrow-nudge", want === "nudge");
+    const altSlash = keyLabel("altSlash");
+    helpButton.setAttribute("aria-label", `Burrow keys (${altSlash})`);
+    if (want === "nudge") {
+      helpButton.replaceChildren(`${altSlash} all keys`, Object.assign(doc.createElement("span"), { className: "burrow-nudge-close", textContent: "✕" }));
+    } else helpButton.textContent = want ? "?" : "";
   }
   let hintsFor = null;
+  let hintsLine = false;
   function layoutPop() {
     const pop = st.pop;
     if (!pop) return;
     const list = setting("keyHints") ? hintList() : [];
-    if (!list.length) {
+    const line = setting("keyHints") && st.phase !== "SCOPE" && !st.help && Boolean(st.token);
+    if (!line) {
       hints.hidden = true;
       hintsFor = null;
       pop.classList.remove(PAD_BOTTOM);
     } else {
-      const key = hintsKey(list);
+      const nudge = nudgeWanted();
+      if (nudge) nudgeShown = true;
+      const key = `${hintsKey(list)}${nudge}`;
       if (key !== hintsFor) {
         hintsFor = key;
-        renderHints(doc, hints, list);
+        hintItems = list;
+        renderHints(doc, hintsList, list);
       }
+      paintHelpButton(nudge);
       pop.classList.add(PAD_BOTTOM);
     }
-    if (strip.hidden && !list.length) return;
-    const rect = listColumn(pop).getBoundingClientRect();
-    const left = `${Math.round(rect.left)}px`;
-    const width = `${Math.round(rect.width)}px`;
-    if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
-    if (list.length) {
-      Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
-      hints.hidden = false;
+    hintsLine = line;
+    if (strip.hidden && !line) return;
+    requestPlace();
+  }
+  let inFrame = false;
+  let placeId = null;
+  let redock = false;
+  function hidePreview() {
+    redock = false;
+    preview.hide();
+  }
+  const inFrameDo = (fn) => {
+    inFrame = true;
+    try {
+      fn();
+    } finally {
+      inFrame = false;
     }
+  };
+  function requestPlace() {
+    if (inFrame) {
+      placePanes();
+      return;
+    }
+    if (placeId != null) return;
+    placeId = win.requestAnimationFrame(() => {
+      placeId = null;
+      inFrameDo(placePanes);
+    });
+  }
+  lifecycle.add(() => {
+    if (placeId != null) win.cancelAnimationFrame(placeId);
+    placeId = null;
+  });
+  function placePanes() {
+    const pop = st.pop;
+    if (!pop?.isConnected) return;
+    const t0 = performance.now();
+    if (redock) {
+      redock = false;
+      if (model) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
+    }
+    if (!strip.hidden || hintsLine) {
+      const rect = listColumn(pop).getBoundingClientRect();
+      const left = `${Math.round(rect.left)}px`;
+      const width = `${Math.round(rect.width)}px`;
+      if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
+      if (hintsLine) {
+        Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
+        hints.hidden = false;
+      }
+    }
+    perf.push("place", performance.now() - t0);
+  }
+  let hintItems = [];
+  function openHelp() {
+    if (!st.pop || !setting("helpSheet")) return false;
+    st.help = true;
+    tips.hide();
+    if (nudgeShown || nudgeWanted()) nudgeSeen();
+    const covered = st.phase === "SCOPE" ? scopePanel.node : st.pop;
+    const anchor = covered.getBoundingClientRect();
+    for (const node of [strip, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.add("burrow-help-covered");
+    st.pop.classList.add(HELP_OPEN);
+    sampleSheet();
+    sheet.show(helpGroups(setting), keyLabel("altSlash"), anchor, st.ta?.getBoundingClientRect());
+    trace({ ev: "help-open" });
+    return true;
+  }
+  function closeHelp() {
+    if (!st.help) return;
+    st.help = false;
+    sheet.hide();
+    for (const node of [strip, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.remove("burrow-help-covered");
+    st.pop?.classList.remove(HELP_OPEN);
+    trace({ ev: "help-close" });
+    hintsFor = null;
+    if (st.phase === "SCOPE") placeScope();
+    else frame();
+  }
+  function sampleSheet() {
+    for (const name of ["--burrow-bg", "--burrow-fg", "--burrow-active", "--burrow-footer-bg", "--burrow-footer-fg"]) {
+      const value = (name.includes("footer") ? hints : strip).style.getPropertyValue(name);
+      if (value) sheet.node.style.setProperty(name, value);
+      else sheet.node.style.removeProperty(name);
+    }
+    sheet.node.style.zIndex = strip.style.zIndex;
+    sheet.node.style.font = strip.style.font;
+    sheet.node.classList.toggle("burrow-dark", strip.classList.contains("burrow-dark"));
+  }
+  function helpKey(event) {
+    if (isAltSlash(event) || event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      consume(event);
+      closeHelp();
+      return true;
+    }
+    if (["Shift", "Alt", "Meta", "Control", "CapsLock"].includes(event.key)) return true;
+    closeHelp();
+    return false;
+  }
+  function onHintsMouseDown(event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  function onHelpClick(event) {
+    if (!event.target.closest?.(".burrow-help-button")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.target.closest?.(".burrow-nudge-close")) {
+      nudgeSeen();
+      hintsFor = null;
+      layoutPop();
+      return;
+    }
+    if (st.help) closeHelp();
+    else openHelp();
   }
   function attach(pop) {
     if (st.pop === pop) return;
@@ -2446,6 +3267,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     st.pop = pop;
     sampleTheme(pop);
     if (st.phase === "SCOPE") pop.classList.add(SCOPE_OPEN);
+    if (st.help) pop.classList.add(HELP_OPEN);
     const mo = new MutationObserver(() => {
       if (st.pop === pop && st.phase !== "IDLE") frame();
     });
@@ -2468,7 +3290,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     for (const observer of st.observers) observer.disconnect();
     st.observers = [];
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     hints.hidden = true;
     hintsFor = null;
     clearPopover();
@@ -2479,7 +3301,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     if (frameQueued) return;
     frameQueued = true;
     win.requestAnimationFrame(() => {
-      if (frameQueued) draw();
+      if (frameQueued) inFrameDo(draw);
     });
   }
   function draw() {
@@ -2518,6 +3340,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   function reset(reason) {
     if (st.phase !== "IDLE" || st.rows.length) trace({ ev: "reset", reason });
+    closeHelp();
+    tips.hide();
+    if (nudgeShown) nudgeSeen();
+    nudgeDone = false;
+    kidsKnown.clear();
     st.phase = "IDLE";
     st.rows = [];
     st.active = -1;
@@ -2609,8 +3436,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }
   const ACTION_KEYS = /* @__PURE__ */ new Set(["Enter", "Tab", "ArrowUp", "ArrowDown", "Escape"]);
   function onKeyDown(event) {
+    if (tips.visible) tips.hide();
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    if (st.help && event.target === st.ta && helpKey(event)) return;
+    if (isAltSlash(event) && setting("helpSheet") && event.target === st.ta && !event.isComposing && !st.composing && !st.prompt?.compose) {
+      if (openHelp()) {
+        consume(event);
+        return;
+      }
+    }
     if (st.prompt && composer.key(event)) return;
     if (event.isComposing || st.composing || event.keyCode === 229) return;
     const ta = event.target;
@@ -2772,7 +3607,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     input.classList.toggle("burrow-fresh", p.fresh && Boolean(p.text));
     if (p.compose?.text) input.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-compose", textContent: p.compose.text }));
     promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
-    if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error }));
+    if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error, title: p.error }));
     if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
     shown = [];
     shownQuery = null;
@@ -2859,7 +3694,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     promptRows = [];
     debug.lastWrite = { kind: "add", at: Date.now(), ...result };
     trace({ ev: "alias-added", uid: p.page.uid, block: result.blockUid });
-    indexes.schedule();
+    indexes.refreshAliases?.();
     const row = { kind: "alias", key: `alias-new:${p.page.uid}`, insertion: aliasInsertion({ alias: check.alias, title: p.page.title }, setting("aliasLinkFormat")), pick: null };
     if (!commit(row)) reset("commit-refused");
   }
@@ -2890,7 +3725,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     const row = shown[st.active];
     st.chip = chipsAvailable(row) ? Math.min(st.chip, row.aliases.length - 1) : -1;
     chipsFor = null;
-    indexes.schedule();
+    indexes.refreshAliases?.();
     paintActive();
   }
   function onPaste(event) {
@@ -2904,13 +3739,22 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     p.error = null;
     renderPrompt();
   }
-  function onChipsWheel(event) {
-    if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-    const max = chipsNode.scrollWidth - chipsNode.clientWidth;
-    if (max <= 0) return;
-    const step = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
-    chipsNode.scrollLeft = Math.max(0, Math.min(max, chipsNode.scrollLeft + step));
-    event.preventDefault();
+  function onStripWheel(event) {
+    const overChips = chipsNode.isConnected && chipsNode.contains(event.target);
+    const list = st.pop?.querySelector(".rm-autocomplete__results-scroll");
+    const plan = wheelPlan(
+      event,
+      overChips ? { left: chipsNode.scrollLeft, max: chipsNode.scrollWidth - chipsNode.clientWidth } : null,
+      list ? { top: list.scrollTop, max: list.scrollHeight - list.clientHeight } : null
+    );
+    trace({ ev: "wheel", to: plan.to });
+    if (plan.to === "chips") {
+      chipsNode.scrollLeft = plan.left;
+      event.preventDefault();
+    } else if (plan.to === "list") {
+      list.scrollTop += plan.by;
+      event.preventDefault();
+    }
   }
   function chipRow(row, index) {
     const alias = row.aliases[index];
@@ -2955,7 +3799,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     strip.hidden = true;
     chipsNode.remove();
     cancelRowPreview();
-    preview.hide();
+    hidePreview();
     st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
     st.pop.classList.add(SCOPE_OPEN);
     hints.hidden = true;
@@ -2990,7 +3834,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     });
     st.scope.rows = capRows(st.scope.all, level.limit);
     level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1)) : level.query ? 0 : firstReal(st.scope.rows);
-    scopePanel.show(st.scope, setting("keyHints"));
+    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
     placeScope();
   }
   function scopeMore() {
@@ -2999,7 +3843,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     level.limit += CAP;
     st.scope.rows = capRows(st.scope.all, level.limit);
     level.active = Math.min(at, st.scope.rows.length - 1);
-    scopePanel.show(st.scope, setting("keyHints"));
+    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
     placeScope();
   }
   let scopeModel = null;
@@ -3029,7 +3873,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     }
     const key = `${page.uid}:${target?.uid ?? ""}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree, readableText, { hideEmpty: setting("drillEmpty") });
+      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });
@@ -3037,7 +3881,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   function scopeMove(delta) {
     const level = scopeLevel();
     level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
-    scopePanel.paintActive(st.scope, setting("keyHints"));
+    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
     showScopePreview();
   }
   function scopeDeeper() {
@@ -3186,6 +4030,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
     event.preventDefault();
     event.stopPropagation();
     if (!st.scope) return;
+    if (event.target.closest?.(".burrow-help-button")) return;
     const crumb = event.target.closest?.(".burrow-crumb");
     if (crumb) {
       if (crumb.dataset.level == null) exitScope();
@@ -3220,6 +4065,90 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
       if (st.ta && doc.activeElement !== st.ta) reset("blur");
     }, 0);
   }
+  const guardedTip = (resolve) => (target) => {
+    try {
+      return resolve(target);
+    } catch (error) {
+      console.error("[burrow] tip failed", error);
+      return null;
+    }
+  };
+  const drillLine = (uid, what) => setting("tabDrill") && hasKids(uid) ? ["⇥", what] : null;
+  function stripTip(target) {
+    const chip = target.closest?.(".burrow-chip");
+    const active = shown[st.active];
+    if (chip && active?.kind === "alias") {
+      const i = Number(chip.dataset.index);
+      return { el: chip, title: active.aliases[i], lines: [
+        ["↵", `or click: insert ${chipRow(active, i).insertion}`],
+        ["←→", "move between the aliases"],
+        setting("aliasDelete") ? [keyLabel("altBackspace"), "delete the selected alias (asks first)"] : null
+      ].filter(Boolean) };
+    }
+    const promptRow = target.closest?.(".burrow-prompt");
+    if (promptRow && st.prompt?.kind === "add") {
+      return { el: promptRow, title: `New alias for ${st.prompt.page.title}`, lines: [["↵", "add it to the page's Aliases:: block, then insert it"], ["esc", "cancel; nothing is written"]] };
+    }
+    const confirm = target.closest?.(".burrow-chips.burrow-confirm");
+    if (confirm) return { el: confirm, title: null, lines: [["↵", "delete this alias from the page"], ["esc", "keep it"]] };
+    const node = target.closest?.(".burrow-row");
+    const row = node ? shown[Number(node.dataset.index)] : null;
+    if (!row) return null;
+    if (row.kind === "alias") {
+      return { el: node, title: `${row.alias} ↳ ${row.title}`, lines: [
+        ["↵", `or click: insert ${row.insertion}`],
+        setting("aliasChips") && row.aliases.length > 1 ? [keyLabel("altDown"), `pick one of its ${row.aliases.length} aliases`] : null,
+        drillLine(row.uid, "list the page's blocks"),
+        setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null
+      ].filter(Boolean) };
+    }
+    if (row.kind === "ref") {
+      return { el: node, title: row.text, lines: [
+        ["↵", `or click: insert ((${row.uid}))`],
+        ["", `${row.refs} block${row.refs === 1 ? "" : "s"} reference it`],
+        drillLine(row.uid, "list its child blocks")
+      ].filter(Boolean) };
+    }
+    return { el: node, title: row.crumb ? `${row.crumb} › ${row.text}` : row.text, lines: [
+      ["↵", "insert the block the drill-down reaches"],
+      drillLine(row.uid, "list its child blocks")
+    ].filter(Boolean) };
+  }
+  function hintTip(target) {
+    if (target.closest?.(".burrow-help-button")) {
+      const lines = [[keyLabel("altSlash"), "or click: every key Burrow adds, for the switches that are on"]];
+      if (helpButton.dataset.mode === "nudge") lines.push(["✕", "hide this line; ? stays"]);
+      return { el: helpButton, title: "Burrow keys", lines };
+    }
+    const item = target.closest?.(".burrow-hint");
+    const hint = item ? hintItems[Number(item.dataset.hint)] : null;
+    return hint ? { el: item, title: null, lines: [[hint[0], hint[2] || hint[1]]] } : null;
+  }
+  function scopeTip(target) {
+    if (target.closest?.(".burrow-help-button")) return { el: target.closest(".burrow-help-button"), title: "Burrow keys", lines: [[keyLabel("altSlash"), "or click: every key Burrow adds"]] };
+    const crumb = target.closest?.(".burrow-crumb");
+    if (crumb) return { el: crumb, title: crumb.textContent, lines: [["click", crumb.dataset.level == null ? "back to the results" : "back to this level"]] };
+    const item = target.closest?.(".burrow-hint");
+    const hint = item ? scopePanel.hintItems[Number(item.dataset.hint)] : null;
+    if (hint) return { el: item, title: null, lines: [[hint[0], hint[2] || hint[1]]] };
+    const node = target.closest?.(".burrow-row");
+    const row = node && st.scope ? st.scope.rows[Number(node.dataset.index)] : null;
+    if (!node || !st.scope) return null;
+    if (!row) return { el: node, title: scopeLevel().label, lines: [["↵", "insert this level"]] };
+    if (row.more != null) return { el: node, title: `${row.more} more blocks`, lines: [["↵", "or click: list the next 50"]] };
+    return { el: node, title: row.text || "(empty)", lines: [
+      row.empty && row.drillable ? ["↵", "or click: go into it"] : ["↵", `or click: insert ((${row.uid}))`],
+      row.drillable ? ["⇥ or >", "go into it"] : null
+    ].filter(Boolean) };
+  }
+  function previewTip(target, pane) {
+    const node = target.closest?.(".burrow-preview");
+    if (!node) return null;
+    const trail = node.querySelector(".burrow-trail")?.textContent || "";
+    if (pane === scopePreview) return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "show or hide this preview"], ["", "read-only; the highlighted line is the selected block"]] };
+    if (st.drill) return { el: node, title: trail, lines: [["↵", "insert the highlighted block"], ["", "read-only; follows what you type after # and >"]] };
+    return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "close Roam's preview (and this one)"], ["", "read-only; the selected Burrow row's page or block"]] };
+  }
   const guarded = (name, handler) => (event) => {
     try {
       handler(event);
@@ -3247,11 +4176,32 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, doc
   }), true);
   lifecycle.event(doc, "focusout", guarded("focusout", onFocusOut), true);
   lifecycle.event(win, "paste", guarded("paste", onPaste), true);
-  lifecycle.event(chipsNode, "wheel", guarded("wheel", onChipsWheel), { passive: false });
+  lifecycle.event(strip, "wheel", guarded("wheel", onStripWheel), { passive: false });
   lifecycle.event(chipsNode, "scroll", () => {
     chipsScrolled = chipsNode.scrollLeft > 0;
   }, { passive: true });
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
+  lifecycle.event(hints, "mousedown", guarded("mousedown", onHintsMouseDown));
+  lifecycle.event(hints, "click", guarded("click", onHelpClick));
+  lifecycle.event(scopePanel.node, "click", guarded("click", onHelpClick));
+  lifecycle.event(sheet.node, "mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  for (const p of [preview, scopePreview]) lifecycle.event(p.node, "mousedown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  tips.attach(strip, guardedTip(stripTip));
+  tips.attach(hints, guardedTip(hintTip));
+  tips.attach(scopePanel.node, guardedTip(scopeTip));
+  for (const p of [preview, scopePreview]) tips.attach(p.node, guardedTip((target) => previewTip(target, p)));
+  const unlisten = indexes.listen?.(() => {
+    if (!st.ta || !st.token || st.phase === "IDLE" || st.phase === "SCOPE" || st.prompt || st.help || st.chip >= 0) return;
+    if (st.phase === "OWNED" && !st.auto) return;
+    if (doc.activeElement === st.ta) scheduleEvaluate(st.ta);
+  });
+  if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
   lifecycle.add(() => reset("unload"));
   return { state: st, debug, reset, tree };
@@ -3261,9 +4211,9 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.4.0";
+var VERSION = "0.5.0";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;
@@ -3347,9 +4297,9 @@ async function onload({ extensionAPI, extension }) {
     });
     await syncRefCommand();
     if (api && globalThis.document) {
-      indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle) });
+      indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle), lifecycle, win: globalThis.window });
       const picks = createPickMemory({ storage: safeLocalStorage(), key: `burrow:picks:${api.graph?.name ?? "graph"}` });
-      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks });
+      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks, saveSetting: (id, value) => extensionAPI.settings.set(id, value) });
       refSearch = createRefSearch({ api, lifecycle, setting });
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();

@@ -27,17 +27,24 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
     const compact = searchKey(title).compact;
     if (compact) add(byCompact, compact, page);
   }
-  const aliasLower = new Map();
-  const aliasCompact = new Map();
-  for (const entry of aliases?.entries || []) {
-    const page = { title: entry.title, uid: entry.uid };
-    add(aliasLower, entry.alias.toLowerCase(), page);
-    if (entry.key?.compact) add(aliasCompact, entry.key.compact, page);
-  }
+  let aliasLower = new Map();
+  let aliasCompact = new Map();
+  // Aliases can be swapped in alone when an alias block changes.
+  const setAliases = (next) => {
+    aliasLower = new Map();
+    aliasCompact = new Map();
+    for (const entry of next?.entries || []) {
+      const page = { title: entry.title, uid: entry.uid };
+      add(aliasLower, entry.alias.toLowerCase(), page);
+      if (entry.key?.compact) add(aliasCompact, entry.key.compact, page);
+    }
+  };
+  setAliases(aliases);
   const sorted = [...byLower.keys()].filter((t) => /[#>]/.test(t)).sort();
   const one = (list) => (list?.length === 1 ? list[0] : null);
   return {
     size: byRaw.size,
+    setAliases,
     // Exact title, then case-insensitive, then separator-insensitive, then
     // an alias; an ambiguous spelling resolves to nothing.
     resolve(text) {

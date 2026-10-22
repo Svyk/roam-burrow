@@ -4,12 +4,24 @@ import { keywordTitles, parseAliasBlock } from "./aliases.js";
 const kwOf = (keyword) => String(keyword || "Aliases").trim();
 const clean = (value) => value.trim().replace(/^#?\[\[(.*)\]\]$/, "$1").replace(/^#/, "").trim();
 
+// Anything Roam parses as a link, tag, reference, component or attribute is
+// refused: written into the alias block it would link or create a page.
+// `#` is refused anywhere (also `C#`): once another alias follows it, `#,`
+// is a tag Roam can read.
+const REFUSED = [
+  [/[\r\n]/, "no line breaks"],
+  [/,/, "no commas: Roam splits aliases on them"],
+  [/#/, "no #: Roam would make a tag"],
+  [/\(\(|\)\)/, "no (( )): Roam would make a block ref"],
+  [/\{\{|\}\}/, "no {{ }}: Roam would make a component"],
+  [/::/, "no double colon: Roam would make an attribute"],
+  [/[[\]]/, "no [ ]: Roam would make a link"],
+];
+
 export function validAlias(text) {
   const alias = String(text ?? "").trim();
   if (!alias) return { ok: false, reason: "type an alias" };
-  if (alias.includes(",")) return { ok: false, reason: "no commas: Roam splits aliases on them" };
-  if (/#\S/.test(alias)) return { ok: false, reason: "no # right before text: Roam reads it as a tag" };
-  if (/[\r\n[\]]/.test(alias) || alias.includes("((") || alias.includes("))")) return { ok: false, reason: "no brackets or line breaks" };
+  for (const [re, reason] of REFUSED) if (re.test(alias)) return { ok: false, reason };
   return { ok: true, alias };
 }
 

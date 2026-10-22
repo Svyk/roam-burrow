@@ -35,7 +35,7 @@ function startRefIndex(rows) {
   for (const [uid, string, refs, page] of rows || []) {
     byUid.set(uid, { uid, string: String(string || ""), refs: Number(refs) || 0, page: page ?? null });
   }
-  return { entries: [...byUid.values()], byUid, words: new Map(), builtAt: Date.now() };
+  return { entries: [...byUid.values()], byUid, words: new Map(), byLinked: new Map(), builtAt: Date.now() };
 }
 
 function keyEntry(entry, index, aliasesByPage) {
@@ -52,23 +52,100 @@ function keyEntry(entry, index, aliasesByPage) {
   entry.pureQuote = quotes.length === 1
     && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, ""))
     ? quotes[0] : null;
-  const aliases = [];
-  if (aliasesByPage?.size) {
-    for (const m of entry.string.matchAll(PAGE_REF)) {
-      const found = aliasesByPage.get(m[1] || m[2]);
-      if (found) aliases.push(...found);
-    }
+  // The pages it links, kept so an alias edit can re-key it (refreshAliasKeys).
+  const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  entry.linked = linked.length ? linked : null;
+  // Page title -> the blocks that link it, for aliasKeyTargets.
+  for (const title of new Set(linked)) {
+    const list = index.byLinked.get(title);
+    if (list) list.push(entry);
+    else index.byLinked.set(title, [entry]);
   }
-  entry.aliasKey = aliases.length ? searchKey(aliases.join(" ")) : null;
+  entry.aliasKey = aliasKeyOf(entry, aliasesByPage);
   // Word -> entries, for the recall pass (it needs one exact word).
   if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
     const seen = new Set(entry.aliasKey ? entry.key.tokens.concat(entry.aliasKey.tokens) : entry.key.tokens);
-    for (const word of seen) {
-      const list = index.words.get(word);
-      if (list) list.push(entry);
-      else index.words.set(word, [entry]);
-    }
+    for (const word of seen) addWord(index, word, entry);
   }
+}
+
+// keys: joined aliases -> their search key, shared by the blocks of one
+// re-key run (blocks that link the same pages get the same key).
+function aliasKeyOf(entry, aliasesByPage, keys = null) {
+  if (!entry.linked || !aliasesByPage?.size) return null;
+  const aliases = [];
+  for (const title of entry.linked) {
+    const found = aliasesByPage.get(title);
+    if (found) aliases.push(...found);
+  }
+  if (!aliases.length) return null;
+  const joined = aliases.join(" ");
+  let key = keys?.get(joined);
+  if (!key) {
+    key = searchKey(joined);
+    keys?.set(joined, key);
+  }
+  return key;
+}
+
+function addWord(index, word, entry) {
+  const list = index.words.get(word);
+  if (!list) index.words.set(word, [entry]);
+  else if (!list.includes(entry)) list.push(entry);
+}
+
+// An alias block changed (Burrow's watch on the alias pages): only the
+// blocks that link a page whose aliases differ now need a new alias key, so
+// (( alias expansion follows without a rebuild. Given the previous map, only
+// those are returned, not every linking block (4,400 in svy).
+export function aliasKeyTargets(index, aliasesByPage, previousByPage = null) {
+  if (!index) return [];
+  let pages = null;
+  if (previousByPage) {
+    pages = new Set();
+    const same = (title) => (previousByPage.get(title) || []).join("\u0000") === (aliasesByPage.get(title) || []).join("\u0000");
+    for (const title of previousByPage.keys()) if (!same(title)) pages.add(title);
+    for (const title of aliasesByPage.keys()) if (!same(title)) pages.add(title);
+    if (!pages.size) return [];
+  }
+  if (!pages) return index.entries.filter((entry) => entry.linked);
+  const out = new Set();
+  for (const title of pages) for (const entry of index.byLinked.get(title) || []) out.add(entry);
+  return [...out];
+}
+
+// Gives entries[from..] their alias key from aliasesByPage until stop()
+// (checked after each block) says to pause; src/indexes.js runs it in idle
+// slices. Returns where to go on and how many blocks changed.
+export function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => false, keys = new Map() } = {}) {
+  let at = from;
+  let changed = 0;
+  while (at < entries.length) {
+    const entry = entries[at++];
+    const next = aliasKeyOf(entry, aliasesByPage, keys);
+    if ((next?.spaced ?? null) !== (entry.aliasKey?.spaced ?? null)) {
+      if (entry.key.tokens.length <= RECALL_MAX_TOKENS) {
+        const keep = new Set(next ? entry.key.tokens.concat(next.tokens) : entry.key.tokens);
+        for (const word of entry.aliasKey?.tokens || []) {
+          if (keep.has(word)) continue;
+          const list = index.words.get(word)?.filter((e) => e !== entry);
+          if (list?.length) index.words.set(word, list);
+          else index.words.delete(word);
+        }
+        for (const word of next?.tokens || []) addWord(index, word, entry);
+      }
+      entry.aliasKey = next;
+      changed += 1;
+    }
+    if (stop()) break;
+  }
+  if (changed) index.prefilter = null;
+  return { next: at, changed };
+}
+
+// Both at once. Returns how many blocks changed.
+export function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
+  return rekeyAliases(index, aliasKeyTargets(index, aliasesByPage, previousByPage), aliasesByPage).changed;
 }
 
 // Ranking (spec §3): match band, a row picked before for this query (pick

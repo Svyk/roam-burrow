@@ -117,3 +117,19 @@ test("an ambiguous alias stays two rows, one per page", () => {
 test("parseAliasBlock reads the first line only", () => {
   assert.deepEqual(parseAliasBlock("Aliases:: a, b\nnote"), ["a", "b"]);
 });
+
+test("buildAliasIndex with the last index's memo parses only changed blocks, same result", () => {
+  const rows = [["Aliases:: lori, lorinator", "Lori Boyd", "LB"], ["Aliases:: mcu", "Marvel Cinematic Universe", "MCU"]];
+  const first = buildAliasIndex(rows, "Aliases");
+  const changed = [["Aliases:: lori, lorinator, lb", "Lori Boyd", "LB"], rows[1]];
+  const memoized = buildAliasIndex(changed, "Aliases", first.memo);
+  const plain = buildAliasIndex(changed, "Aliases");
+  const strip = (index) => index.entries.map(({ alias, title, uid, key, seenByRoamAliases }) => ({ alias, title, uid, key: key.spaced, seenByRoamAliases }));
+  assert.deepEqual(strip(memoized), strip(plain));
+  assert.deepEqual([...memoized.byPage], [...plain.byPage]);
+  // The unchanged block's aliases keep their keys; the old block string is dropped from the memo.
+  assert.equal(memoized.entries.find((e) => e.alias === "mcu").key, first.entries.find((e) => e.alias === "mcu").key);
+  assert.equal(memoized.entries.find((e) => e.alias === "lori").key, first.entries.find((e) => e.alias === "lori").key);
+  assert.equal(memoized.memo.parsed.has("Aliases:: lori, lorinator"), false);
+  assert.equal(memoized.memo.parsed.size, 2);
+});

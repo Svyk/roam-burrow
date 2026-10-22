@@ -8,7 +8,7 @@
 // is parked and restored; the theme override, the fixture and any page the
 // typing caused are removed, also on SIGINT / SIGTERM / a crash.
 //
-//   node tools/shots.mjs <window> <svy|notes> --label <before|after> --theme <light|dark> [--code <extension.js>] [--css <extension.css>] [--out <dir>]
+//   node tools/shots.mjs <window> <svy|notes> --label <before|after> --theme <light|dark> [--code <extension.js>] [--css <extension.css>] [--out <dir>] [--only 16,21]
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -20,12 +20,14 @@ const GRAPHS = {
   svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man" },
   notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr" },
 };
+// 0.5.0 help switches; the first-run line is marked seen except in its own shot.
+const HELP = ["helpTips", "helpSheet", "helpNudge"];
 const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -39,6 +41,8 @@ const codePath = flagValue("--code") ? resolve(flagValue("--code")) : new URL("e
 const cssPath = flagValue("--css") ? resolve(flagValue("--css")) : new URL("extension.css", root).pathname;
 const outDir = resolve(flagValue("--out") || join(tmpdir(), "burrow-shots"));
 const chipsQuery = `[[${CHIP_ALIASES[0].slice(0, 9)}`;
+// --only 16,21: the scenarios whose id starts with one of these.
+const only = flagValue("--only")?.split(",").filter(Boolean) ?? null;
 
 const SCENARIOS = [
   { id: "01-alias-row", query: config.alias, keys: [] },
@@ -56,6 +60,23 @@ const SCENARIOS = [
   { id: "13-above", query: config.alias, keys: [], low: true },
   { id: "14-above-drill", query: `[[${FIXTURE_PAGE}`, keys: ["Tab"], low: true, loose: true },
   { id: "15-ref-search", query: "", keys: [`palette:${REF_COMMAND}`, "wait:500", `type:${config.ref}`] },
+  // 0.5.0 hint states, key list, first-run line and hover tips.
+  { id: "16-hint-roam-page-drill", query: `[[${FIXTURE_PAGE}`, keys: [], loose: true },
+  { id: "17-hint-roam-page-leaf", query: `[[${FIXTURE_PAGE} Empty`, keys: [], loose: true, settings: { aliasCreate: false } },
+  { id: "18-hint-ref-row", query: `((${config.ref}`, keys: [] },
+  { id: "19-hint-drill-row", query: `[[${FIXTURE_PAGE}#alpha > never`, keys: [] },
+  { id: "20-hint-rows-above", query: `((${config.ref}`, keys: ["ArrowDown", "ArrowUp"] },
+  { id: "21-key-list", query: config.alias, keys: ["alt+slash"] },
+  { id: "22-key-list-writes-off", query: config.alias, keys: ["alt+slash"], settings: { aliasCreate: false, aliasDelete: false } },
+  { id: "23-key-list-in-drill", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "alt+slash"], loose: true },
+  { id: "24-first-run-line", query: config.alias, keys: [], settings: { helpNudgeSeen: false } },
+  { id: "25-tip-alias-row", query: config.alias, keys: ["hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "26-tip-chip", query: config.alias, keys: ["alt+ArrowDown", "hover:.burrow-chips .burrow-chip", "wait:700"] },
+  { id: "27-tip-preview", query: config.alias, keys: ["preview-open", "wait:500", "hover:.burrow-preview .burrow-trail", "wait:700"] },
+  { id: "28-tip-hint", query: config.alias, keys: ["hover:.burrow-hints .burrow-hint", "wait:700"] },
+  { id: "29-tip-help-button", query: config.alias, keys: ["hover:.burrow-hints .burrow-help-button", "wait:700"] },
+  { id: "30-prompt-refused", query: chipsQuery, keys: ["alt+a", "type:issue #42", "Enter"] },
+  { id: "31-tip-scope-row", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "hover:.burrow-scope-list .burrow-row", "wait:700"], loose: true },
 ];
 
 const c = await connect(title);
@@ -95,6 +116,13 @@ async function setArm(arm) {
     return { arm, refs: window.__BURROW?.indexes?.refs?.entries.length };
   }, { arm, code, css, features: FEATURES, refCommand: REF_COMMAND });
 }
+
+// ⌥/ as a mac sends it: the key is the typed character "÷".
+const altSlash = async () => {
+  const base = { key: "÷", code: "Slash", windowsVirtualKeyCode: 191, nativeVirtualKeyCode: 191, modifiers: 1 };
+  await c.call("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "÷", unmodifiedText: "÷" });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+};
 
 const ctrlO = async () => {
   const base = { key: "o", code: "KeyO", windowsVirtualKeyCode: 79, nativeVirtualKeyCode: 79, modifiers: 2 };
@@ -151,6 +179,13 @@ async function runKeys(keys) {
   for (const k of keys) {
     const modified = k.match(/^(alt|shift)\+(.+)$/);
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
+    else if (k === "alt+slash") await altSlash();
+    else if (k.startsWith("hover:")) {
+      const p = await point(k.slice(6), null);
+      // From a little to the left, as a hand would come: a jump onto a node
+      // that just appeared under a still pointer may fire no mouseover.
+      if (p) for (const dx of [-20, 0]) await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x + dx, y: p.y });
+    }
     else if (k.startsWith("wheel:chips:")) {
       const p = await point(".burrow-chips", null);
       if (p) await c.wheel(p.x, p.y, 0, Number(k.slice(12)));
@@ -168,7 +203,7 @@ async function captureRect() {
   return c.evaluate(() => {
     const g = window.__burrowFixture;
     const els = [document.getElementById(g?.inputId), document.querySelector(".rm-autocomplete__results"),
-      ...document.querySelectorAll(".burrow-strip:not([hidden]), .burrow-hints:not([hidden]), .burrow-preview:not([hidden]), .burrow-scope:not([hidden])")]
+      ...document.querySelectorAll(".burrow-strip:not([hidden]), .burrow-hints:not([hidden]), .burrow-preview:not([hidden]), .burrow-scope:not([hidden]), .burrow-help:not([hidden]), .burrow-tip:not([hidden])")]
       .filter((el) => el?.getClientRects().length);
     if (!els.length) return null;
     const boxes = els.map((el) => el.getBoundingClientRect());
@@ -182,6 +217,7 @@ async function captureRect() {
 
 // Out of the popup, block cleared, and any page the typing made deleted.
 async function reset() {
+  await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
   for (let i = 0; i < 3; i++) { await c.key("Escape"); await sleep(150); }
   await guardReport(c);
   await c.evaluate(async () => {
@@ -230,10 +266,11 @@ try {
   const loaded = await setArm("on");
   if (!loaded.refs) throw new Error("index not built");
   const stamp = `${label}-${theme || "default"}`;
-  for (const scenario of SCENARIOS) {
+  for (const scenario of SCENARIOS.filter((x) => !only || only.some((id) => x.id.startsWith(id)))) {
     await c.evaluate((settings) => {
       const values = window.__burrowDev.values;
-      for (const f of ["aliasInline"]) values[f] = true;
+      for (const f of ["aliasInline", "aliasCreate", "aliasDelete"]) values[f] = true;
+      values.helpNudgeSeen = true;
       Object.assign(values, settings || {});
     }, scenario.settings);
     await snapshotTitles(c);

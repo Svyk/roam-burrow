@@ -105,37 +105,36 @@
   opacity: 0.45;
 }
 
+/* One element per line: the bullet is drawn by ::before. */
 .burrow-node {
-  display: flex;
-  align-items: baseline;
-  padding: 2px 4px 2px calc(4px + var(--burrow-depth, 0) * 18px);
+  position: relative;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  padding: 2px 4px 2px calc(20px + var(--burrow-depth, 0) * 18px);
   border-radius: 3px;
   line-height: 20px;
 }
 
-.burrow-bullet {
-  flex: none;
+.burrow-node::before {
+  content: "";
+  position: absolute;
+  left: calc(6px + var(--burrow-depth, 0) * 18px);
+  top: 10px;
   width: 5px;
   height: 5px;
-  margin: 0 9px 0 2px;
   border-radius: 50%;
   background: currentColor;
   opacity: 0.45;
-  transform: translateY(-2px);
 }
 
-.burrow-body {
-  min-width: 0;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow-wrap: anywhere;
-}
+.burrow-node.burrow-more::before { content: none; }
 
-.burrow-node.burrow-h1 .burrow-body { font-size: 1.25em; font-weight: 600; }
-.burrow-node.burrow-h2 .burrow-body { font-size: 1.12em; font-weight: 600; }
-.burrow-node.burrow-h3 .burrow-body { font-weight: 600; }
+.burrow-node.burrow-h1 { font-size: 1.25em; font-weight: 600; }
+.burrow-node.burrow-h2 { font-size: 1.12em; font-weight: 600; }
+.burrow-node.burrow-h3 { font-weight: 600; }
 
 .burrow-node.burrow-target {
   background: var(--burrow-highlight, rgba(45, 114, 210, 0.16));
@@ -163,7 +162,17 @@
 }
 
 /* Alias chips, key hints, and the roam-aliases fold / pane layout. */
-.burrow-hints { position: fixed; z-index: 30; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 0; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
+.burrow-hints { position: fixed; z-index: 30; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
+/* The items take what is left of the line; the ? (or the first-run line) keeps its place at the end. */
+.burrow-hints-list { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.burrow-hints .burrow-hint, .burrow-help-button { pointer-events: auto; }
+.burrow-help-button { flex: none; margin-left: auto; padding: 0 5px; border-radius: 3px; cursor: pointer; opacity: 0.6; font-weight: 600; }
+.burrow-help-button:hover { opacity: 1; background: rgba(138, 155, 168, 0.2); }
+.burrow-help-button[hidden] { display: none; }
+.burrow-help-button.burrow-nudge { opacity: 1; font-weight: 400; color: var(--burrow-link, #106ba3); }
+.burrow-dark .burrow-help-button.burrow-nudge, .burrow-scope.burrow-dark .burrow-help-button.burrow-nudge { color: var(--burrow-link, #48aff0); }
+.burrow-nudge-close { margin-left: 6px; padding: 0 2px; opacity: 0.6; color: var(--burrow-footer-fg, inherit); }
+.burrow-nudge-close:hover { opacity: 1; }
 .burrow-hints.burrow-dark { border-top-color: rgba(255, 255, 255, 0.1); }
 .burrow-hints[hidden] { display: none; }
 .burrow-hint-key { opacity: 0.95; }
@@ -224,7 +233,7 @@
 .burrow-scope .burrow-row.burrow-h3 .burrow-text { font-weight: 600; }
 .burrow-drill-mark { flex: none; margin-left: 8px; opacity: 0.45; }
 .burrow-scope .burrow-empty, .burrow-self .burrow-muted { opacity: 0.5; }
-.burrow-scope-hints { flex: none; display: flex; gap: 0; align-items: center; height: 22px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); border-top: 1px solid rgba(16, 22, 26, 0.12); }
+.burrow-scope-hints { flex: none; display: flex; gap: 8px; align-items: center; height: 22px; padding: 0 8px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); border-top: 1px solid rgba(16, 22, 26, 0.12); }
 .burrow-scope-hints[hidden] { display: none; }
 .burrow-scope.burrow-dark .burrow-scope-hints { border-top-color: rgba(255, 255, 255, 0.1); }
 .burrow-scope-hints kbd { color: inherit; box-shadow: none; font: inherit; font-size: 11px; padding: 0 4px; margin-right: 4px; border-radius: 2px; background: rgba(138, 155, 168, 0.25); }
@@ -232,14 +241,45 @@
 
 /* Alias prompt row inside the strip. */
 .burrow-row.burrow-prompt { cursor: text; }
-.burrow-prompt-label { opacity: 0.6; margin-right: 6px; flex: none; }
-.burrow-prompt-input { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid rgba(138, 155, 168, 0.6); }
+/* The page name gives way first, so what is typed and why it is refused stay readable. */
+.burrow-prompt-label { opacity: 0.6; margin-right: 6px; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.burrow-prompt-input { flex: 1 0 72px; min-width: 72px; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid rgba(138, 155, 168, 0.6); }
 .burrow-prompt-input.burrow-fresh { background: rgba(45, 114, 210, 0.25); }
 .burrow-prompt-compose { text-decoration: underline; }
 .burrow-prompt-input::after { content: ""; display: inline-block; width: 1px; height: 1em; margin-left: 1px; vertical-align: text-bottom; background: currentColor; }
-.burrow-prompt-error { flex: none; margin-left: 8px; opacity: 0.8; color: #db3737; }
+.burrow-prompt-error { flex: 0 0 auto; max-width: 58%; overflow: hidden; text-overflow: ellipsis; margin-left: 8px; opacity: 0.9; color: #db3737; }
 .burrow-strip.burrow-dark .burrow-prompt-error, .burrow-chips .burrow-prompt-error { color: #ff7373; }
 
 /* Drill list: empty and "+N more" rows. */
 .burrow-scope .burrow-empty-row .burrow-text, .burrow-scope .burrow-more-row { opacity: 0.6; }
 .burrow-scope .burrow-more-row { font-size: 12px; }
+
+/* Hover tips: the popover's colors inverted, as Blueprint draws a tooltip, in light and dark. */
+.burrow-tip { position: fixed; z-index: 32; box-sizing: border-box; max-width: 320px; padding: 6px 8px; border-radius: 3px; font-size: 12px; line-height: 16px; background: var(--burrow-fg, #394b59); color: var(--burrow-bg, #f5f8fa); box-shadow: 0 0 0 1px rgba(16, 22, 26, 0.1), 0 2px 4px rgba(16, 22, 26, 0.2), 0 8px 24px rgba(16, 22, 26, 0.2); pointer-events: none; overflow-wrap: anywhere; }
+.burrow-tip[hidden] { display: none; }
+.burrow-tip-title { font-weight: 600; margin-bottom: 2px; }
+.burrow-tip-title:only-child { margin-bottom: 0; }
+.burrow-tip-key { display: inline-block; min-width: 22px; margin-right: 6px; opacity: 0.85; font-weight: 600; }
+.burrow-preview.burrow-tips { pointer-events: auto; }
+
+/* Key list: takes the popover's place (or the drill panel's) while open. */
+.burrow-help { position: fixed; z-index: 31; box-sizing: border-box; display: flex; flex-direction: column; max-height: 440px; border-radius: 3px; background: var(--burrow-bg, #fff); color: var(--burrow-fg, #182026); font-size: 12px; line-height: 18px; overflow: hidden; }
+.burrow-help[hidden] { display: none; }
+.burrow-help-head { flex: none; display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid rgba(16, 22, 26, 0.12); }
+.burrow-help.burrow-dark .burrow-help-head, .burrow-help.burrow-dark .burrow-help-foot { border-color: rgba(255, 255, 255, 0.1); }
+.burrow-help-title { font-weight: 600; }
+.burrow-help-close, .burrow-help-foot, .burrow-help-note { opacity: 0.6; }
+/* Block flow, not grid: in a height-capped flex column a grid squeezes its rows onto each other. */
+.burrow-help-grid { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px 10px 2px; }
+.burrow-help.burrow-wide .burrow-help-grid { column-count: 2; column-gap: 20px; }
+/* Each group is its own small grid: keys in a column as wide as its longest key. */
+.burrow-help-group { break-inside: avoid; margin-bottom: 6px; display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 10px; }
+.burrow-help-group-title, .burrow-help-note { grid-column: 1 / -1; }
+.burrow-help-group-title { font-weight: 600; opacity: 0.75; margin-bottom: 1px; }
+.burrow-help-item { display: contents; }
+.burrow-help-key { font-weight: 600; white-space: nowrap; }
+.burrow-help-what { min-width: 0; }
+.burrow-help-note { margin-top: 2px; font-size: 11px; line-height: 15px; }
+.burrow-help-foot { flex: none; padding: 4px 10px; border-top: 1px solid rgba(16, 22, 26, 0.12); font-size: 11px; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); }
+.rm-autocomplete__results.burrow-help-open { visibility: hidden !important; }
+.burrow-help-covered { visibility: hidden !important; }

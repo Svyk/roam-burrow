@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { hintsKey, keyLabel, renderHints } from "../src/hints.js";
+import { hintsKey, isAltSlash, keyLabel, pickerHints, renderHints } from "../src/hints.js";
 
 function fakeDoc() {
   const make = () => {
     const el = {
       className: "",
+      dataset: {},
       children: [],
       _text: "",
       append(...kids) { this.children.push(...kids); },
@@ -48,4 +49,56 @@ test("hintsKey is stable and changes with the items", () => {
   const items = [["↵", "insert"], ["esc", "results"]];
   assert.equal(hintsKey(items), hintsKey([["↵", "insert"], ["esc", "results"]]));
   assert.notEqual(hintsKey(items), hintsKey([["↵", "more"], ["esc", "results"]]));
+});
+
+const ON = { tabDrill: true, drill: true, aliasDelete: false, pageOnly: false };
+const keys = (items) => items.map(([k, label]) => `${k} ${label}`).join(" · ");
+
+test("pickerHints: the drill key only where Tab drills", () => {
+  const alias = (drill) => ({ kind: "[[", row: { kind: "alias", chips: true, drill, aliasNew: true }, on: ON });
+  assert.equal(keys(pickerHints(alias(true), true)), "↵ pick alias · ⌥↓ more aliases · ⇥ drill · ⌥A add alias");
+  assert.equal(keys(pickerHints(alias(false), true)), "↵ pick alias · ⌥↓ more aliases · ⌥A add alias");
+  assert.equal(keys(pickerHints({ ...alias(true), on: { ...ON, tabDrill: false } }, true)), "↵ pick alias · ⌥↓ more aliases · ⌥A add alias");
+  const native = (drill, aliasNew = false) => ({ kind: "[[", row: null, native: { drill, aliasNew }, on: ON });
+  assert.equal(keys(pickerHints(native(true), true)), "⇥ drill");
+  assert.deepEqual(pickerHints(native(false), true), []);
+  assert.equal(keys(pickerHints(native(false, true), false)), "Alt+A add alias");
+  assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: false }, on: ON }, true)), "↵ insert ref");
+  assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: true }, on: ON }, true)), "↵ insert ref · ⇥ drill");
+  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true }, on: ON }, true)), "↵ insert block · ⇥/> drill");
+  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true }, on: { ...ON, tabDrill: false } }, true)), "↵ insert block · > next level");
+  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: false }, on: ON }, true)), "↵ insert block");
+});
+
+test("pickerHints: chips, prompts, rows above, link format; every item carries a tip", () => {
+  const chips = { kind: "[[", chips: true, row: { kind: "alias", chips: true, drill: false }, on: { ...ON, aliasDelete: true } };
+  assert.equal(keys(pickerHints(chips, true)), "←→ alias · ⌥⌫ delete · ↵ insert · esc rows");
+  assert.equal(keys(pickerHints({ ...chips, row: { ...chips.row, drill: true } }, true)), "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ drill · esc rows");
+  assert.equal(keys(pickerHints({ ...chips, on: ON }, true)), "←→ alias · ↵ insert · esc rows");
+  assert.equal(keys(pickerHints({ kind: "[[", prompt: "add", row: null, on: ON }, true)), "↵ save alias · esc cancel");
+  assert.equal(keys(pickerHints({ kind: "[[", prompt: "delete", row: null, on: ON }, true)), "↵ delete · esc keep");
+  assert.equal(keys(pickerHints({ kind: "((", row: null, rowsAbove: true, on: ON }, true)), "↑ referenced");
+  assert.equal(keys(pickerHints({ kind: "[[", row: null, rowsAbove: true, native: { drill: true }, on: ON }, true)), "↑ alias rows · ⇥ drill");
+  assert.equal(pickerHints({ kind: "[[", row: { kind: "alias" }, on: { ...ON, pageOnly: true } }, true)[0][2], "Insert [[Page]]");
+  const all = [chips, { kind: "[[", row: { kind: "alias", chips: true, drill: true, aliasNew: true }, on: ON }, { kind: "((", row: { kind: "ref", drill: true }, on: ON }];
+  for (const s of all) for (const item of pickerHints(s, true)) assert.ok(item[2] && item[2].length > 8, JSON.stringify(item));
+});
+
+test("renderHints numbers its items for the hover tips", () => {
+  const doc = fakeDoc();
+  const node = doc.createElement("div");
+  renderHints(doc, node, [["↵", "insert"], ["esc", "rows"]]);
+  assert.deepEqual(node.children.filter((c) => c.className === "burrow-hint").map((c) => c.dataset.hint), ["0", "1"]);
+});
+
+test("isAltSlash goes by the typed character, not the key's position", () => {
+  const alt = (key, code = "Slash", more = {}) => ({ key, code, altKey: true, ctrlKey: false, metaKey: false, ...more });
+  assert.equal(isAltSlash(alt("÷")), true); // mac US ⌥/
+  assert.equal(isAltSlash(alt("¿")), true); // mac US ⌥⇧/
+  assert.equal(isAltSlash(alt("/")), true); // Alt+/ elsewhere
+  assert.equal(isAltSlash(alt("/", "Digit7")), true); // / on another key
+  assert.equal(isAltSlash(alt("–")), false); // mac German ⌥ and the key at the US / position
+  assert.equal(isAltSlash(alt("÷", "Slash", { altKey: false })), false);
+  assert.equal(isAltSlash(alt("÷", "Slash", { metaKey: true })), false);
+  assert.equal(isAltSlash(alt("/", "Slash", { ctrlKey: true })), false);
 });
