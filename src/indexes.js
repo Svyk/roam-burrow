@@ -64,8 +64,10 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
   // Roam calls it with the pull before and after the change.
   const watches = new Map();
   let settleTimer = null;
+  let watchCalls = 0;
   const watchOf = (title) => (_before, after) => {
     pulled.set(title, after);
+    watchCalls += 1;
     if (settleTimer != null) win.clearTimeout(settleTimer);
     settleTimer = win.setTimeout(() => { settleTimer = null; refreshAliases(); }, ALIAS_SETTLE_MS);
   };
@@ -137,6 +139,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
 
   const build = async () => {
     const t0 = performance.now();
+    const calls = watchCalls;
     const nextKeyword = setting("aliasKeyword") || "Aliases";
     const aliasRows = readAliasRows(nextKeyword);
     const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
@@ -162,6 +165,9 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     if (!refs.entries.length) perf.counters.emptyBuilds = (perf.counters.emptyBuilds || 0) + 1;
     syncWatches(nextKeyword);
     notify();
+    // An alias edit while the build awaited its queries: its rows are newer
+    // than the ones this build read first.
+    if (watchCalls !== calls) refreshAliases();
   };
 
   const schedule = () => {

@@ -14,8 +14,10 @@
 // p95 is held to the same 4 ms budget.
 // With Burrow on, every run also times the alias refresh an alias edit outside
 // Burrow sets off (src/indexes.js refreshAliases; read only, 8 refreshes 250
-// ms apart, as the watch's settle spaces them): the p95 of each of its two
-// idle tasks is held to 4 ms too.
+// ms apart, as the watch's settle spaces them, each re-keying the most linked
+// alias page): the p95 of each of its two idle tasks is held to 4 ms too.
+// Placing the strip and hint line (a frame callback, src/strip.js
+// placePanes) is reported as well: its read meets the frame's own layout.
 // --cold "[[plexus": first draws only. Opens that popup --runs x 4 times with
 // Roam's preview open (each popup starts with nothing read), selects the alias
 // row and times every slice of its preview draw and the time until it shows.
@@ -111,6 +113,7 @@ async function endRun() {
       keys: probe.records.length, latency: lat,
       burrowInput: perf ? [...perf.samples.input] : null,
       burrowRender: perf ? [...perf.samples.render] : null,
+      place: perf?.summary ? perf.summary("place") : null,
       queries: perf ? perf.counters.queries : null,
       drillFetches: perf ? (perf.counters.drillPulls || 0) + (perf.counters.drillQueries || 0) : null,
       previewShown: Boolean(document.querySelector(".burrow-preview:not([hidden]) .burrow-target")),
@@ -125,23 +128,40 @@ async function endRun() {
 }
 
 // What an alias edit outside Burrow costs: the refresh its watch runs, two
-// idle tasks (the read, then the swap, forced here: nothing changed).
+// idle tasks (the read, then the swap). Before each one the alias page that
+// the most indexed blocks link is made to look edited, in memory only (its
+// aliases leave the current index and its block leaves the parse memo), so
+// the swap parses and keys that block again and re-keys every block linking
+// the page, as a real edit there would. Nothing is written to the graph.
 const timeAliasRefresh = () => c.evaluate(async () => {
   const perf = window.__BURROW_PERF;
+  const indexes = window.__BURROW.indexes;
+  const counts = new Map();
+  for (const entry of indexes.refs.entries) {
+    for (const title of entry.linked || []) if (indexes.aliases.byPage.has(title)) counts.set(title, (counts.get(title) || 0) + 1);
+  }
+  const [page, linked] = [...counts].sort((a, b) => b[1] - a[1])[0] || [null, 0];
   const read = [];
   const swap = [];
   for (let i = 0; i < 8; i++) {
     await new Promise((resolve) => setTimeout(resolve, 250));
+    const aliases = indexes.aliases;
+    if (page) {
+      const names = new Set(aliases.byPage.get(page) || []);
+      aliases.byPage.delete(page);
+      for (const name of names) aliases.memo?.keys.delete(name);
+      for (const [string, list] of aliases.memo?.parsed || []) if (list.some((name) => names.has(name))) aliases.memo.parsed.delete(string);
+    }
     const n = perf.counters.aliasRefreshes || 0;
     const r0 = perf.samples.aliasRead?.length || 0;
     const s0 = perf.samples.aliasRefresh?.length || 0;
-    window.__BURROW.indexes.refreshAliases({ force: true });
+    indexes.refreshAliases({ force: true });
     const t0 = performance.now();
     while ((perf.counters.aliasRefreshes || 0) === n && performance.now() - t0 < 5000) await new Promise((resolve) => setTimeout(resolve, 10));
     read.push(...(perf.samples.aliasRead || []).slice(r0));
     swap.push(...(perf.samples.aliasRefresh || []).slice(s0));
   }
-  return { read, swap };
+  return { read, swap, page, linked };
 });
 
 const isExpanded = () => c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results--expanded")));
@@ -307,7 +327,8 @@ try {
         burrowP50: pct(r.burrowInput, 0.5), burrowP95: pct(r.burrowInput, 0.95), burrowMax: pct(r.burrowInput, 1),
         renderP95: pct(r.burrowRender, 0.95), previewP95: r.preview?.p95 ?? null, previewMax: r.preview?.max ?? null, previewSamples: r.preview?.n ?? 0, burrowSamples: r.burrowInput?.length ?? 0,
         kidChecks: r.kidChecks,
-        aliasReadP95: pct(r.aliasRefresh?.read, 0.95), aliasSwapP95: pct(r.aliasRefresh?.swap, 0.95),
+        aliasReadP95: pct(r.aliasRefresh?.read, 0.95), aliasSwapP95: pct(r.aliasRefresh?.swap, 0.95), aliasPage: r.aliasRefresh?.page ?? null, aliasLinked: r.aliasRefresh?.linked ?? 0,
+        placeP95: r.place?.p95 ?? null, placeMax: r.place?.max ?? null,
         aliasRefreshMax: pct([...(r.aliasRefresh?.read || []), ...(r.aliasRefresh?.swap || [])], 1),
         queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
         pagesDeleted: r.pages?.deleted,
@@ -335,6 +356,9 @@ report.summary = {
   aliasReadP95: by("on", "aliasReadP95"),
   aliasSwapP95: by("on", "aliasSwapP95"),
   aliasRefreshMax: by("on", "aliasRefreshMax"),
+  aliasLinked: by("on", "aliasLinked"),
+  placeP95: by("on", "placeP95"),
+  placeMax: by("on", "placeMax"),
   queriesPerKey: by("on", "queriesDuringRun"),
 };
 // Budget (spec §6): Burrow JS <= 4 ms p95 per input, input-to-paint p95
@@ -380,7 +404,8 @@ if (args.includes("--json")) {
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
   console.log(`  has-children checks for the hint line: ${report.summary.kidChecks.join(" / ")} per run`);
-  console.log(`  alias refresh after an outside edit, idle tasks p95: read ${report.summary.aliasReadP95.join(" / ")} ms, swap ${report.summary.aliasSwapP95.join(" / ")} ms (budget <= 4); max ${report.summary.aliasRefreshMax.join(" / ")} ms`);
+  console.log(`  alias refresh after an outside edit, idle tasks p95: read ${report.summary.aliasReadP95.join(" / ")} ms, swap ${report.summary.aliasSwapP95.join(" / ")} ms (budget <= 4); max ${report.summary.aliasRefreshMax.join(" / ")} ms; the edited page is linked by ${report.summary.aliasLinked.join(" / ")} indexed blocks`);
+  console.log(`  placing the strip and hint line in the frame p95: ${report.summary.placeP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.placeMax.map((v) => v ?? "none").join(" / ")} ms`);
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);
   console.log(`  per-run p95 deltas: ${report.summary.paintP95Deltas.join(" / ")} ms; Burrow-absent paint p50 ${report.summary.paintP50.gone.join(" / ")} ms`);
   console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);

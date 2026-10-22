@@ -142,6 +142,29 @@ test("a watch firing with the aliases unchanged reads them and swaps nothing", a
   await lifecycle.dispose();
 });
 
+test("an alias edited outside Burrow while a rebuild runs survives the rebuild", async () => {
+  const api = fakeApi();
+  const lifecycle = createLifecycle();
+  const win = timers();
+  const indexes = createIndexes({ api, perf: createPerf(), setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win });
+  await indexes.build();
+  // The rebuild's queries are held open while the edit lands.
+  const q = api.data.async.fast.q;
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  api.data.async.fast.q = async (...args) => { await held; return q(...args); };
+  const rebuild = indexes.build();
+  api.graph.aliasBlocks[0].string = "Aliases:: lori, lorinator, lb";
+  fire(api);
+  win.flush();
+  assert.equal(indexes.titles.resolve("lb")?.uid, "LB", "the watch's refresh has it");
+  release();
+  await rebuild;
+  assert.equal(indexes.titles.resolve("lb")?.uid, "LB", "and the rebuild that read the aliases first does not drop it");
+  assert.ok(indexes.aliases.entries.some((e) => e.alias === "lb"));
+  await lifecycle.dispose();
+});
+
 test("no alias row is listed twice when two spellings or blocks repeat a tuple", async () => {
   const api = fakeApi();
   api.graph.aliasBlocks.push({ uid: "a2", string: "Aliases:: lori, lorinator", page: { title: "Lori Boyd", uid: "LB" } });

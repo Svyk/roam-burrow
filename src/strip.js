@@ -342,14 +342,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       if (model?.drillKey !== st.drill.key) {
         model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
-      }
+      } else if (!preview.node.hidden) { redock = true; requestPlace(); return; }
       preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
       return;
     }
     const row = previewTarget();
     if (row && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
       if (rowPreviewKey === row.key) {
-        if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+        if (model && !preview.node.hidden) { redock = true; requestPlace(); }
         return;
       }
       // The pane keeps the last row's outline until this one is drawn, so
@@ -735,9 +735,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     } else helpButton.textContent = want ? "?" : "";
   }
 
-  // The hints line's content and class, then the one geometry read of a
-  // render: Roam's list column, which the strip tops and the hints line ends.
+  // The hints line's content and class now; where the strip and the line go
+  // (Roam's list column, which the strip tops and the line ends) in a frame.
   let hintsFor = null;
+  let hintsLine = false;
   function layoutPop() {
     const pop = st.pop;
     if (!pop) return;
@@ -762,15 +763,46 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       paintHelpButton(nudge);
       pop.classList.add(PAD_BOTTOM);
     }
+    hintsLine = line;
     if (strip.hidden && !line) return;
-    const rect = listColumn(pop).getBoundingClientRect();
-    const left = `${Math.round(rect.left)}px`;
-    const width = `${Math.round(rect.width)}px`;
-    if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
-    if (line) {
-      Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
-      hints.hidden = false;
+    requestPlace();
+  }
+
+  // Burrow's geometry reads run in a frame callback. Read anywhere else (the
+  // ranking task runs after a paint, a key handler), they would lay out
+  // Roam's own popover changes since that paint early, on Burrow's time: 2.6
+  // ms p50 per key in svy, measured. In the frame that layout is due anyway,
+  // and the frame paints the content and its place together.
+  let inFrame = false;
+  let placeId = null;
+  let redock = false;
+  const inFrameDo = (fn) => { inFrame = true; try { fn(); } finally { inFrame = false; } };
+  function requestPlace() {
+    if (inFrame) { placePanes(); return; }
+    if (placeId != null) return;
+    placeId = win.requestAnimationFrame(() => { placeId = null; inFrameDo(placePanes); });
+  }
+  lifecycle.add(() => { if (placeId != null) win.cancelAnimationFrame(placeId); placeId = null; });
+  function placePanes() {
+    const pop = st.pop;
+    if (!pop?.isConnected) return;
+    const t0 = performance.now();
+    // An unchanged preview follows the popover (src/preview.js reads before it writes).
+    if (redock) {
+      redock = false;
+      if (model && !preview.node.hidden) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect() });
     }
+    if (!strip.hidden || hintsLine) {
+      const rect = listColumn(pop).getBoundingClientRect();
+      const left = `${Math.round(rect.left)}px`;
+      const width = `${Math.round(rect.width)}px`;
+      if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
+      if (hintsLine) {
+        Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
+        hints.hidden = false;
+      }
+    }
+    perf.push("place", performance.now() - t0);
   }
   let hintItems = [];
 
@@ -891,7 +923,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (frameQueued) return;
     frameQueued = true;
     win.requestAnimationFrame(() => {
-      if (frameQueued) draw();
+      if (frameQueued) inFrameDo(draw);
     });
   }
 

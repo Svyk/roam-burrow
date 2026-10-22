@@ -714,8 +714,10 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
   };
   const watches = /* @__PURE__ */ new Map();
   let settleTimer = null;
+  let watchCalls = 0;
   const watchOf = (title) => (_before, after) => {
     pulled.set(title, after);
+    watchCalls += 1;
     if (settleTimer != null) win.clearTimeout(settleTimer);
     settleTimer = win.setTimeout(() => {
       settleTimer = null;
@@ -783,6 +785,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
   }
   const build = async () => {
     const t0 = performance.now();
+    const calls = watchCalls;
     const nextKeyword = setting("aliasKeyword") || "Aliases";
     const aliasRows = readAliasRows(nextKeyword);
     const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
@@ -808,6 +811,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     if (!refs.entries.length) perf.counters.emptyBuilds = (perf.counters.emptyBuilds || 0) + 1;
     syncWatches(nextKeyword);
     notify();
+    if (watchCalls !== calls) refreshAliases();
   };
   const schedule = () => {
     if (pending) return;
@@ -2705,6 +2709,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       if (model?.drillKey !== st.drill.key) {
         model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
+      } else if (!preview.node.hidden) {
+        redock = true;
+        requestPlace();
+        return;
       }
       preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
       return;
@@ -2712,7 +2720,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const row = previewTarget();
     if (row && setting("rowPreview") && st.pop?.classList.contains(EXPANDED)) {
       if (rowPreviewKey === row.key) {
-        if (model && !preview.node.hidden) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect() });
+        if (model && !preview.node.hidden) {
+          redock = true;
+          requestPlace();
+        }
         return;
       }
       cancelRowPreview();
@@ -3060,6 +3071,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     } else helpButton.textContent = want ? "?" : "";
   }
   let hintsFor = null;
+  let hintsLine = false;
   function layoutPop() {
     const pop = st.pop;
     if (!pop) return;
@@ -3081,15 +3093,55 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       paintHelpButton(nudge);
       pop.classList.add(PAD_BOTTOM);
     }
+    hintsLine = line;
     if (strip.hidden && !line) return;
-    const rect = listColumn(pop).getBoundingClientRect();
-    const left = `${Math.round(rect.left)}px`;
-    const width = `${Math.round(rect.width)}px`;
-    if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
-    if (line) {
-      Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
-      hints.hidden = false;
+    requestPlace();
+  }
+  let inFrame = false;
+  let placeId = null;
+  let redock = false;
+  const inFrameDo = (fn) => {
+    inFrame = true;
+    try {
+      fn();
+    } finally {
+      inFrame = false;
     }
+  };
+  function requestPlace() {
+    if (inFrame) {
+      placePanes();
+      return;
+    }
+    if (placeId != null) return;
+    placeId = win.requestAnimationFrame(() => {
+      placeId = null;
+      inFrameDo(placePanes);
+    });
+  }
+  lifecycle.add(() => {
+    if (placeId != null) win.cancelAnimationFrame(placeId);
+    placeId = null;
+  });
+  function placePanes() {
+    const pop = st.pop;
+    if (!pop?.isConnected) return;
+    const t0 = performance.now();
+    if (redock) {
+      redock = false;
+      if (model && !preview.node.hidden) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect() });
+    }
+    if (!strip.hidden || hintsLine) {
+      const rect = listColumn(pop).getBoundingClientRect();
+      const left = `${Math.round(rect.left)}px`;
+      const width = `${Math.round(rect.width)}px`;
+      if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
+      if (hintsLine) {
+        Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
+        hints.hidden = false;
+      }
+    }
+    perf.push("place", performance.now() - t0);
   }
   let hintItems = [];
   function openHelp() {
@@ -3194,7 +3246,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     if (frameQueued) return;
     frameQueued = true;
     win.requestAnimationFrame(() => {
-      if (frameQueued) draw();
+      if (frameQueued) inFrameDo(draw);
     });
   }
   function draw() {
