@@ -122,7 +122,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
   function swapAliases(kw, rows, print) {
     if (lifecycle?.disposed || !aliases || kw !== keyword) return;
     const t0 = performance.now();
-    const next = buildAliasIndex(rows, kw);
+    const next = buildAliasIndex(rows, kw, aliases.memo);
     setAliasRefs(next, [...aliases.refsByPage]);
     titles.setAliases(next);
     refreshAliasKeys(refs, next.byPage, aliases.byPage);

@@ -34,24 +34,32 @@ export function aliasRowsFromPull(pulled) {
 
 // rows: [blockString, pageTitle, pageUid]. One alias may name several pages;
 // each stays its own entry and Burrow never guesses between them.
-export function buildAliasIndex(rows, keyword) {
+// memo: the previous index's .memo (same keyword), so a rebuild after one
+// alias block changed parses and keys only that block's aliases.
+export function buildAliasIndex(rows, keyword, memo = null) {
   const entries = [];
   const byPage = new Map();
   const pageAliases = new Map();
+  const parsed = new Map();
+  const keys = new Map();
   const exact = `${String(keyword || "Aliases").trim()}::`;
   for (const [string, title, uid] of rows || []) {
     // roam-aliases reads only the exact-case keyword; Burrow reads any case.
     const seenByRoamAliases = String(string).startsWith(exact);
-    for (const alias of parseAliasBlock(string, keyword)) {
+    const list = parsed.get(string) || memo?.parsed.get(string) || parseAliasBlock(string, keyword);
+    parsed.set(string, list);
+    for (const alias of list) {
       if (alias.toLowerCase() === String(title).toLowerCase()) continue;
-      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases, refs: null });
+      const key = keys.get(alias) || memo?.keys.get(alias) || searchKey(alias);
+      keys.set(alias, key);
+      entries.push({ alias, title, uid, key, seenByRoamAliases, refs: null });
       if (!byPage.has(title)) byPage.set(title, []);
       byPage.get(title).push(alias);
       if (!pageAliases.has(uid)) pageAliases.set(uid, []);
       if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage, pageAliases, refsByPage: new Map() };
+  return { entries, byPage, pageAliases, refsByPage: new Map(), memo: { parsed, keys } };
 }
 
 // rows: [[pageUid, count], ...]. Counts are read at idle, never per key.

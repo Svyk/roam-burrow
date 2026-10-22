@@ -368,23 +368,29 @@ function aliasRowsFromPull(pulled) {
   }
   return rows;
 }
-function buildAliasIndex(rows, keyword) {
+function buildAliasIndex(rows, keyword, memo = null) {
   const entries = [];
   const byPage = /* @__PURE__ */ new Map();
   const pageAliases = /* @__PURE__ */ new Map();
+  const parsed = /* @__PURE__ */ new Map();
+  const keys = /* @__PURE__ */ new Map();
   const exact = `${String(keyword || "Aliases").trim()}::`;
   for (const [string, title, uid] of rows || []) {
     const seenByRoamAliases = String(string).startsWith(exact);
-    for (const alias of parseAliasBlock(string, keyword)) {
+    const list = parsed.get(string) || memo?.parsed.get(string) || parseAliasBlock(string, keyword);
+    parsed.set(string, list);
+    for (const alias of list) {
       if (alias.toLowerCase() === String(title).toLowerCase()) continue;
-      entries.push({ alias, title, uid, key: searchKey(alias), seenByRoamAliases, refs: null });
+      const key = keys.get(alias) || memo?.keys.get(alias) || searchKey(alias);
+      keys.set(alias, key);
+      entries.push({ alias, title, uid, key, seenByRoamAliases, refs: null });
       if (!byPage.has(title)) byPage.set(title, []);
       byPage.get(title).push(alias);
       if (!pageAliases.has(uid)) pageAliases.set(uid, []);
       if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map() };
+  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map(), memo: { parsed, keys } };
 }
 function setAliasRefs(index, rows) {
   const refsByPage = new Map(rows || []);
@@ -764,7 +770,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
   function swapAliases(kw, rows, print) {
     if (lifecycle?.disposed || !aliases || kw !== keyword) return;
     const t0 = performance.now();
-    const next = buildAliasIndex(rows, kw);
+    const next = buildAliasIndex(rows, kw, aliases.memo);
     setAliasRefs(next, [...aliases.refsByPage]);
     titles.setAliases(next);
     refreshAliasKeys(refs, next.byPage, aliases.byPage);
