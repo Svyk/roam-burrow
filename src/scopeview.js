@@ -105,13 +105,14 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
     const active = scope.rows[level.active];
-    const items = [];
-    if (active?.drillable) items.push(["⇥/>", "its children", "Go into the highlighted block: its children are listed here"]);
+    // Most needed first: in a 400 px panel the line may end in an ellipsis,
+    // and then it is Ctrl-O (also in the key list) that is cut, never esc.
+    const items = [["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"]];
+    if (active?.drillable) items.push(["⇥/>", "children", "Go into the highlighted block: its children are listed here"]);
     items.push(
       ["⇧⇥", scope.levels.length > 1 ? "up" : "back", scope.levels.length > 1 ? "One level up the outline: the parent's children, the parent highlighted (Backspace on an empty filter too)" : "Back to the results (Backspace on an empty filter too)"],
-      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
-      ["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"],
       ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
+      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
     );
     const key = hintsKey(items);
     if (key === hintsShown) return;

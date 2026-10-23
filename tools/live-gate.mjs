@@ -832,7 +832,7 @@ const HINTS_ROW = "↵ pick alias · ⌥↓ more aliases · ⇥ blocks on this p
 // The Chips page holds its alias block, so it can be drilled into too.
 const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ blocks on this page · esc rows";
 // Two levels down (page, then a section): ⇧⇥ goes up a level.
-const HINTS_SCOPE = ["⇥/> its children", "⇧⇥ up", "⌃O preview", "↵ insert", "esc results"];
+const HINTS_SCOPE = ["↵ insert", "⇥/> children", "⇧⇥ up", "esc results", "⌃O preview"];
 
 // (( block navigation and tasks (0.6.0), on the fixture's referenced blocks.
 const BLOCK_CASES = [
@@ -845,6 +845,17 @@ const BLOCK_CASES = [
       if ((a.rows || []).some((row) => row.text.includes("{{"))) return `macro text left in a row ${JSON.stringify(a.rows)}`;
       if (!b?.preview?.checks) return `no checkbox in the preview ${JSON.stringify(b?.preview)}`;
       return b.preview.label === '"Preview"' ? null : `preview label ${JSON.stringify(b.preview.label)}`;
+    },
+  },
+  {
+    // Review of 0.6.0: a macro that only starts like a task made the preview throw.
+    name: "(( a child that only starts like a task (a SmartBlock button): preview draws, Tab drills", query: "((zebra smart", restorePreview: true,
+    keys: ["preview-open", "wait:600", "snap", "Tab", "wait:300", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (!a?.rows[0]?.active || !a.rows[0].checks.includes("todo:off:ro")) return `row ${JSON.stringify(a?.rows)}`;
+      if (!a.rowPreview?.docked || !a.preview?.target?.includes("zebra smart parent") || !(a.preview.checks >= 1)) return `preview ${JSON.stringify(a?.preview)} ${JSON.stringify(a?.rowPreview)}`;
+      if (!b?.scope || !b.scope.rows.some((row) => row.includes("{{TODO today:SmartBlock:TODO today}}"))) return `drill panel ${JSON.stringify(b?.scope)} phase`;
+      return null;
     },
   },
   {
@@ -1178,7 +1189,7 @@ const TAB_CASES = [
     expect: ([s]) => {
       // The Alpha section level: its first child is a leaf unless the row carries ▸.
       const drillable = (s?.scope?.active ?? "").includes("▸");
-      const want = HINTS_SCOPE.filter((part, i) => drillable || i).join(" · ");
+      const want = HINTS_SCOPE.filter((part) => drillable || !part.startsWith("⇥/>")).join(" · ");
       return s?.scopeHints === want ? null : `scope hints ${JSON.stringify(s?.scopeHints)} != ${JSON.stringify(want)} (active ${JSON.stringify(s?.scope?.active)})`;
     },
   },

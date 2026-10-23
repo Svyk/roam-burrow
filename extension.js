@@ -1202,7 +1202,7 @@ var SWITCHES = [
   ["paneLayout", "Keep panes apart", "Roam's preview, roam-aliases' column and the result list each get their own space in the picker; nothing is drawn over anything else."],
   ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys that do something for the highlighted row, RefX style: on an alias row ↵ pick alias · ⌥↓ more aliases · ⇥ drill (only when the page has blocks) · ⌥A add alias; in a drill ⇥/> drill · ⇧⇥ back · ⌃O preview."],
   ["helpTips", "Hover tips", "Hovering a Burrow row, alias chip, preview or key hint shows what it is and which key does what with it, in Roam's colors."],
-  ["helpSheet", "Key list (⌥/, F1 or ?)", "⌥/ (Alt+/) or F1 while the picker is open, or the ? at the end of the hint line, lists every key Burrow adds, grouped, for the switches that are on. Esc or ⌥/ closes it; any other key closes it and goes on as usual."],
+  ["helpSheet", "Key list (⌥/, F1 or ?)", "⌥/ (Alt+/) or F1 (fn+F1 on a Mac keyboard, any layout) while the picker is open, or the ? at the end of the hint line, lists every key Burrow adds, grouped, for the switches that are on. Esc or ⌥/ closes it; any other key closes it and goes on as usual."],
   ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["refContext", "Where the block lives", "Under the highlighted referenced block in ((, a line with its page and parent (Page › … › Parent) and how many children Tab lists."],
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
@@ -1712,7 +1712,7 @@ function createHelpSheet({ doc, win, lifecycle }) {
       for (const note of group.notes) box.append(el("div", "burrow-help-note", note));
       grid.append(box);
     }
-    const foot = el("div", "burrow-help-foot", `Every key has its own switch in Settings → Burrow. Opens with ${closeKey}, F1 (any keyboard layout) or the ? on the hint line.`);
+    const foot = el("div", "burrow-help-foot", `Every key has its own switch in Settings → Burrow. Opens with ${closeKey}, F1 (any keyboard layout; fn+F1 on a Mac keyboard) or the ? on the hint line.`);
     node.replaceChildren(head, grid, foot);
   }
   function place(anchor, taRect) {
@@ -1970,7 +1970,9 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
 }
 
 // src/tasks.js
-var TASK = /\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}/g;
+var TASK_SOURCE = String.raw`\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}`;
+var TASK = new RegExp(TASK_SOURCE, "g");
+var ANY_TASK = new RegExp(TASK_SOURCE);
 function taskParts(string) {
   const parts = [];
   const value = String(string ?? "");
@@ -1983,7 +1985,7 @@ function taskParts(string) {
   if (at < value.length) parts.push({ text: value.slice(at) });
   return parts;
 }
-var hasTask = (string) => /\{\{\s*(?:\[\[)?(?:TODO|DONE)\b/.test(String(string ?? ""));
+var hasTask = (string) => ANY_TASK.test(String(string ?? ""));
 function checkbox(doc, state) {
   const box = doc.createElement("span");
   box.className = `burrow-check burrow-${state}`;
@@ -2016,7 +2018,7 @@ function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
-  const task = (s) => hasTask(s) ? taskParts(s).find((p) => p.task).task : null;
+  const task = (s) => hasTask(s) ? taskParts(s).find((p) => p.task)?.task ?? null : null;
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
     const { total: total2, kids } = read.window(uid, 0, CHILD_LIMIT);
@@ -2346,13 +2348,12 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
     const active = scope.rows[level.active];
-    const items = [];
-    if (active?.drillable) items.push(["⇥/>", "its children", "Go into the highlighted block: its children are listed here"]);
+    const items = [["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"]];
+    if (active?.drillable) items.push(["⇥/>", "children", "Go into the highlighted block: its children are listed here"]);
     items.push(
       ["⇧⇥", scope.levels.length > 1 ? "up" : "back", scope.levels.length > 1 ? "One level up the outline: the parent's children, the parent highlighted (Backspace on an empty filter too)" : "Back to the results (Backspace on an empty filter too)"],
-      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
-      ["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"],
-      ["esc", "results", "Back to Roam's results; the text stays as you typed it"]
+      ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
+      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"]
     );
     const key = hintsKey(items);
     if (key === hintsShown) return;
@@ -2629,6 +2630,7 @@ var POPUP_WAIT_FRAMES = 12;
 var PREVIEW_SLICE_MS = 3;
 var PREVIEW_DRAW_ALONE_MS = 0.5;
 var PREVIEW_FIRST_LINES = 24;
+var CONTEXT_KIDS = 100;
 var valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, saveSetting = null, doc = document, win = window }) {
   const st = {
@@ -3174,7 +3176,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const where = Object.assign(doc.createElement("span"), { className: "burrow-context-trail", textContent: trail.length ? `in ${trail.join(" › ")}` : "" });
     const parts = [where];
     if (known?.kids > 0 && (setting("tabDrill") || setting("refOutline"))) {
-      parts.push(Object.assign(doc.createElement("span"), { className: "burrow-context-kids", textContent: `⇥ ${known.kids} ${known.kids === 1 ? "child" : "children"}` }));
+      const count = known.kids > CONTEXT_KIDS ? `${CONTEXT_KIDS}+` : String(known.kids);
+      parts.push(Object.assign(doc.createElement("span"), { className: "burrow-context-kids", textContent: `⇥ ${count} ${known.kids === 1 ? "child" : "children"}` }));
     }
     contextNode.replaceChildren(...parts);
     contextNode.title = trail.length ? trail.join(" › ") : "";
@@ -3202,7 +3205,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const names = chain.map((n, i) => i === 0 ? n.title || readableText(n.string) : readableText(n.string) || "(empty)");
     const trail = names.length > 2 ? [names[0], "…", names[names.length - 1]] : names;
     perf.counters.contextPulls = (perf.counters.contextPulls || 0) + 2;
-    const kids = api.pull("[{:block/children [:db/id]}]", [":block/uid", uid])?.[":block/children"]?.length ?? 0;
+    const kids = api.pull(`[{(limit :block/children ${CONTEXT_KIDS + 1}) [:db/id]}]`, [":block/uid", uid])?.[":block/children"]?.length ?? 0;
     kidsKnown.set(uid, kids > 0);
     return { trail, kids };
   }

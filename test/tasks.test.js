@@ -18,7 +18,11 @@ test("TODO and DONE macros become task parts where they sit; the rest stays text
 test("hasTask finds a task macro and nothing else", () => {
   assert.equal(hasTask("{{[[TODO]]}} x"), true);
   assert.equal(hasTask("x {{DONE}}"), true);
-  assert.equal(hasTask("{{TODO today:SmartBlock:TODO today}}"), true);
+  // Macros that only start like a task are text, as Roam draws them (a SmartBlock button).
+  assert.equal(hasTask("{{TODO today:SmartBlock:TODO today}}"), false);
+  assert.equal(hasTask("{{[[DONE]] and archive:SmartBlock:Archive}}"), false);
+  assert.equal(hasTask("{{DONE-ish}}"), false);
+  assert.equal(hasTask("{{[[DONE]]:((4Szp96jw2))}} read"), true);
   assert.equal(hasTask("{{todo-progress-bar}}"), false);
   assert.equal(hasTask("[[TODO]] page link"), false);
   assert.equal(hasTask(null), false);
@@ -30,4 +34,10 @@ test("a checkbox is one element, done or to do", () => {
   assert.equal(checkbox(doc, "done").className, "burrow-check burrow-done");
   assert.equal(checkbox(doc, "todo").attrs["aria-label"], "to do");
   assert.equal(made.length, 2);
+});
+
+test("hasTask and taskParts agree: whenever hasTask is true there is a task part", () => {
+  const strings = ["{{[[TODO]]}} a", "{{TODO}}", "x {{[[DONE]]}}", "{{[[DONE]]:((4Szp96jw2))}} y", "{{TODO today:SmartBlock:TODO today}}",
+    "{{[[DONE]] and archive:SmartBlock:Archive}}", "{{DONE-ish}}", "{{ TODO }}", "{{[[TODO]]}}{{[[DONE]]}}", "plain"];
+  for (const s of strings) assert.equal(hasTask(s), taskParts(s).some((p) => p.task), s);
 });

@@ -36,7 +36,7 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
   // A line with a task macro draws a checkbox before its text (CSS on the
   // line itself, so a line stays one element: src/extension.css).
-  const task = (s) => (hasTask(s) ? taskParts(s).find((p) => p.task).task : null);
+  const task = (s) => (hasTask(s) ? taskParts(s).find((p) => p.task)?.task ?? null : null);
   // kids === null: has children not read yet (or not known).
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {

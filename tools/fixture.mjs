@@ -26,6 +26,8 @@ export const DRILL_TREE = [
   // Referenced tasks, drawn as Roam's checkboxes in Burrow's rows (0.6.0).
   { key: "taskTodo", string: "{{[[TODO]]}} zebra task open" },
   { key: "taskDone", string: "{{[[DONE]]}} zebra task closed" },
+  // A macro that only starts like a task (svy's SmartBlock button under a TODO on Patterns).
+  { key: "taskSmart", string: "{{[[TODO]]}} zebra smart parent", children: [{ key: "smartButton", string: "{{TODO today:SmartBlock:TODO today}}" }] },
   { key: "steps", string: "Steps section", children: [
     { key: "intro", string: "B-side" },
     { key: "one", string: "1. mix" }, { key: "two", string: "2. bake" },
@@ -151,7 +153,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         await make(tree, pageUid);
         // The referenced blocks the (( cases find: the pick-memory pair, the
         // tasks, and a nested block (outline and context cases).
-        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.never})) ((${drill.many50}))`, uid: refsUid } });
+        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50}))`, uid: refsUid } });
         created.drill.push(refsUid);
       }
       await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: "", uid: blockUid } });

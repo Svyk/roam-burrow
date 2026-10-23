@@ -49,6 +49,8 @@ const PREVIEW_DRAW_ALONE_MS = 0.5;
 // shows; the rest follow in further slices. A line inserted (or removed)
 // costs about 0.07 ms in svy.
 const PREVIEW_FIRST_LINES = 24;
+// The context line counts a block's children up to this many.
+const CONTEXT_KIDS = 100;
 const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 
 // Keyboard ownership (spec §4):
@@ -612,7 +614,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const where = Object.assign(doc.createElement("span"), { className: "burrow-context-trail", textContent: trail.length ? `in ${trail.join(" › ")}` : "" });
     const parts = [where];
     if (known?.kids > 0 && (setting("tabDrill") || setting("refOutline"))) {
-      parts.push(Object.assign(doc.createElement("span"), { className: "burrow-context-kids", textContent: `⇥ ${known.kids} ${known.kids === 1 ? "child" : "children"}` }));
+      const count = known.kids > CONTEXT_KIDS ? `${CONTEXT_KIDS}+` : String(known.kids);
+      parts.push(Object.assign(doc.createElement("span"), { className: "burrow-context-kids", textContent: `⇥ ${count} ${known.kids === 1 ? "child" : "children"}` }));
     }
     contextNode.replaceChildren(...parts);
     contextNode.title = trail.length ? trail.join(" › ") : "";
@@ -641,7 +644,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const names = chain.map((n, i) => (i === 0 ? n.title || readableText(n.string) : readableText(n.string) || "(empty)"));
     const trail = names.length > 2 ? [names[0], "…", names[names.length - 1]] : names;
     perf.counters.contextPulls = (perf.counters.contextPulls || 0) + 2;
-    const kids = api.pull("[{:block/children [:db/id]}]", [":block/uid", uid])?.[":block/children"]?.length ?? 0;
+    // Counted up to 100 (`100+` past it): a pull of every child id costs
+    // 3-9 ms on a node with 2,000 children.
+    const kids = api.pull(`[{(limit :block/children ${CONTEXT_KIDS + 1}) [:db/id]}]`, [":block/uid", uid])?.[":block/children"]?.length ?? 0;
     kidsKnown.set(uid, kids > 0);
     return { trail, kids };
   }

@@ -94,3 +94,13 @@ test("firstReal skips empty rows and more rows", () => {
   assert.equal(firstReal([{ more: 3, empty: false }, { empty: false }]), 1);
   assert.equal(firstReal([]), 0);
 });
+
+test("drill rows: a task draws its checkbox part, a SmartBlock button that starts like one stays text", () => {
+  const rows = scopeRows([
+    { uid: "t", string: "{{[[TODO]]}} buy milk", kids: [] },
+    { uid: "s", string: "{{TODO today:SmartBlock:TODO today}}", kids: [] },
+  ], "");
+  assert.deepEqual(rows[0].parts.map((p) => p.task ?? "text"), ["todo", "text"]);
+  assert.equal(rows[1].parts, null);
+  assert.equal(rows[1].text, "{{TODO today:SmartBlock:TODO today}}");
+});

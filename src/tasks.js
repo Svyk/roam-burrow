@@ -1,7 +1,9 @@
 // {{[[TODO]]}} and {{[[DONE]]}} (also {{TODO}}, {{DONE}} and Better Tasks'
 // {{[[DONE]]:((uid))}}) drawn as Roam draws them in its own rows: a read-only
 // checkbox where the macro sits. Everything else stays text.
-const TASK = /\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}/g;
+const TASK_SOURCE = String.raw`\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}`;
+const TASK = new RegExp(TASK_SOURCE, "g");
+const ANY_TASK = new RegExp(TASK_SOURCE);
 
 // [{ text } | { task: "todo" | "done" }], in order; empty text parts dropped.
 export function taskParts(string) {
@@ -17,7 +19,9 @@ export function taskParts(string) {
   return parts;
 }
 
-export const hasTask = (string) => /\{\{\s*(?:\[\[)?(?:TODO|DONE)\b/.test(String(string ?? ""));
+// The same pattern as taskParts, so a macro that only starts like a task
+// (svy's SmartBlock button `{{TODO today:SmartBlock:TODO today}}`) is text.
+export const hasTask = (string) => ANY_TASK.test(String(string ?? ""));
 
 // One element, drawn by src/extension.css to Roam's own checkbox (12 px,
 // its border and blue, the white tick), read-only: a click picks the row.

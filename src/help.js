@@ -75,7 +75,7 @@ export function createHelpSheet({ doc, win, lifecycle }) {
       for (const note of group.notes) box.append(el("div", "burrow-help-note", note));
       grid.append(box);
     }
-    const foot = el("div", "burrow-help-foot", `Every key has its own switch in Settings → Burrow. Opens with ${closeKey}, F1 (any keyboard layout) or the ? on the hint line.`);
+    const foot = el("div", "burrow-help-foot", `Every key has its own switch in Settings → Burrow. Opens with ${closeKey}, F1 (any keyboard layout; fn+F1 on a Mac keyboard) or the ? on the hint line.`);
     node.replaceChildren(head, grid, foot);
   }
 
