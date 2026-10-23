@@ -4,6 +4,9 @@
    own room, so no native row is ever under it. Padding as Roam's list. */
 .burrow-strip {
   flex: none;
+  /* Its height is set from its rows (src/strip.js sizeStrip): what changes
+     inside it never lays out Roam's column again. */
+  contain: strict;
   box-sizing: border-box;
   padding: 4px 4px 3px;
   background: transparent;
@@ -49,20 +52,23 @@
 }
 
 /* While a Burrow row holds the selection, Roam's own highlight is muted. Keyed
-   on Burrow's strip, not on a popover class, which Roam rewrites. */
-.rm-autocomplete__results-main:has(> .burrow-strip.burrow-owning:not([hidden])) > .rm-autocomplete__results-scroll > div {
+   on Burrow's strip (right before Roam's list), not on a popover class, which
+   Roam rewrites; a sibling selector, which costs less to keep up than :has(). */
+.burrow-strip.burrow-owning:not([hidden]) ~ .rm-autocomplete__results-scroll > div {
   background-color: transparent !important;
 }
 
 /* Roam scrolls its active row into view by the row's offsetTop: with
    Burrow's strip above the list, that must count from the list itself. */
-.rm-autocomplete__results-main:has(> .burrow-strip, > .burrow-hints) > .rm-autocomplete__results-scroll {
+.burrow-strip ~ .rm-autocomplete__results-scroll {
   position: relative;
 }
 
-/* TODO / DONE in Burrow's rows and previews: Roam's own checkbox, read-only. */
-.burrow-check { display: inline-block; margin: 0 4px 0 1px; vertical-align: baseline; pointer-events: none; }
-.burrow-check .check-container { display: inline-block; cursor: inherit; }
+/* TODO / DONE in Burrow's rows and previews: Roam's own checkbox (its 12 px box,
+   border, blue and tick), one element, read-only. */
+.burrow-check { display: inline-block; position: relative; box-sizing: border-box; width: 12px; height: 12px; margin: 0 5px 0 1px; vertical-align: -1px; border: 1px solid rgb(167, 182, 194); border-radius: 2px; pointer-events: none; }
+.burrow-check.burrow-done { border: none; background-color: rgb(19, 124, 189); }
+.burrow-check.burrow-done::after { content: ""; position: absolute; left: 3.5px; top: 0.25px; width: 5px; height: 10px; box-sizing: border-box; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(40deg) scale(0.8); }
 
 /* Under the highlighted block row: its page and parent (refContext). */
 .burrow-context { display: flex; align-items: baseline; gap: 8px; box-sizing: border-box; height: 18px; padding: 0 6px 2px 18px; font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; }
@@ -168,6 +174,25 @@
 
 .burrow-node.burrow-more::before { content: none; }
 
+/* A task line in the preview: Roam's checkbox before the text, drawn on the
+   line itself (one element per line), the tick as an image. */
+.burrow-node.burrow-task-todo, .burrow-node.burrow-task-done { padding-left: calc(37px + var(--burrow-depth, 0) * 18px); }
+.burrow-node.burrow-task-todo::after, .burrow-node.burrow-task-done::after {
+  content: "";
+  position: absolute;
+  left: calc(20px + var(--burrow-depth, 0) * 18px);
+  top: 6px;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgb(167, 182, 194);
+  border-radius: 2px;
+}
+.burrow-node.burrow-task-done::after {
+  border: none;
+  background: rgb(19, 124, 189) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.2 6.3l2 2 3.8-4.6' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='square'/%3E%3C/svg%3E") center / 12px 12px no-repeat;
+}
+
 .burrow-node.burrow-h1 { font-size: 1.25em; font-weight: 600; }
 .burrow-node.burrow-h2 { font-size: 1.12em; font-weight: 600; }
 .burrow-node.burrow-h3 { font-weight: 600; }
@@ -199,7 +224,7 @@
 
 /* Alias chips, key hints, and the roam-aliases fold / pane layout. The hint
    line is the last thing in Roam's list column, under its footer. */
-.burrow-hints { flex: none; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
+.burrow-hints { flex: none; contain: strict; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
 /* The items take what is left of the line; the ? (or the first-run line) keeps its place at the end. */
 .burrow-hints-list { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .burrow-hints .burrow-hint, .burrow-help-button { pointer-events: auto; }

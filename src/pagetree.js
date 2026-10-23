@@ -20,13 +20,15 @@ const HEADING = "[:block/uid :block/string :block/heading :block/order]";
 const FIRST_SCAN_LIMIT = 3000;
 // Bounded reads for the row preview: a node's children in outline order as
 // ids only, then one small pull per child it shows, whose `limit` keeps a
-// child with thousands of children as cheap as a leaf. The ids come in
-// pages: one query for the child ids (1.2 ms at 966 children in svy), then
-// their orders a batch at a time (about 1.4 ms per 200), each batch its own
-// read, so a node with thousands of children never takes one long task.
-const KID_IDS = "[:find [?c ...] :in $ ?u :where [?p :block/uid ?u] [?p :block/children ?c]]";
-const ORDER = "[:db/id :block/order]";
+// child with thousands of children as cheap as a leaf. The ids: one pull of
+// at most 151 children with their order (a leaf costs as little as before);
+// a node with more is read in pages, one query for its child ids (0.2 ms at
+// 92 children, 1.2 ms at 966 in svy) and then their orders 150 at a time
+// (about 0.7 ms each), each its own read, so no node takes one long task.
 const ORDER_BATCH = 150;
+const SLOTS = `[:db/id {(limit :block/children ${ORDER_BATCH + 1}) [:db/id :block/order]}]`;
+const KID_IDS = "[:find [?c ...] :in $ ?p :where [?p :block/children ?c]]";
+const ORDER = "[:db/id :block/order]";
 const BRIEF = "[:block/uid :block/string :block/heading :block/order {(limit :block/children 1) [:db/id]}]";
 const EID = "[:db/id]";
 // Thrown by a bounded reader when its time slice is used up before a read.
@@ -158,13 +160,21 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
 
   function bounded(expired = () => false) {
     const read = (fn) => { if (expired()) throw PAUSE; onFetch?.("pull"); return fn(); };
+    const byOrder = (list) => list.sort((a, b) => a[1] - b[1]).map(([eid]) => eid);
     const slotIds = (uid) => {
       if (slots.has(uid)) return slots.get(uid);
       let job = paging.get(uid);
       if (!job) {
-        job = { ids: [...(read(() => q(KID_IDS, uid)) || [])], orders: [], at: 0 };
+        const raw = read(() => pull(SLOTS, [":block/uid", uid]));
+        const first = (raw?.[":block/children"] || []).map((k) => [k[":db/id"], k[":block/order"] ?? 0]);
+        if (first.length <= ORDER_BATCH) {
+          slots.set(uid, byOrder(first));
+          return slots.get(uid);
+        }
+        job = { eid: raw[":db/id"], ids: null, orders: [], at: 0 };
         paging.set(uid, job);
       }
+      if (!job.ids) job.ids = [...(read(() => q(KID_IDS, job.eid)) || [])];
       while (job.at < job.ids.length) {
         const batch = job.ids.slice(job.at, job.at + ORDER_BATCH);
         const got = read(() => (pullMany ? pullMany(ORDER, batch) : batch.map((eid) => pull(ORDER, eid))));
@@ -172,7 +182,7 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
         job.at += batch.length;
       }
       paging.delete(uid);
-      slots.set(uid, job.orders.sort((a, b) => a[1] - b[1]).map(([eid]) => eid));
+      slots.set(uid, byOrder(job.orders));
       return slots.get(uid);
     };
     const brief = (eid) => {

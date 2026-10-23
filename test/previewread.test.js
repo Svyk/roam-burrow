@@ -45,10 +45,13 @@ function bigGraph(top = 500, kids = 3) {
       };
       return up(n);
     }
-    if (pattern.startsWith("[{:block/children [:db/id :block/order]}]")) {
+    if (pattern.startsWith("[:db/id {(limit :block/children ")) {
+      const limit = Number(pattern.match(/limit :block\/children (\d+)/)[1]);
+      const kids = kidsOf(n).slice(0, limit);
       calls.slots += 1;
-      calls.entities += n.children.length;
-      return { ":block/children": kidsOf(n).map((c) => ({ ":db/id": c.eid, ":block/order": c.order })) };
+      calls.entities += kids.length;
+      calls.biggestRead = Math.max(calls.biggestRead, kids.length);
+      return { ":db/id": n.eid, ":block/children": kids.map((c) => ({ ":db/id": c.eid, ":block/order": c.order })) };
     }
     if (pattern.includes("(limit :block/children 1)")) {
       calls.brief += 1;
@@ -65,10 +68,10 @@ function bigGraph(top = 500, kids = 3) {
   };
   // The child-id query (ids in an order that is not the outline order), and
   // pull_many for their orders, a batch at a time.
-  const q = (query, uid) => {
+  const q = (query, eid) => {
     if (!query.includes(":block/children ?c")) return [];
-    const n = nodes.get(uid);
-    calls.slots += 1;
+    const n = nodes.get(eid);
+    calls.ids = (calls.ids || 0) + 1;
     calls.entities += n?.children.length ?? 0;
     calls.biggestRead = Math.max(calls.biggestRead, n?.children.length ?? 0);
     return n ? kidsOf(n).map((c) => c.eid) : [];
@@ -90,11 +93,12 @@ const shape = (model) => model.items.map((i) => (i.more != null ? `+${i.more}@${
 test("a page preview reads only the blocks it shows, and matches the full read", () => {
   const big = bigGraph(500, 3);
   const bounded = previewModel({ page, target: null }, big.source().bounded(), text);
-  assert.equal(big.calls.slots, 17, "the page's ids, then the ids under each of the 16 blocks shown");
+  assert.equal(big.calls.slots, 17, "a limited pull of the page's ids, then of the ids under each of the 16 blocks shown");
+  assert.equal(big.calls.ids, 1, "the page has more than 151 blocks: its ids come from one query");
   assert.equal(big.calls.brief, 16 + 16 * 3);
-  // 500 ids of the page's blocks and their orders, the same for the 48 under the 16 shown, then the 64 blocks shown.
-  assert.equal(big.calls.entities, 2 * (500 + 48) + 64);
-  assert.equal(big.calls.orders, 4 + 16, "the page's 500 orders in batches of 150, one batch under each block shown");
+  // 151 ids from the first pull, the page's 500 ids and their orders, 48 ids under the 16 shown, then the 64 blocks shown.
+  assert.equal(big.calls.entities, 151 + 2 * 500 + 48 + 64);
+  assert.equal(big.calls.orders, 4, "the page's 500 orders in batches of 150; small nodes need none");
   const full = bigGraph(500, 3);
   const whole = previewModel({ page, target: null }, createTreeSource({ pull: full.pull, q: () => [] }).full, text);
   assert.deepEqual(shape(bounded), shape(whole));
@@ -168,6 +172,7 @@ test("a node with 2,600 children is read in pages: no read takes more than 150 o
   }
   assert.ok(slices >= 9, `${slices} slices`);
   assert.equal(big.calls.orders, Math.ceil(2600 / 150), "each batch of orders read once");
+  assert.equal(big.calls.ids, 1);
   assert.equal(big.calls.biggestRead, 2600, "the one id query lists them all (1.2 ms at 966 in svy); the orders come in batches");
   assert.equal(shape(model).at(-1), "+2584@0");
   assert.deepEqual(shape(model).slice(0, 2), ["b0@0", "b1@0"]);
@@ -179,4 +184,5 @@ test("without pull_many the orders are read one pull each, in the same batches",
   const model = previewModel({ page, target: null }, tree.bounded(), text);
   assert.deepEqual(shape(model).slice(0, 2), ["b0@0", "b0k0@1"]);
   assert.equal(big.calls.orders, 0);
+  assert.equal(big.calls.ids, 1);
 });

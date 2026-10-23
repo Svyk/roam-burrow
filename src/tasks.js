@@ -19,48 +19,15 @@ export function taskParts(string) {
 
 export const hasTask = (string) => /\{\{\s*(?:\[\[)?(?:TODO|DONE)\b/.test(String(string ?? ""));
 
-// Better Tasks' status tag (`#[[task-status/In Review]]`), as the attributes
-// its stylesheet paints a block's checkbox by: { status: "IN_REVIEW", shape:
-// "in-review" }, or null.
-export function taskStatus(string) {
-  const m = String(string ?? "").match(/#\[\[task-status\/([^\]]+)\]\]|#task-status\/([^\s\]#,]+)/);
-  const name = (m?.[1] ?? m?.[2] ?? "").trim();
-  if (!name) return null;
-  return { status: name.toUpperCase().replace(/[\s-]+/g, "_"), shape: name.toLowerCase().replace(/[\s_]+/g, "-") };
-}
-
-// Roam's own row markup (`.rm-checkbox .check-container .checkmark`), so the
-// theme styles it as in Roam's list; disabled, and the pointer passes through
-// to the row (a click picks the row, it never toggles the task).
-export function checkbox(doc, state, status = null) {
-  const wrap = doc.createElement("span");
-  wrap.className = `rm-checkbox rm-${state} burrow-check`;
-  if (status && state === "todo") {
-    wrap.dataset.tsCheckboxStatus = status.status;
-    wrap.dataset.tsCheckboxShape = status.shape;
-  }
-  const label = doc.createElement("label");
-  label.className = "check-container";
-  const input = doc.createElement("input");
-  input.type = "checkbox";
-  input.disabled = true;
-  input.tabIndex = -1;
-  input.checked = state === "done";
-  const mark = doc.createElement("span");
-  mark.className = "checkmark";
-  label.append(input, mark);
-  wrap.append(label);
-  return wrap;
-}
-
-// Text with its task macros as checkboxes; `textOf(part)` turns each text part
-// into a node or string (highlighting, markup stripping).
-export function withTasks(doc, string, textOf = (s) => s) {
-  const fragment = doc.createDocumentFragment();
-  const status = taskStatus(string);
-  for (const part of taskParts(string)) {
-    if (part.task) fragment.append(checkbox(doc, part.task, status));
-    else fragment.append(textOf(part.text));
-  }
-  return fragment;
+// One element, drawn by src/extension.css to Roam's own checkbox (12 px,
+// its border and blue, the white tick), read-only: a click picks the row.
+// Roam's markup (span, label, input, span) costs four inserted elements per
+// box, and in svy every element inserted costs about 0.03 ms, so a preview of
+// 80 task lines cost 7 ms with it.
+export function checkbox(doc, state) {
+  const box = doc.createElement("span");
+  box.className = `burrow-check burrow-${state}`;
+  box.setAttribute("role", "img");
+  box.setAttribute("aria-label", state === "done" ? "done" : "to do");
+  return box;
 }

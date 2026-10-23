@@ -3,8 +3,8 @@
 // reversible class on the popover hides; otherwise it sits beside the
 // popover where Roam's preview would open. Text only: no Roam blocks are
 // rendered, so a click cannot open an editor. TODO/DONE show as Roam's
-// read-only checkboxes (src/tasks.js).
-import { checkbox, hasTask, taskParts, taskStatus } from "./tasks.js";
+// checkbox before the line's text.
+import { hasTask, taskParts } from "./tasks.js";
 
 const SIBLING_WINDOW = 24;
 const CHILD_LIMIT = 16;
@@ -34,8 +34,9 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
-  // A line with a task macro keeps it as a part, so it draws as a checkbox.
-  const parts = (s) => (hasTask(s) ? taskParts(s).map((p) => (p.task ? { ...p, status: taskStatus(s) } : { text: text(p.text) })) : null);
+  // A line with a task macro draws a checkbox before its text (CSS on the
+  // line itself, so a line stays one element: src/extension.css).
+  const task = (s) => (hasTask(s) ? taskParts(s).find((p) => p.task).task : null);
   // kids === null: has children not read yet (or not known).
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
@@ -43,7 +44,7 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
     for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
-      items.push({ uid: kid.uid, text: text(kid.string || ""), parts: parts(kid.string), depth, heading: kid.heading, target: false });
+      items.push({ uid: kid.uid, text: text(kid.string || ""), task: task(kid.string), depth, heading: kid.heading, target: false });
       if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
     if (total > CHILD_LIMIT) items.push({ more: total - CHILD_LIMIT, depth });
@@ -60,11 +61,11 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), parts: parts(sib.string), depth: 0, heading: sib.heading, target: isTarget });
+    items.push({ uid: sib.uid, text: text(sib.string || ""), task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), parts: parts(target.string), depth: 0, heading: target.heading, target: true });
+  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), task: task(target.string), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
 
@@ -85,14 +86,21 @@ export function createPreview({ doc, win, lifecycle }) {
   // One element per line (the bullet is CSS): in svy's theme every node a
   // render adds costs style work, so the 0.4.0 three spans per line were
   // most of a draw.
-  function render(model) {
+  // Lines of the shown model not drawn yet (render with a line limit).
+  let rest = null;
+  function render(model, lines = Infinity) {
     // The pane says what it is (src/extension.css draws "Preview" before the trail).
     trailNode.replaceChildren();
     model.trail.forEach((part, i) => {
       if (i) trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-sep", textContent: " › " }));
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
-    const rows = model.items.map((item) => {
+    outline.replaceChildren(...lineNodes(model.items.slice(0, lines)));
+    rest = model.items.length > lines ? model.items.slice(lines) : null;
+  }
+
+  function lineNodes(items) {
+    return items.map((item) => {
       const row = doc.createElement("div");
       row.className = "burrow-node";
       row.style.setProperty("--burrow-depth", String(item.depth));
@@ -103,12 +111,10 @@ export function createPreview({ doc, win, lifecycle }) {
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
-      if (item.parts) {
-        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task, part.status) : part.text.trim());
-      } else row.textContent = item.text || " ";
+      if (item.task) row.classList.add(`burrow-task-${item.task}`);
+      row.textContent = item.text || " ";
       return row;
     });
-    outline.replaceChildren(...rows);
   }
 
   // Docked over Roam's preview: the rect is read before the pane is written,
@@ -179,7 +185,8 @@ export function createPreview({ doc, win, lifecycle }) {
       filled = true;
     },
     // inFrame: called from a frame callback, so the scroll runs now, in this frame.
-    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false } = {}) {
+    // lines: draw only that many lines now; more() draws the rest later.
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false, lines = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       // The class can grow the popover (min-height), so it goes on before the read.
@@ -187,7 +194,7 @@ export function createPreview({ doc, win, lifecycle }) {
       const docked = dockRect(beside);
       const changed = model.key !== shownKey || pane.hidden || filled;
       filled = false;
-      if (model.key !== shownKey) { render(model); shownKey = model.key; }
+      if (model.key !== shownKey) { render(model, lines); shownKey = model.key; }
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);
@@ -202,8 +209,17 @@ export function createPreview({ doc, win, lifecycle }) {
         onFrame?.(performance.now() - t0);
       });
     },
+    // Lines show() left for later, drawn now (appended: the scroll stays).
+    get pending() { return Boolean(rest) && !pane.hidden; },
+    more() {
+      if (!rest || pane.hidden) return;
+      const items = rest;
+      rest = null;
+      outline.append(...lineNodes(items));
+    },
     hide() {
       cancelScroll();
+      rest = null;
       pane.hidden = true;
       shownKey = null;
       filled = false;

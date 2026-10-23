@@ -1761,9 +1761,10 @@ var PAGE_ID = "[:db/id]";
 var HEADINGS = "[:find ?b ?h :in $ ?p :where [?b :block/page ?p] [?b :block/heading ?h]]";
 var HEADING = "[:block/uid :block/string :block/heading :block/order]";
 var FIRST_SCAN_LIMIT = 3e3;
-var KID_IDS = "[:find [?c ...] :in $ ?u :where [?p :block/uid ?u] [?p :block/children ?c]]";
-var ORDER = "[:db/id :block/order]";
 var ORDER_BATCH = 150;
+var SLOTS = `[:db/id {(limit :block/children ${ORDER_BATCH + 1}) [:db/id :block/order]}]`;
+var KID_IDS = "[:find [?c ...] :in $ ?p :where [?p :block/children ?c]]";
+var ORDER = "[:db/id :block/order]";
 var BRIEF = "[:block/uid :block/string :block/heading :block/order {(limit :block/children 1) [:db/id]}]";
 var EID = "[:db/id]";
 var PAUSE = /* @__PURE__ */ Symbol("burrow-preview-pause");
@@ -1886,13 +1887,21 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       onFetch?.("pull");
       return fn();
     };
+    const byOrder = (list) => list.sort((a, b) => a[1] - b[1]).map(([eid]) => eid);
     const slotIds = (uid) => {
       if (slots.has(uid)) return slots.get(uid);
       let job = paging.get(uid);
       if (!job) {
-        job = { ids: [...read(() => q(KID_IDS, uid)) || []], orders: [], at: 0 };
+        const raw = read(() => pull(SLOTS, [":block/uid", uid]));
+        const first2 = (raw?.[":block/children"] || []).map((k) => [k[":db/id"], k[":block/order"] ?? 0]);
+        if (first2.length <= ORDER_BATCH) {
+          slots.set(uid, byOrder(first2));
+          return slots.get(uid);
+        }
+        job = { eid: raw[":db/id"], ids: null, orders: [], at: 0 };
         paging.set(uid, job);
       }
+      if (!job.ids) job.ids = [...read(() => q(KID_IDS, job.eid)) || []];
       while (job.at < job.ids.length) {
         const batch = job.ids.slice(job.at, job.at + ORDER_BATCH);
         const got = read(() => pullMany ? pullMany(ORDER, batch) : batch.map((eid) => pull(ORDER, eid)));
@@ -1900,7 +1909,7 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
         job.at += batch.length;
       }
       paging.delete(uid);
-      slots.set(uid, job.orders.sort((a, b) => a[1] - b[1]).map(([eid]) => eid));
+      slots.set(uid, byOrder(job.orders));
       return slots.get(uid);
     };
     const brief = (eid) => {
@@ -1975,40 +1984,12 @@ function taskParts(string) {
   return parts;
 }
 var hasTask = (string) => /\{\{\s*(?:\[\[)?(?:TODO|DONE)\b/.test(String(string ?? ""));
-function taskStatus(string) {
-  const m = String(string ?? "").match(/#\[\[task-status\/([^\]]+)\]\]|#task-status\/([^\s\]#,]+)/);
-  const name = (m?.[1] ?? m?.[2] ?? "").trim();
-  if (!name) return null;
-  return { status: name.toUpperCase().replace(/[\s-]+/g, "_"), shape: name.toLowerCase().replace(/[\s_]+/g, "-") };
-}
-function checkbox(doc, state, status = null) {
-  const wrap = doc.createElement("span");
-  wrap.className = `rm-checkbox rm-${state} burrow-check`;
-  if (status && state === "todo") {
-    wrap.dataset.tsCheckboxStatus = status.status;
-    wrap.dataset.tsCheckboxShape = status.shape;
-  }
-  const label = doc.createElement("label");
-  label.className = "check-container";
-  const input = doc.createElement("input");
-  input.type = "checkbox";
-  input.disabled = true;
-  input.tabIndex = -1;
-  input.checked = state === "done";
-  const mark = doc.createElement("span");
-  mark.className = "checkmark";
-  label.append(input, mark);
-  wrap.append(label);
-  return wrap;
-}
-function withTasks(doc, string, textOf = (s) => s) {
-  const fragment = doc.createDocumentFragment();
-  const status = taskStatus(string);
-  for (const part of taskParts(string)) {
-    if (part.task) fragment.append(checkbox(doc, part.task, status));
-    else fragment.append(textOf(part.text));
-  }
-  return fragment;
+function checkbox(doc, state) {
+  const box = doc.createElement("span");
+  box.className = `burrow-check burrow-${state}`;
+  box.setAttribute("role", "img");
+  box.setAttribute("aria-label", state === "done" ? "done" : "to do");
+  return box;
 }
 
 // src/preview.js
@@ -2035,14 +2016,14 @@ function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
-  const parts = (s) => hasTask(s) ? taskParts(s).map((p) => p.task ? { ...p, status: taskStatus(s) } : { text: text(p.text) }) : null;
+  const task = (s) => hasTask(s) ? taskParts(s).find((p) => p.task).task : null;
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
     const { total: total2, kids } = read.window(uid, 0, CHILD_LIMIT);
     for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
-      items.push({ uid: kid.uid, text: text(kid.string || ""), parts: parts(kid.string), depth, heading: kid.heading, target: false });
+      items.push({ uid: kid.uid, text: text(kid.string || ""), task: task(kid.string), depth, heading: kid.heading, target: false });
       if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
     if (total2 > CHILD_LIMIT) items.push({ more: total2 - CHILD_LIMIT, depth });
@@ -2059,11 +2040,11 @@ function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), parts: parts(sib.string), depth: 0, heading: sib.heading, target: isTarget });
+    items.push({ uid: sib.uid, text: text(sib.string || ""), task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), parts: parts(target.string), depth: 0, heading: target.heading, target: true });
+  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), task: task(target.string), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
 function createPreview({ doc, win, lifecycle }) {
@@ -2079,13 +2060,18 @@ function createPreview({ doc, win, lifecycle }) {
   lifecycle.node(pane, doc.body);
   let shownKey = null;
   let pop = null;
-  function render(model) {
+  let rest = null;
+  function render(model, lines = Infinity) {
     trailNode.replaceChildren();
     model.trail.forEach((part, i) => {
       if (i) trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-sep", textContent: " › " }));
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
-    const rows = model.items.map((item) => {
+    outline.replaceChildren(...lineNodes(model.items.slice(0, lines)));
+    rest = model.items.length > lines ? model.items.slice(lines) : null;
+  }
+  function lineNodes(items) {
+    return items.map((item) => {
       const row = doc.createElement("div");
       row.className = "burrow-node";
       row.style.setProperty("--burrow-depth", String(item.depth));
@@ -2096,12 +2082,10 @@ function createPreview({ doc, win, lifecycle }) {
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
-      if (item.parts) {
-        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task, part.status) : part.text.trim());
-      } else row.textContent = item.text || " ";
+      if (item.task) row.classList.add(`burrow-task-${item.task}`);
+      row.textContent = item.text || " ";
       return row;
     });
-    outline.replaceChildren(...rows);
   }
   function dockRect(beside) {
     if (beside || !pop.classList.contains("rm-autocomplete__results--expanded")) return null;
@@ -2172,7 +2156,8 @@ function createPreview({ doc, win, lifecycle }) {
       filled = true;
     },
     // inFrame: called from a frame callback, so the scroll runs now, in this frame.
-    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false } = {}) {
+    // lines: draw only that many lines now; more() draws the rest later.
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false, lines = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       if (!beside) pop.classList.add(DRILL_CLASS);
@@ -2180,7 +2165,7 @@ function createPreview({ doc, win, lifecycle }) {
       const changed = model.key !== shownKey || pane.hidden || filled;
       filled = false;
       if (model.key !== shownKey) {
-        render(model);
+        render(model, lines);
         shownKey = model.key;
       }
       pane.hidden = false;
@@ -2200,8 +2185,19 @@ function createPreview({ doc, win, lifecycle }) {
         onFrame?.(performance.now() - t0);
       });
     },
+    // Lines show() left for later, drawn now (appended: the scroll stays).
+    get pending() {
+      return Boolean(rest) && !pane.hidden;
+    },
+    more() {
+      if (!rest || pane.hidden) return;
+      const items = rest;
+      rest = null;
+      outline.append(...lineNodes(items));
+    },
     hide() {
       cancelScroll();
+      rest = null;
       pane.hidden = true;
       shownKey = null;
       filled = false;
@@ -2215,7 +2211,7 @@ function createPreview({ doc, win, lifecycle }) {
 function scopeRows(nodes, query, { strict = false, text = (s) => s, ordinals = false, hideEmpty = false } = {}) {
   const row = (node, ord = false) => {
     const shown = text(node.string ?? "");
-    const parts = hasTask(node.string) ? taskParts(node.string).map((p) => p.task ? { ...p, status: taskStatus(node.string) } : { text: text(p.text) }) : null;
+    const parts = hasTask(node.string) ? taskParts(node.string).map((p) => p.task ? p : { text: text(p.text) }) : null;
     return { uid: node.uid, text: shown, parts, empty: !shown.trim() && !parts, ord, heading: node.heading || 0, drillable: Boolean(node.kids?.length), node };
   };
   const kept = hideEmpty ? nodes.filter((node) => text(node.string ?? "").trim() || node.kids?.length) : nodes;
@@ -2316,7 +2312,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task, part.status) : highlight(part.text.trim(), level.query));
+      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
       else if (row.text) text.append(highlight(row.text, level.query));
       else if (row.drillable) {
         item.classList.add("burrow-empty-row");
@@ -2616,6 +2612,8 @@ var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
 var POPUP_WAIT_FRAMES = 12;
 var PREVIEW_SLICE_MS = 3;
+var PREVIEW_DRAW_ALONE_MS = 0.5;
+var PREVIEW_FIRST_LINES = 40;
 var valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, saveSetting = null, doc = document, win = window }) {
   const st = {
@@ -2748,8 +2746,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         refs: hit.refs,
         level: hit.level,
         page: hit.page,
-        text: displayText(hit.string),
-        raw: resolveRefs(hit.string),
+        ...rowText(hit.string),
         insertion: `((${hit.uid}))`,
         pick: hit.uid
       }));
@@ -2809,11 +2806,25 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const byUid = indexes.refs?.byUid;
     return string.replace(/\(\(([\w-]{9})\)\)/g, (m, uid) => byUid?.get(uid)?.string ?? m);
   }
-  function displayText(string) {
-    return stripRoamMarkup(resolveRefs(string)).replace(/\s+/g, " ").trim();
+  function rowText(string) {
+    const resolved = resolveRefs(string);
+    const text = stripRoamMarkup(resolved).replace(/\s+/g, " ").trim();
+    if (!hasTask(resolved)) return { text, parts: null };
+    const parts = taskParts(resolved.trim().replace(/\s*(\{\{[^{}]*\}\})\s*/g, "$1")).map((part) => part.task ? { task: part.task } : { text: stripRoamMarkup(part.text).replace(/\s+/g, " ") });
+    return { text, parts };
   }
-  function taskText(raw, clean2) {
-    return withTasks(doc, raw, (part) => clean2(part));
+  const ROW_HEIGHT = 33;
+  const CHIPS_HEIGHT = 28;
+  const CONTEXT_HEIGHT = 18;
+  const STRIP_FRAME = 8;
+  let stripHeight = null;
+  function sizeStrip(count = shown.length) {
+    const lines = (chipsNode.isConnected && chipsNode.parentNode === strip ? CHIPS_HEIGHT : 0) + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0);
+    const promptRow = strip.firstChild === promptNode ? 1 : 0;
+    const height = count || promptRow ? (count || promptRow) * ROW_HEIGHT + lines + STRIP_FRAME : 0;
+    if (height === stripHeight) return;
+    stripHeight = height;
+    strip.style.height = height ? `${height}px` : "";
   }
   let roamAliasesSheet = null;
   let blockHighlight = null;
@@ -2886,6 +2897,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
       strip.replaceChildren(...rows.map((row, i) => rowNode(row, i)));
+      sizeStrip(rows.length);
       shown = rows;
       shownQuery = query;
       chipsFor = null;
@@ -3003,25 +3015,40 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         next = rowModel(row, tree.bounded(() => elapsed() > PREVIEW_SLICE_MS));
       } catch (error) {
         if (error !== PAUSE) throw error;
-        perf.push("preview", elapsed());
+        previewSample("read", elapsed());
         scheduleRowPreview(row);
         return;
       }
       if (!next) {
-        perf.push("preview", elapsed());
+        previewSample("read", elapsed());
         return;
       }
-      if (elapsed() > PREVIEW_SLICE_MS / 2) {
+      if (elapsed() > PREVIEW_DRAW_ALONE_MS) {
         rowPreviewReady = { key: row.key, model: next };
-        perf.push("preview", elapsed());
+        previewSample("read", elapsed());
         scheduleRowPreview(row);
         return;
       }
     }
     rowPreviewReady = null;
     model = next;
-    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => perf.push("preview", ms) });
-    perf.push("preview", elapsed());
+    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => previewSample("scroll", ms), lines: PREVIEW_FIRST_LINES });
+    previewSample("draw", elapsed());
+    if (preview.pending) scheduleRowPreviewRest(row);
+  }
+  function previewSample(kind, ms) {
+    perf.push("preview", ms);
+    perf.push(`preview.${kind}`, ms);
+  }
+  function scheduleRowPreviewRest(row) {
+    const run = () => {
+      rowPreviewId = null;
+      if (previewTarget()?.key !== row.key) return;
+      const t0 = performance.now();
+      preview.more();
+      previewSample("rest", performance.now() - t0);
+    };
+    rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60);
   }
   function rowModel(row, read) {
     let page;
@@ -3052,8 +3079,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       text.append(row.text);
       node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
-      const clean2 = (part) => highlight(stripRoamMarkup(part).replace(/\s+/g, " "));
-      text.append(row.raw ? taskText(row.raw.trim().replace(/\s*(\{\{[^{}]*\}\})\s*/g, "$1"), clean2) : highlight(row.text));
+      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text));
+      else text.append(highlight(row.text));
       node.title = row.text;
     }
     node.append(text);
@@ -3072,14 +3099,20 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     return node;
   }
+  let highlightFor = null;
+  let highlightRe = null;
   function highlight(text, query = st.token?.query) {
     const fragment = doc.createDocumentFragment();
-    const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
-    if (!words.length) {
+    if (query !== highlightFor) {
+      highlightFor = query;
+      const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
+      highlightRe = words.length ? new RegExp(`(?<![\\p{L}\\p{N}])(${words.map(escapeRe).join("|")})`, "giu") : null;
+    }
+    const re = highlightRe;
+    if (!re) {
       fragment.append(text);
       return fragment;
     }
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])(${words.map(escapeRe).join("|")})`, "giu");
     let at = 0;
     for (const m of text.matchAll(re)) {
       fragment.append(text.slice(at, m.index));
@@ -3097,6 +3130,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     strip.classList.toggle(OWNING, st.phase === "OWNED");
     paintChips();
     paintContext();
+    sizeStrip();
     layoutPop();
     showPreview();
   }
@@ -3919,6 +3953,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
     if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error, title: p.error }));
     if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
+    sizeStrip(0);
     shown = [];
     shownQuery = null;
     chipsFor = null;

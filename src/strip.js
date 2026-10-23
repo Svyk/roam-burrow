@@ -10,7 +10,7 @@ import { rankRefs } from "./refindex.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { searchKey, searchPlan, stripRoamMarkup } from "./search.js";
-import { withTasks } from "./tasks.js";
+import { checkbox, hasTask, taskParts } from "./tasks.js";
 import { isDarkHost } from "./theme.js";
 import { createTips } from "./tips.js";
 import { applyToken, findToken, tokenStillValid } from "./token.js";
@@ -42,6 +42,11 @@ const MIN_ALIAS_QUERY = 2;
 const POPUP_WAIT_FRAMES = 12;
 // The row preview's idle slices stay under the per-key budget (4 ms).
 const PREVIEW_SLICE_MS = 3;
+// Reads that took longer than this leave the draw to the next slice.
+const PREVIEW_DRAW_ALONE_MS = 0.5;
+// The row preview draws this many lines in its draw slice (the highlighted
+// block sits in the first 13, its children follow), the rest in one more.
+const PREVIEW_FIRST_LINES = 40;
 const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 
 // Keyboard ownership (spec §4):
@@ -169,7 +174,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       })
         .map((hit) => ({
           kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page,
-          text: displayText(hit.string), raw: resolveRefs(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
+          ...rowText(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
         }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
@@ -225,14 +230,37 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return string.replace(/\(\(([\w-]{9})\)\)/g, (m, uid) => byUid?.get(uid)?.string ?? m);
   }
 
-  function displayText(string) {
-    return stripRoamMarkup(resolveRefs(string)).replace(/\s+/g, " ").trim();
+  // A block row's text, once per row: plain (tips, titles) and, when it holds
+  // a TODO/DONE macro, its parts (src/tasks.js) with the markup already gone,
+  // so a render only highlights them. Spaces next to a box go: it keeps its
+  // own margin, as in Roam's rows.
+  function rowText(string) {
+    const resolved = resolveRefs(string);
+    const text = stripRoamMarkup(resolved).replace(/\s+/g, " ").trim();
+    if (!hasTask(resolved)) return { text, parts: null };
+    const parts = taskParts(resolved.trim().replace(/\s*(\{\{[^{}]*\}\})\s*/g, "$1"))
+      .map((part) => (part.task ? { task: part.task } : { text: stripRoamMarkup(part.text).replace(/\s+/g, " ") }));
+    return { text, parts };
   }
 
-  // A row's or preview line's text with its TODO/DONE macros as Roam's
-  // checkboxes (src/tasks.js); each text part cleaned by `clean`.
-  function taskText(raw, clean) {
-    return withTasks(doc, raw, (part) => clean(part));
+  // The strip has a fixed height (rows, the line under the active one,
+  // padding) and size containment in the stylesheet: what changes inside it
+  // as you type never lays out Roam's list column again; only a change in
+  // the number of rows or lines does.
+  const ROW_HEIGHT = 33;
+  const CHIPS_HEIGHT = 28;
+  const CONTEXT_HEIGHT = 18;
+  // .burrow-strip padding (4 + 3) and its bottom border.
+  const STRIP_FRAME = 8;
+  let stripHeight = null;
+  function sizeStrip(count = shown.length) {
+    const lines = (chipsNode.isConnected && chipsNode.parentNode === strip ? CHIPS_HEIGHT : 0)
+      + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0);
+    const promptRow = strip.firstChild === promptNode ? 1 : 0;
+    const height = (count || promptRow) ? (count || promptRow) * ROW_HEIGHT + lines + STRIP_FRAME : 0;
+    if (height === stripHeight) return;
+    stripHeight = height;
+    strip.style.height = height ? `${height}px` : "";
   }
 
   // Rows Roam or roam-aliases already show are not drawn twice.
@@ -300,6 +328,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
       strip.replaceChildren(...rows.map((row, i) => rowNode(row, i)));
+      sizeStrip(rows.length);
       shown = rows;
       shownQuery = query;
       chipsFor = null;
@@ -404,7 +433,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // Drawn at idle, after the strip, like Roam's own preview a moment later:
   // never part of a key's cost. Each idle slice does at most PREVIEW_SLICE_MS
   // of reads (bounded: src/pagetree.js), the draw gets a slice of its own
-  // when the reads took half of one, and the scroll to the highlighted line
+  // unless the reads were all cached, and the scroll to the highlighted line
   // runs in the next frame. Every slice is one __BURROW_PERF "preview" sample.
   function scheduleRowPreview(row) {
     const run = () => { rowPreviewId = null; drawRowPreview(row); };
@@ -421,22 +450,45 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         next = rowModel(row, tree.bounded(() => elapsed() > PREVIEW_SLICE_MS));
       } catch (error) {
         if (error !== PAUSE) throw error;
-        perf.push("preview", elapsed());
+        previewSample("read", elapsed());
         scheduleRowPreview(row);
         return;
       }
-      if (!next) { perf.push("preview", elapsed()); return; }
-      if (elapsed() > PREVIEW_SLICE_MS / 2) {
+      if (!next) { previewSample("read", elapsed()); return; }
+      // The draw (a layout read, then up to 80 lines) gets a slice of its own
+      // unless the reads were all cached: in svy it costs 2-3 ms by itself.
+      if (elapsed() > PREVIEW_DRAW_ALONE_MS) {
         rowPreviewReady = { key: row.key, model: next };
-        perf.push("preview", elapsed());
+        previewSample("read", elapsed());
         scheduleRowPreview(row);
         return;
       }
     }
     rowPreviewReady = null;
     model = next;
-    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => perf.push("preview", ms) });
-    perf.push("preview", elapsed());
+    // The lines around the highlighted block now, the rest in the next slice:
+    // every line inserted costs about 0.04 ms in svy.
+    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => previewSample("scroll", ms), lines: PREVIEW_FIRST_LINES });
+    previewSample("draw", elapsed());
+    if (preview.pending) scheduleRowPreviewRest(row);
+  }
+
+  // Every idle task of the row preview is a "preview" sample (held to the
+  // budget by perf-gate), and also one of its kind, for the report.
+  function previewSample(kind, ms) {
+    perf.push("preview", ms);
+    perf.push(`preview.${kind}`, ms);
+  }
+
+  function scheduleRowPreviewRest(row) {
+    const run = () => {
+      rowPreviewId = null;
+      if (previewTarget()?.key !== row.key) return;
+      const t0 = performance.now();
+      preview.more();
+      previewSample("rest", performance.now() - t0);
+    };
+    rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60);
   }
 
   function rowModel(row, read) {
@@ -469,9 +521,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       text.append(row.text);
       node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
-      // Spaces next to a checkbox go: the box keeps its own margin, as in Roam's rows.
-      const clean = (part) => highlight(stripRoamMarkup(part).replace(/\s+/g, " "));
-      text.append(row.raw ? taskText(row.raw.trim().replace(/\s*(\{\{[^{}]*\}\})\s*/g, "$1"), clean) : highlight(row.text));
+      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text));
+      else text.append(highlight(row.text));
       node.title = row.text;
     }
     node.append(text);
@@ -491,11 +542,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return node;
   }
 
+  // The query's words as one pattern, made once per query (rows render per key).
+  let highlightFor = null;
+  let highlightRe = null;
   function highlight(text, query = st.token?.query) {
     const fragment = doc.createDocumentFragment();
-    const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
-    if (!words.length) { fragment.append(text); return fragment; }
-    const re = new RegExp(`(?<![\\p{L}\\p{N}])(${words.map(escapeRe).join("|")})`, "giu");
+    if (query !== highlightFor) {
+      highlightFor = query;
+      const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
+      highlightRe = words.length ? new RegExp(`(?<![\\p{L}\\p{N}])(${words.map(escapeRe).join("|")})`, "giu") : null;
+    }
+    const re = highlightRe;
+    if (!re) { fragment.append(text); return fragment; }
     let at = 0;
     for (const m of text.matchAll(re)) {
       fragment.append(text.slice(at, m.index));
@@ -514,6 +572,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.classList.toggle(OWNING, st.phase === "OWNED");
     paintChips();
     paintContext();
+    sizeStrip();
     layoutPop();
     showPreview();
   }
@@ -1399,6 +1458,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     promptNode.replaceChildren(Object.assign(doc.createElement("span"), { className: "burrow-prompt-label", textContent: `alias for ${p.page.title}:` }), input);
     if (p.error) promptNode.append(Object.assign(doc.createElement("span"), { className: "burrow-prompt-error", textContent: p.error, title: p.error }));
     if (strip.firstChild !== promptNode || strip.childNodes.length !== 1) strip.replaceChildren(promptNode);
+    sizeStrip(0);
     shown = [];
     shownQuery = null;
     chipsFor = null;

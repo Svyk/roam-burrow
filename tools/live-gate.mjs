@@ -160,7 +160,7 @@ async function state() {
       phase: b?.state.phase ?? "gone",
       rows: [...document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row")].map((r) => ({
         text: r.textContent, active: r.classList.contains("burrow-active"),
-        checks: [...r.querySelectorAll(".rm-checkbox")].map((n) => `${n.classList.contains("rm-done") ? "done" : "todo"}:${n.querySelector("input")?.checked ? "on" : "off"}:${n.querySelector("input")?.disabled ? "ro" : "rw"}`),
+        checks: [...r.querySelectorAll(".burrow-check")].map((n) => `${n.classList.contains("burrow-done") ? "done" : "todo"}:${getComputedStyle(n, "::after").content !== "none" ? "on" : "off"}:${getComputedStyle(n).pointerEvents === "none" ? "ro" : "rw"}`),
       })),
       firstUid: b?.state.rows?.[0]?.uid ?? null,
       activeUid: b && b.state.phase === "OWNED" ? b.state.rows?.[b.state.active]?.uid ?? null : null,
@@ -176,7 +176,7 @@ async function state() {
         return {
           trail: pane.querySelector(".burrow-trail")?.textContent,
           target: pane.querySelector(".burrow-target")?.textContent ?? null,
-          checks: [...pane.querySelectorAll(".burrow-node .rm-checkbox")].length,
+          checks: [...pane.querySelectorAll(".burrow-node.burrow-task-todo, .burrow-node.burrow-task-done")].length,
           label: getComputedStyle(pane.querySelector(".burrow-trail"), "::before").content,
           previewMore: pane.querySelector(".burrow-more")?.textContent ?? null,
           targetVisible: (() => {

@@ -120,6 +120,7 @@ async function endRun() {
       builds: perf ? perf.counters.builds : null,
       // Burrow's deferred (idle) preview draw: one sample per idle slice.
       preview: perf?.summary ? perf.summary("preview") : null,
+      previewKinds: perf?.summary ? Object.fromEntries(["read", "draw", "rest", "scroll"].map((k) => [k, perf.summary(`preview.${k}`)])) : null,
       // Has-children checks for the hint line (one small pull per page or block highlighted).
       kidChecks: perf ? perf.counters.kidChecks || 0 : null,
       popup: Boolean(document.querySelector(".rm-autocomplete__results")),
@@ -348,6 +349,7 @@ try {
         paintP50: pct(r.latency, 0.5), paintP95: pct(r.latency, 0.95),
         burrowP50: pct(r.burrowInput, 0.5), burrowP95: pct(r.burrowInput, 0.95), burrowMax: pct(r.burrowInput, 1),
         renderP95: pct(r.burrowRender, 0.95), previewP95: r.preview?.p95 ?? null, previewMax: r.preview?.max ?? null, previewSamples: r.preview?.n ?? 0, burrowSamples: r.burrowInput?.length ?? 0,
+        previewKinds: r.previewKinds ? Object.fromEntries(Object.entries(r.previewKinds).map(([k, v]) => [k, v?.n ? `${v.n}× p95 ${v.p95.toFixed(1)}` : "none"])) : null,
         kidChecks: r.kidChecks,
         aliasReadP95: pct(r.aliasRefresh?.read, 0.95), aliasSwapP95: pct(r.aliasRefresh?.swap, 0.95), aliasRekeyP95: pct(r.aliasRefresh?.rekey, 0.95), aliasPage: r.aliasRefresh?.page ?? null, aliasLinked: r.aliasRefresh?.linked ?? 0,
         placeP95: r.place?.p95 ?? null, placeMax: r.place?.max ?? null,
@@ -432,6 +434,7 @@ if (args.includes("--json")) {
   console.log(`cost gate ${title}${drill ? " (drill)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
+  if (withPreview) console.log(`  preview slices by kind: ${report.results.filter((r) => r.arm === "on").map((r) => Object.entries(r.previewKinds || {}).map(([k, v]) => `${k} ${v}`).join(", ")).join(" / ")}`);
   console.log(`  has-children checks for the hint line: ${report.summary.kidChecks.join(" / ")} per run`);
   console.log(`  alias refresh after an outside edit, idle tasks p95: read ${report.summary.aliasReadP95.join(" / ")} ms, swap ${report.summary.aliasSwapP95.join(" / ")} ms, re-key slices ${report.summary.aliasRekeyP95.join(" / ")} ms (budget <= 4); max ${report.summary.aliasRefreshMax.join(" / ")} ms; the edited page is linked by ${report.summary.aliasLinked.join(" / ")} indexed blocks`);
   console.log(`  docking the preview in the frame (the strip and hint line sit in Roam's column, nothing to place) p95: ${report.summary.placeP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.placeMax.map((v) => v ?? "none").join(" / ")} ms`);
