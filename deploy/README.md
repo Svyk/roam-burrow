@@ -98,10 +98,11 @@ npm run check   # build, secret scan, syntax check, tests, generated-artifact dr
 `src/` is the source; `extension.js`, `extension.css` and `deploy/` are generated and committed together with it. `tools/` holds the live gates that drive Roam Desktop over CDP (port 9223), on a scratch `Burrow/Fixtures` page they create and remove. They need both Roam windows open (svy unlocked) and never reload a window. When a window already has Burrow installed (svy runs the Depot URL build), the gates and `tools/dev-load.mjs` park it in memory while they run: its handlers go idle and its nodes and stylesheet come out. The gates put it back when they finish, also after a failure; after `dev-load.mjs <window> load`, run `dev-load.mjs <window> unload`.
 
 ```bash
-npm run gate:live                            # everything below, both graphs, about 35 minutes, PASS/FAIL summary (add -- --theme light|dark, -- --notes "Readwisenotes - Daily" when two notes windows are open)
-node tools/live-gate.mjs Svy svy             # about 4 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases, alias rows, pick memory, fast typing
-node tools/live-gate.mjs Readwisenotes notes # about 4 min
+npm run gate:live                            # everything below, both graphs, about 40 minutes, PASS/FAIL summary (add -- --theme light|dark, -- --notes "Readwisenotes - Daily" when two notes windows are open)
+node tools/live-gate.mjs Svy svy             # about 12 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases and Svy's footnote case, alias rows, block navigation, pick memory, fast typing, text boxes in 26 picker states
+node tools/live-gate.mjs Readwisenotes notes # about 11 min
 node tools/live-gate.mjs Svy svy --only "alias chips: ⌥↓, ←, Enter"   # one case and its verdict, about 30 s
+node tools/live-gate.mjs Svy svy --only "text boxes: no text overlaps another in any picker state"   # no text over other text, about 3 min
 node tools/perf-gate.mjs Svy --runs 3        # about 3 min: per-key cost and input-to-paint, Burrow on vs absent
 node tools/perf-gate.mjs Svy --runs 3 --drill # the same while typing a drill-down with the preview open
 node tools/perf-gate.mjs Svy --runs 3 --preview # (( typing with Roam's preview open, where Burrow's rows draw their own preview (its idle slices also <= 4 ms p95)
