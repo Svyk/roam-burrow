@@ -205,7 +205,7 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
     || a.entry.string.length - b.entry.string.length
     || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
   return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter }) => ({
-    uid: entry.uid, string: entry.string, refs: entry.refs, level: match.level, tier: match.tier, score: match.score, viaAlias, quoter,
+    uid: entry.uid, string: entry.string, refs: entry.refs, page: entry.page, level: match.level, tier: match.tier, score: match.score, viaAlias, quoter,
     picked: Boolean(picked?.get(entry.uid)), onPage: currentPage != null && entry.page === currentPage,
   }));
 }

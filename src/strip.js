@@ -3,13 +3,14 @@ import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js"
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
 import { createHelpSheet, helpGroups } from "./help.js";
-import { hintsKey, isAltSlash, keyLabel, pickerHints, renderHints } from "./hints.js";
+import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints.js";
 import { createTreeSource, PAUSE } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { rankRefs } from "./refindex.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { searchKey, searchPlan, stripRoamMarkup } from "./search.js";
+import { withTasks } from "./tasks.js";
 import { isDarkHost } from "./theme.js";
 import { createTips } from "./tips.js";
 import { applyToken, findToken, tokenStillValid } from "./token.js";
@@ -17,25 +18,21 @@ import { wheelPlan } from "./wheel.js";
 
 const POPUP = ".rm-autocomplete__results";
 const NATIVE_ROWS = ".rm-autocomplete__results-scroll > div";
-const OWNS = "burrow-owns-selection";
-const PAD = "burrow-pad";
-const PAD_BOTTOM = "burrow-pad-foot";
+// On Burrow's strip while one of its rows holds the selection; the stylesheet
+// mutes Roam's active row through :has() on it, so it holds even when Roam
+// rewrites the popover's class list.
+const OWNING = "burrow-owning";
 const FOLD_ALIASES = "burrow-fold-aliases";
 const LAYOUT = "burrow-layout";
 const SCOPE_OPEN = "burrow-scope-open";
 const HELP_OPEN = "burrow-help-open";
 const FOLDED = "data-burrow-folded";
 const EXPANDED = "rm-autocomplete__results--expanded";
-// Row, chips and hints heights; src/extension.css's burrow-pad-* rules are built from them.
-const ROW_HEIGHT = 33;
-const CHIPS_HEIGHT = 28;
-const HINTS_HEIGHT = 22;
 // .burrow-chips side padding in src/extension.css.
 const CHIPS_INSET = 8;
 const ROW_LIMIT = 3;
-const PAD_SIZES = Array.from({ length: ROW_LIMIT }, (_, i) => i + 1).flatMap((n) => [`${PAD}-${n}`, `${PAD}-${n}c`]);
 // Every class Burrow puts on Roam's popover; each one is removed again on reset.
-const POP_CLASSES = [OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
+const POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
 // One check per highlighted page or block, kept until the popup closes: does
 // it have children (so Tab drills, and the hint line says so)? `limit` keeps
 // it at 0.1-0.3 ms whatever the size of the page.
@@ -70,13 +67,20 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (debug.trace.length > 60) debug.trace.shift();
   };
 
+  // The strip (Burrow's rows) and the hint line sit inside Roam's list
+  // column, in its flow: the strip above Roam's results, the line under
+  // Roam's footer. They take their own room, so nothing of Roam's is ever
+  // under them, and no geometry is read to place them.
   const strip = doc.createElement("div");
   strip.className = "burrow-strip";
   strip.setAttribute("role", "listbox");
   strip.hidden = true;
-  lifecycle.node(strip, doc.body);
+  lifecycle.add(() => strip.remove());
   const chipsNode = doc.createElement("div");
   chipsNode.className = "burrow-chips";
+  // Under the highlighted block row: where the block lives (refContext).
+  const contextNode = doc.createElement("div");
+  contextNode.className = "burrow-context";
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -88,15 +92,20 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   helpButton.setAttribute("role", "button");
   helpButton.setAttribute("aria-keyshortcuts", "Alt+/");
   hints.append(hintsList, helpButton);
-  lifecycle.node(hints, doc.body);
+  lifecycle.add(() => hints.remove());
   const sheet = createHelpSheet({ doc, win, lifecycle });
-  const tips = createTips({ doc, win, lifecycle, enabled: () => setting("helpTips"), avoid: () => (st.ta?.isConnected ? st.ta.getBoundingClientRect() : null) });
+  const tips = createTips({
+    doc, win, lifecycle, enabled: () => setting("helpTips"),
+    avoid: () => (st.ta?.isConnected ? st.ta.getBoundingClientRect() : null),
+    around: () => pickerArea(),
+  });
   const preview = createPreview({ doc, win, lifecycle });
   const scopePreview = createPreview({ doc, win, lifecycle });
   const scopePanel = createScopePanel({ doc, win, lifecycle, highlight: (text, query) => highlight(text, query) });
   const fast = api.data?.fast?.q ? (query, ...args) => api.data.fast.q(query, ...args) : (query, ...args) => api.q(query, ...args);
   const tree = createTreeSource({
     pull: (pattern, eid) => api.pull(pattern, eid),
+    pullMany: api.data?.pull_many ? (pattern, eids) => api.data.pull_many(pattern, eids) : null,
     q: fast,
     onFetch: (kind) => { perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1; },
   });
@@ -118,6 +127,22 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return kidsKnown.get(uid);
   }
   const isBlockInput = (el) => el?.tagName === "TEXTAREA" && el.classList.contains("rm-block-input");
+
+  // The picker's whole rect, Roam's popover and Burrow's panes together:
+  // hover tips go beside it, never over its text (read on hover only).
+  function pickerArea() {
+    const rects = [];
+    const add = (el) => { if (el && !el.hidden && el.isConnected) { const r = el.getBoundingClientRect(); if (r.width && r.height) rects.push(r); } };
+    if (st.phase !== "SCOPE" && !st.help) add(st.pop);
+    add(preview.node);
+    add(scopePreview.node);
+    if (st.phase === "SCOPE") add(scopePanel.node);
+    if (!rects.length) return null;
+    return {
+      left: Math.min(...rects.map((r) => r.left)), top: Math.min(...rects.map((r) => r.top)),
+      right: Math.max(...rects.map((r) => r.right)), bottom: Math.max(...rects.map((r) => r.bottom)),
+    };
+  }
 
   // ---- ranking (the per-key cost) ----
 
@@ -143,8 +168,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         picked: memory?.lookup("ref", token.query), currentPage: setting("pageBoost") ? st.pageTitle : null,
       })
         .map((hit) => ({
-          kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level,
-          text: displayText(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
+          kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page,
+          text: displayText(hit.string), raw: resolveRefs(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
         }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
@@ -195,10 +220,19 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       .trim();
   }
 
-  function displayText(string) {
+  function resolveRefs(string) {
     const byUid = indexes.refs?.byUid;
-    const resolved = string.replace(/\(\(([\w-]{9})\)\)/g, (m, uid) => byUid?.get(uid)?.string ?? m);
-    return stripRoamMarkup(resolved).replace(/\s+/g, " ").trim();
+    return string.replace(/\(\(([\w-]{9})\)\)/g, (m, uid) => byUid?.get(uid)?.string ?? m);
+  }
+
+  function displayText(string) {
+    return stripRoamMarkup(resolveRefs(string)).replace(/\s+/g, " ").trim();
+  }
+
+  // A row's or preview line's text with its TODO/DONE macros as Roam's
+  // checkboxes (src/tasks.js); each text part cleaned by `clean`.
+  function taskText(raw, clean) {
+    return withTasks(doc, raw, (part) => clean(part));
   }
 
   // Rows Roam or roam-aliases already show are not drawn twice.
@@ -259,6 +293,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   let shownQuery = null;
   function render() {
     if (st.phase === "SCOPE") { placeScope(); return; }
+    placeInFlow();
     if (st.prompt?.kind === "add") { renderPrompt(); return; }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
@@ -434,7 +469,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       text.append(row.text);
       node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
-      text.append(highlight(row.text));
+      // Spaces next to a checkbox go: the box keeps its own margin, as in Roam's rows.
+      const clean = (part) => highlight(stripRoamMarkup(part).replace(/\s+/g, " "));
+      text.append(row.raw ? taskText(row.raw.trim().replace(/\s*(\{\{[^{}]*\}\})\s*/g, "$1"), clean) : highlight(row.text));
       node.title = row.text;
     }
     node.append(text);
@@ -474,10 +511,77 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       node.classList.toggle("burrow-active", st.phase === "OWNED" && i === st.active);
       node.setAttribute("aria-selected", String(st.phase === "OWNED" && i === st.active));
     });
-    st.pop?.classList.toggle(OWNS, st.phase === "OWNED");
+    strip.classList.toggle(OWNING, st.phase === "OWNED");
     paintChips();
+    paintContext();
     layoutPop();
     showPreview();
+  }
+
+  // ---- where the block lives (refContext) ----
+
+  // Under the highlighted block row: `Page › … › Parent` and, when it has
+  // any, how many children Tab lists. The line goes in with the page (known
+  // from the index) at once, so nothing moves when the rest arrives: the
+  // parent and the count are read at idle, once per block per popup.
+  const contextKnown = new Map();
+  let contextFor = null;
+  let contextId = null;
+  const contextAvailable = (row) => st.phase === "OWNED" && st.chip < 0 && !st.prompt && setting("refContext") && (row?.kind === "ref" || row?.kind === "drill");
+
+  function paintContext() {
+    const row = shown[st.active];
+    if (!contextAvailable(row)) {
+      contextFor = null;
+      cancelContext();
+      contextNode.remove();
+      return;
+    }
+    const rowNode = strip.querySelectorAll(".burrow-row")[st.active];
+    if (rowNode && contextNode.previousElementSibling !== rowNode) rowNode.after(contextNode);
+    if (contextFor === row.key) return;
+    contextFor = row.key;
+    fillContext(row, contextKnown.get(row.uid));
+    if (!contextKnown.has(row.uid)) scheduleContext(row);
+  }
+
+  function fillContext(row, known) {
+    const trail = known?.trail ?? (row.page ? [row.page] : row.kind === "drill" && st.drill ? [st.drill.page.title] : []);
+    const where = Object.assign(doc.createElement("span"), { className: "burrow-context-trail", textContent: trail.length ? `in ${trail.join(" › ")}` : "" });
+    const parts = [where];
+    if (known?.kids > 0 && (setting("tabDrill") || setting("refOutline"))) {
+      parts.push(Object.assign(doc.createElement("span"), { className: "burrow-context-kids", textContent: `⇥ ${known.kids} ${known.kids === 1 ? "child" : "children"}` }));
+    }
+    contextNode.replaceChildren(...parts);
+    contextNode.title = trail.length ? trail.join(" › ") : "";
+  }
+
+  function cancelContext() {
+    if (contextId != null) { (win.cancelIdleCallback || win.clearTimeout).call(win, contextId); contextId = null; }
+  }
+
+  function scheduleContext(row) {
+    cancelContext();
+    const run = () => {
+      contextId = null;
+      if (contextFor !== row.key || !st.pop) return;
+      const t0 = performance.now();
+      contextKnown.set(row.uid, readContext(row.uid));
+      perf.push("context", performance.now() - t0);
+      fillContext(row, contextKnown.get(row.uid));
+    };
+    contextId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 200 }) : win.setTimeout(run, 30);
+  }
+
+  // The page, then the parent; a deeper block shows `Page › … › Parent`.
+  function readContext(uid) {
+    const chain = tree.trail(uid);
+    const names = chain.map((n, i) => (i === 0 ? n.title || readableText(n.string) : readableText(n.string) || "(empty)"));
+    const trail = names.length > 2 ? [names[0], "…", names[names.length - 1]] : names;
+    perf.counters.contextPulls = (perf.counters.contextPulls || 0) + 2;
+    const kids = api.pull("[{:block/children [:db/id]}]", [":block/uid", uid])?.[":block/children"]?.length ?? 0;
+    kidsKnown.set(uid, kids > 0);
+    return { trail, kids };
   }
 
   // The active alias row's other aliases, directly under it. Only this part
@@ -528,7 +632,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       if (rowNode && chipsNode.previousElementSibling !== rowNode) rowNode.after(chipsNode);
       revealChip();
     }
-    setPad(shown.length, show);
   }
 
   // The chips are one clipped line; scroll it so the active chip shows, and
@@ -553,20 +656,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsScrolled = chipsNode.scrollLeft > 0;
   }
 
-  // The strip overlays the top of Roam's list column, the hints line its
-  // bottom; static classes (burrow-pad-N, -Nc with the chips) pad that column
-  // (not the preview beside it) so no native row is covered. A class toggle
-  // restyles only the popover; a rewritten stylesheet would restyle the whole
-  // document on every row-count change.
-  function setPad(count, withChips) {
-    if (!st.pop) return;
-    const wanted = count > 0 ? `${PAD}-${Math.min(count, ROW_LIMIT)}${withChips ? "c" : ""}` : null;
-    for (const cls of PAD_SIZES) if (st.pop.classList.contains(cls) !== (cls === wanted)) st.pop.classList.toggle(cls);
-    if (wanted) st.pop.classList.add(PAD);
-    else st.pop.classList.remove(PAD);
-  }
-
   const listColumn = (pop) => pop.querySelector(":scope > .rm-autocomplete__results-main") || pop;
+
+  // The strip goes right above Roam's results list, the hint line at the end
+  // of the column (under Roam's footer). Roam re-renders its popover often,
+  // and swaps it on some keys: each draw puts them back where they belong.
+  // DOM writes only; a no-op when they are in place.
+  function placeInFlow() {
+    const pop = st.pop;
+    if (!pop?.isConnected) return;
+    const column = listColumn(pop);
+    const list = column.querySelector(":scope > .rm-autocomplete__results-scroll");
+    const before = list || column.firstChild;
+    if (strip.parentNode !== column || (before && strip.nextSibling !== before && before !== strip)) column.insertBefore(strip, before === strip ? strip.nextSibling : before);
+    if (hints.parentNode !== column || column.lastChild !== hints) column.append(hints);
+  }
 
   function sampleTheme(pop) {
     const cs = win.getComputedStyle(pop);
@@ -575,9 +679,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.style.zIndex = String((Number.parseInt(cs.zIndex, 10) || 20) + 1);
     const firstRow = pop.querySelector(`${NATIVE_ROWS} .rm-autocomplete-result`);
     strip.style.font = firstRow ? win.getComputedStyle(firstRow).font : cs.font;
+    // Roam's own active-row color, as the theme paints it; never a muted
+    // (transparent) one, which would leave Burrow's row without a highlight.
     const activeRow = [...pop.querySelectorAll(NATIVE_ROWS)].find((row) => row.style.backgroundColor);
-    if (activeRow) strip.style.setProperty("--burrow-active", win.getComputedStyle(activeRow).backgroundColor);
-    else strip.style.removeProperty("--burrow-active");
+    const active = activeRow ? win.getComputedStyle(activeRow).backgroundColor : null;
+    if (active && !/^(transparent|rgba\(.*,\s*0\))$/.test(active)) strip.style.setProperty("--burrow-active", active);
+    else if (!activeRow) strip.style.removeProperty("--burrow-active");
     const dark = isDarkHost(doc);
     strip.classList.toggle("burrow-dark", dark);
     sampleHints(pop, dark);
@@ -624,18 +731,25 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     hints.classList.toggle("burrow-dark", dark);
   }
 
-  // Strip and chips off the popover (no rows), layout classes stay.
+  // Strip and chips hidden (no rows), layout classes stay.
   function hideRows() {
     strip.hidden = true;
+    strip.classList.remove(OWNING);
     chipsNode.remove();
     chipsFor = null;
+    contextNode.remove();
+    contextFor = null;
+    cancelContext();
     cancelRowPreview();
     hidePreview();
-    st.pop?.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES);
+    st.pop?.classList.remove(DRILL_CLASS);
   }
 
-  // Everything Burrow put on the popover and on roam-aliases' rows, undone.
+  // Everything Burrow put on the popover and on roam-aliases' rows, undone,
+  // and its own nodes out of Roam's list column.
   function clearPopover() {
+    strip.remove();
+    hints.remove();
     if (!st.pop) return;
     st.pop.classList.remove(...POP_CLASSES);
     for (const node of st.pop.querySelectorAll(`[${FOLDED}]`)) node.removeAttribute(FOLDED);
@@ -645,8 +759,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     scopePanel.hide();
     scopePreview.hide();
     strip.hidden = true;
+    strip.classList.remove(OWNING);
     chipsNode.remove();
     chipsFor = null;
+    contextNode.remove();
+    contextFor = null;
+    cancelContext();
     hints.hidden = true;
     cancelRowPreview();
     hidePreview();
@@ -673,7 +791,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const pop = st.pop;
     if (!pop) return;
     // roam-aliases only lists in [[.
-    if (st.token?.kind !== "[[") { pop.classList.remove(FOLD_ALIASES, LAYOUT); return; }
+    if (st.token?.kind !== "[[") { wantFold = false; wantLayout = false; pop.classList.remove(FOLD_ALIASES, LAYOUT); return; }
     const fold = setting("aliasPages") && setting("aliasInline") && !st.drill;
     const items = [...pop.querySelectorAll(".rm-aliases .dont-focus-block.alias")];
     let visible = 0;
@@ -681,8 +799,26 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       if (fold && foldedByRow(item, rows)) item.setAttribute(FOLDED, "");
       else { item.removeAttribute(FOLDED); visible += 1; }
     }
-    pop.classList.toggle(FOLD_ALIASES, items.length > 0 && visible === 0);
-    pop.classList.toggle(LAYOUT, setting("paneLayout") && visible > 0);
+    wantFold = items.length > 0 && visible === 0;
+    wantLayout = setting("paneLayout") && visible > 0;
+    pop.classList.toggle(FOLD_ALIASES, wantFold);
+    pop.classList.toggle(LAYOUT, wantLayout);
+  }
+  let wantFold = false;
+  let wantLayout = false;
+
+  // Roam sets the popover's class list wholesale when it re-renders it
+  // (Ctrl-O, some updates), dropping Burrow's classes. The popover's
+  // observer puts back the ones the current state wants, in the same
+  // microtask, before anything is painted.
+  function reassertClasses(pop) {
+    const want = [];
+    if (st.phase === "SCOPE") want.push(SCOPE_OPEN);
+    if (st.help) want.push(HELP_OPEN);
+    if (wantFold) want.push(FOLD_ALIASES);
+    if (wantLayout) want.push(LAYOUT);
+    if (preview.drills(pop)) want.push(DRILL_CLASS);
+    for (const cls of want) if (!pop.classList.contains(cls)) pop.classList.add(cls);
   }
 
   // What the hint line says now (src/hints.js), from what is highlighted.
@@ -698,14 +834,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       chips: Boolean(row) && chipsAvailable(row) && st.chip >= 0,
       row: row ? {
         kind: row.kind, chips: chipsAvailable(row), aliasNew: aliasNew(row.kind === "alias"),
-        drill: canDrill(ownedSource(row, st.chip)),
+        drill: canDrill(ownedSource(row, st.chip)), block: Boolean(ownedSource(row, -1)?.block),
       } : null,
       native: !row && kind === "[[" ? (() => {
         const source = armedSource();
         return source ? { drill: canDrill(source), aliasNew: aliasNew(source) } : null;
       })() : null,
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
-      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]" },
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline") },
     };
     return pickerHints(state);
   }
@@ -737,10 +873,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     } else helpButton.textContent = want ? "?" : "";
   }
 
-  // The hints line's content and class now; where the strip and the line go
-  // (Roam's list column, which the strip tops and the line ends) in a frame.
+  // The hint line's content; it sits at the end of Roam's list column.
   let hintsFor = null;
-  let hintsLine = false;
   function layoutPop() {
     const pop = st.pop;
     if (!pop) return;
@@ -752,7 +886,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!line) {
       hints.hidden = true;
       hintsFor = null;
-      pop.classList.remove(PAD_BOTTOM);
     } else {
       const nudge = nudgeWanted();
       if (nudge) nudgeShown = true;
@@ -763,11 +896,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         renderHints(doc, hintsList, list);
       }
       paintHelpButton(nudge);
-      pop.classList.add(PAD_BOTTOM);
+      hints.hidden = false;
     }
-    hintsLine = line;
-    if (strip.hidden && !line) return;
-    requestPlace();
   }
 
   // Burrow's geometry reads run in a frame callback. Read anywhere else (the
@@ -790,22 +920,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function placePanes() {
     const pop = st.pop;
     if (!pop?.isConnected) return;
-    const t0 = performance.now();
     // An unchanged preview follows the popover (src/preview.js reads before it writes).
-    if (redock) {
-      redock = false;
-      if (model) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
-    }
-    if (!strip.hidden || hintsLine) {
-      const rect = listColumn(pop).getBoundingClientRect();
-      const left = `${Math.round(rect.left)}px`;
-      const width = `${Math.round(rect.width)}px`;
-      if (!strip.hidden) Object.assign(strip.style, { left, top: `${Math.round(rect.top)}px`, width });
-      if (hintsLine) {
-        Object.assign(hints.style, { left, top: `${Math.round(rect.bottom - HINTS_HEIGHT)}px`, width });
-        hints.hidden = false;
-      }
-    }
+    if (!redock) return;
+    const t0 = performance.now();
+    redock = false;
+    if (model) preview.show(model, pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
     perf.push("place", performance.now() - t0);
   }
   let hintItems = [];
@@ -852,7 +971,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // While the list is open: Esc or ⌥/ closes it; any other key closes it and
   // then does what it does (typing goes on as if it had not been open).
   function helpKey(event) {
-    if (isAltSlash(event) || (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey)) {
+    if (isHelpKey(event) || (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey)) {
       consume(event);
       closeHelp();
       return true;
@@ -892,8 +1011,23 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     sampleTheme(pop);
     if (st.phase === "SCOPE") pop.classList.add(SCOPE_OPEN);
     if (st.help) pop.classList.add(HELP_OPEN);
-    const mo = new MutationObserver(() => { if (st.pop === pop && st.phase !== "IDLE") frame(); });
-    mo.observe(pop, { childList: true, subtree: true, attributes: true, attributeFilter: ["style"] });
+    // Burrow's own nodes live in the popover now: their changes are not Roam's.
+    const ours = (node) => node === strip || node === hints || strip.contains(node) || hints.contains(node);
+    const mo = new MutationObserver((records) => {
+      if (st.pop !== pop || st.phase === "IDLE") return;
+      let roam = false;
+      for (const r of records) {
+        if (r.type === "attributes" && r.attributeName === "class") {
+          if (r.target === pop) reassertClasses(pop);
+          continue;
+        }
+        if (ours(r.target)) continue;
+        if (r.type === "childList" && [...r.addedNodes, ...r.removedNodes].every(ours)) continue;
+        roam = true;
+      }
+      if (roam) frame();
+    });
+    mo.observe(pop, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
     // Roam swaps the popover element on some updates (native arrow keys), so a
     // disconnect only means "closed" when no replacement popover exists.
     const gone = new MutationObserver(() => {
@@ -969,6 +1103,26 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     });
   }
 
+  // Has the caret or the text before it moved since Burrow ranked?
+  function stale(ta) {
+    const token = st.token;
+    if (!token) return false;
+    return ta.selectionStart !== ta.selectionEnd || ta.selectionStart !== token.caret
+      || ta.value.slice(token.start, token.caret) !== token.kind + token.query;
+  }
+
+  // A pick that could not be written: rank again for what the block holds
+  // now, with the key already consumed.
+  function refused() {
+    trace({ ev: "refused" });
+    if (st.phase === "SCOPE") exitScope();
+    const ta = st.ta;
+    if (ta?.isConnected && doc.activeElement === ta) {
+      evaluate(ta);
+      if (frameQueued) inFrameDo(draw);
+    } else reset("commit-refused");
+  }
+
   function reset(reason) {
     if (st.phase !== "IDLE" || st.rows.length) trace({ ev: "reset", reason });
     closeHelp();
@@ -976,6 +1130,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (nudgeShown) nudgeSeen();
     nudgeDone = false;
     kidsKnown.clear();
+    contextKnown.clear();
+    contextFor = null;
+    cancelContext();
     st.phase = "IDLE";
     st.rows = [];
     st.active = -1;
@@ -1074,8 +1231,19 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (tips.visible) tips.hide();
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    // The text before the caret is no longer what Burrow ranked (the caret
+    // moved without an event Burrow saw yet): rank again before the key acts.
+    // Enter or Tab then only redraws; the highlight the user saw was Burrow's,
+    // so the key never falls through to a Roam row that was not highlighted.
+    if (st.phase === "OWNED" && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
+      trace({ ev: "stale-key", key: event.key });
+      evaluate(st.ta);
+      if (frameQueued) inFrameDo(draw);
+      if (event.key === "Enter" || event.key === "Tab") { consume(event); return; }
+      if (st.phase === "IDLE") return;
+    }
     if (st.help && event.target === st.ta && helpKey(event)) return;
-    if (isAltSlash(event) && setting("helpSheet") && event.target === st.ta && !event.isComposing && !st.composing && !st.prompt?.compose) {
+    if (isHelpKey(event) && setting("helpSheet") && event.target === st.ta && !event.isComposing && !st.composing && !st.prompt?.compose) {
       if (openHelp()) { consume(event); return; }
     }
     if (st.prompt && composer.key(event)) return;
@@ -1104,6 +1272,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       return;
     }
     // OWNED
+    if (event.shiftKey && key === "Tab" && setting("refOutline") && outlineUp(shown[st.active], event)) return;
     if (event.shiftKey && key !== "Tab") return;
     if (shown[st.active]?.kind === "drill" && (key === "ArrowDown" || key === "ArrowUp")) {
       consume(event);
@@ -1130,8 +1299,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         if (event.shiftKey) return;
         const row = shown[st.active];
         if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, -1), event)) return;
-        if (row && commit(row)) consume(event);
-        else reset("commit-refused");
+        // Refused (the text or the block changed under the row): the key
+        // stays Burrow's and only redraws, so Enter never runs a Roam row the
+        // user did not see highlighted.
+        consume(event);
+        if (!row || !commit(row)) refused();
         return;
       }
       case "Escape":
@@ -1173,8 +1345,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     } else if ((key === "ArrowUp" && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) || (key === "Escape" && plain)) st.chip = -1;
     else if (plain && (key === "Enter" || key === "Tab")) {
       if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, st.chip), event)) return true;
-      if (!commit(chipRow(row, st.chip))) reset("commit-refused");
       consume(event);
+      if (!commit(chipRow(row, st.chip))) refused();
       return true;
     } else {
       st.chip = -1;
@@ -1233,7 +1405,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsNode.remove();
     strip.hidden = false;
     syncPanes(promptRows);
-    setPad(1, false);
     layoutPop();
     showPreview();
   }
@@ -1349,9 +1520,39 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       const insertion = chip >= 0 ? chipRow(row, chip).insertion : row.insertion;
       return { uid: row.uid, label: row.title, page: { uid: row.uid, title: row.title }, insertion };
     }
-    if (row.kind === "ref") return { uid: row.uid, label: row.text, page: null, insertion: row.insertion };
-    if (row.kind === "drill" && st.drill) return { uid: row.uid, label: row.text, page: st.drill.page, insertion: row.insertion };
+    if (row.kind === "ref") return { uid: row.uid, label: row.text, page: null, insertion: row.insertion, block: true };
+    if (row.kind === "drill" && st.drill) {
+      const block = row.uid !== st.drill.page.uid;
+      return { uid: row.uid, label: row.text, page: st.drill.page, insertion: row.insertion, block };
+    }
     return null;
+  }
+
+  // Up and down the outline (refOutline): the levels from the block's page
+  // down to its parent (⇧⇥, `self` false) or to the block itself (Tab). Each
+  // level lists its children and starts on the next block of the path, so
+  // the crumb is the block's whole trail and ⇧⇥ walks up it.
+  function outlineLevels(uid, label, self) {
+    const chain = tree.trail(uid);
+    if (!chain.length || chain[0].title == null) return null;
+    const page = { uid: chain[0].uid, title: chain[0].title };
+    const path = [...chain.map((n) => n.uid), uid];
+    const nodes = self ? [...chain, { uid, label }] : chain;
+    const limit = setting("drillCap") ? CAP : Infinity;
+    return nodes.map((n, i) => ({
+      uid: n.uid, page, isPage: i === 0, query: "", active: null, activeUid: path[i + 1] ?? null, limit,
+      label: i === 0 ? page.title : n.label ?? (readableText(n.string) || "(empty)"),
+      insertion: i === 0 ? `[[${page.title}]]` : `((${n.uid}))`,
+    }));
+  }
+
+  // ⇧⇥ on a highlighted block row: its parent's children, the block highlighted.
+  function outlineUp(row, event) {
+    if (row?.kind !== "ref" && row?.kind !== "drill") return false;
+    const source = ownedSource(row, -1);
+    if (!source?.block) return false;
+    const levels = outlineLevels(row.uid, row.text, false);
+    return Boolean(levels) && enterScope(source, event, levels);
   }
 
   // ... or Roam's own highlighted page row when ARMED (`[[` only; `((` rows have no uid).
@@ -1365,14 +1566,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return { uid: page.uid, label: title, page, insertion: `[[${title}]]` };
   }
 
-  function enterScope(source, event) {
+  function enterScope(source, event, up = null) {
     const ta = st.ta;
     if (!source || !st.pop || st.composing || event.target !== ta) return false;
     if (!tokenStillValid(ta.value, ta.selectionStart, ta.selectionEnd, st.token)) return false;
-    if (!tree.children(source.uid).length) return false;
+    if (!up && !tree.children(source.uid).length) return false;
+    const levels = up || (source.block && setting("refOutline") && outlineLevels(source.uid, source.label, true))
+      || [{ ...source, isPage: !source.block, query: "", active: 0, limit: setting("drillCap") ? CAP : Infinity }];
     st.scope = {
       rootLabel: st.token.kind === "[[" ? "Pages" : "Blocks",
-      levels: [{ ...source, query: "", active: 0, limit: setting("drillCap") ? CAP : Infinity }],
+      levels,
       rows: [],
       all: [],
       preview: setting("drillPreview"),
@@ -1383,10 +1586,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.chip = -1;
     trace({ ev: "scope-enter", uid: source.uid });
     strip.hidden = true;
+    strip.classList.remove(OWNING);
     chipsNode.remove();
+    contextNode.remove();
+    contextFor = null;
     cancelRowPreview();
     hidePreview();
-    st.pop.classList.remove(OWNS, DRILL_CLASS, PAD, ...PAD_SIZES, PAD_BOTTOM);
+    st.pop.classList.remove(DRILL_CLASS);
     st.pop.classList.add(SCOPE_OPEN);
     hints.hidden = true;
     hintsFor = null;
@@ -1420,9 +1626,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.scope.all = scopeRows(tree.twoLevels(level.uid), level.query, {
       strict: !setting("betterMatch"), text: readableText, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty"),
     });
+    // A level on the way down to a block (refOutline) starts on that block,
+    // with enough slices listed to show it.
+    const on = !level.query && level.activeUid && (keepActive ? level.active == null : true)
+      ? st.scope.all.findIndex((row) => row.uid === level.activeUid) : -1;
+    if (on >= 0 && level.limit !== Infinity) level.limit = Math.max(level.limit, Math.ceil((on + 1) / CAP) * CAP);
     st.scope.rows = capRows(st.scope.all, level.limit);
-    level.active = keepActive ? Math.min(level.active, Math.max(0, st.scope.rows.length - 1))
-      : level.query ? 0 : firstReal(st.scope.rows);
+    if (on >= 0) level.active = on;
+    else if (keepActive && level.active != null) level.active = Math.min(level.active, Math.max(0, st.scope.rows.length - 1));
+    else level.active = level.query ? 0 : firstReal(st.scope.rows);
     scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
     placeScope();
   }
@@ -1515,7 +1727,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       return;
     }
     if (key === "Enter") {
-      if (scopeCommit()) consume(event); else reset("commit-refused");
+      // Roam's popover is hidden under the panel: a refused Enter is never its.
+      consume(event);
+      if (!scopeCommit()) refused();
       return;
     }
     if (key === "Escape") { exitScope(); consume(event); return; }
@@ -1658,6 +1872,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (promptRow && st.prompt?.kind === "add") {
       return { el: promptRow, title: `New alias for ${st.prompt.page.title}`, lines: [["↵", "add it to the page's Aliases:: block, then insert it"], ["esc", "cancel; nothing is written"]] };
     }
+    const where = target.closest?.(".burrow-context");
+    if (where) {
+      return { el: where, title: where.title || null, lines: [
+        ["", "where the highlighted block lives: its page and parent"],
+        setting("tabDrill") ? ["⇥", "list the children of this block"] : null,
+        setting("refOutline") ? ["⇧⇥", "go up to its parent"] : null,
+      ].filter(Boolean) };
+    }
     const confirm = target.closest?.(".burrow-chips.burrow-confirm");
     if (confirm) return { el: confirm, title: null, lines: [["↵", "delete this alias from the page"], ["esc", "keep it"]] };
     const node = target.closest?.(".burrow-row");
@@ -1667,20 +1889,23 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       return { el: node, title: `${row.alias} ↳ ${row.title}`, lines: [
         ["↵", `or click: insert ${row.insertion}`],
         setting("aliasChips") && row.aliases.length > 1 ? [keyLabel("altDown"), `pick one of its ${row.aliases.length} aliases`] : null,
-        drillLine(row.uid, "list the page's blocks"),
+        drillLine(row.uid, "list the blocks on this page"),
         setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null,
       ].filter(Boolean) };
     }
+    const upLine = setting("refOutline") ? ["⇧⇥", "go up to its parent (the parent's children, this block highlighted)"] : null;
     if (row.kind === "ref") {
       return { el: node, title: row.text, lines: [
         ["↵", `or click: insert ((${row.uid}))`],
         ["", `${row.refs} block${row.refs === 1 ? "" : "s"} reference it`],
-        drillLine(row.uid, "list its child blocks"),
+        drillLine(row.uid, "list the children of this block"),
+        upLine,
       ].filter(Boolean) };
     }
     return { el: node, title: row.crumb ? `${row.crumb} › ${row.text}` : row.text, lines: [
       ["↵", "insert the block the drill-down reaches"],
-      drillLine(row.uid, "list its child blocks"),
+      drillLine(row.uid, "list the children of this block"),
+      ownedSource(row, -1)?.block ? upLine : null,
     ].filter(Boolean) };
   }
 
@@ -1716,25 +1941,84 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function previewTip(target, pane) {
     const node = target.closest?.(".burrow-preview");
     if (!node) return null;
-    const trail = node.querySelector(".burrow-trail")?.textContent || "";
+    const trail = [...node.querySelectorAll(".burrow-trail .burrow-crumb")].map((n) => n.textContent).join(" › ");
     if (pane === scopePreview) return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "show or hide this preview"], ["", "read-only; the highlighted line is the selected block"]] };
     if (st.drill) return { el: node, title: trail, lines: [["↵", "insert the highlighted block"], ["", "read-only; follows what you type after # and >"]] };
-    return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "close Roam's preview (and this one)"], ["", "read-only; the selected Burrow row's page or block"]] };
+    return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "close Roam's preview (and this one)"], ["", "read-only preview of the highlighted Burrow row: its page, or the block among its siblings; Tab lists what is under it"]] };
   }
 
   // A Burrow bug must never cost the user a keystroke: on any throw Burrow
-  // drops to IDLE and the event continues to Roam untouched.
+  // drops to IDLE and the event continues to Roam untouched. The one
+  // exception is Enter or Tab while Burrow's row or panel held the
+  // highlight: Roam's own row was not highlighted, so the key stops here.
   const guarded = (name, handler) => (event) => {
+    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "SCOPE" || Boolean(st.prompt))
+      && (event.key === "Enter" || event.key === "Tab");
     try {
       handler(event);
     } catch (error) {
       debug.lastFailure = { reason: `throw:${name}`, at: Date.now(), message: String(error?.message || error) };
       console.error(`[burrow] ${name} failed; falling back to Roam`, error);
+      if (held) consume(event);
       try { reset("error"); } catch { /* already broken */ }
     }
   };
 
+  // The caret moved (a click, ←/→ while Roam's row is highlighted, a
+  // programmatic move): rank again for the text before it, as Roam does, so
+  // Burrow's rows never stay from an older caret.
+  function onSelectionChange() {
+    const ta = st.ta;
+    if (!ta || st.prompt || doc.activeElement !== ta || !anyFeature()) return;
+    // Back at the end of a token Roam still has a popup for (after ← and →).
+    if (st.phase === "IDLE") {
+      if (pendingTa == null && doc.querySelector(POPUP)) scheduleEvaluate(ta);
+      return;
+    }
+    if (stale(ta)) {
+      if (st.phase === "SCOPE") exitScope();
+      scheduleEvaluate(ta);
+    }
+  }
+
+  // The pointer moving over a Burrow row selects it, so there is one
+  // highlight and Enter does what it shows. Only a real move counts: Roam
+  // and the browser send mouse events when the content under a resting
+  // pointer changes.
+  let lastPointer = null;
+  function onStripMouseMove(event) {
+    const at = `${event.clientX},${event.clientY}`;
+    if (at === lastPointer) return;
+    lastPointer = at;
+    if (st.prompt || st.help || (st.phase !== "ARMED" && st.phase !== "OWNED")) return;
+    const node = event.target.closest?.(".burrow-row");
+    if (!node || !strip.contains(node)) return;
+    const index = Number(node.dataset.index);
+    if (!shown[index] || (st.phase === "OWNED" && st.active === index)) return;
+    if (st.phase === "OWNED" && st.chip >= 0) st.chip = -1;
+    own(index);
+    st.auto = false;
+    paintActive();
+  }
+
+  function onScopeMouseMove(event) {
+    const at = `${event.clientX},${event.clientY}`;
+    if (at === lastPointer) return;
+    lastPointer = at;
+    if (st.phase !== "SCOPE" || !st.scope) return;
+    const node = event.target.closest?.(".burrow-scope-list .burrow-row");
+    if (!node) return;
+    const index = Number(node.dataset.index);
+    const level = scopeLevel();
+    if (!st.scope.rows[index] || level.active === index) return;
+    level.active = index;
+    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false);
+    showScopePreview();
+  }
+
   lifecycle.event(win, "keydown", guarded("keydown", onKeyDown), true);
+  lifecycle.event(doc, "selectionchange", guarded("selectionchange", onSelectionChange));
+  lifecycle.event(strip, "mousemove", guarded("mousemove", onStripMouseMove));
   lifecycle.event(win, "input", guarded("input", onInput), true);
   lifecycle.event(win, "compositionstart", guarded("compositionstart", onCompositionStart), true);
   lifecycle.event(win, "compositionupdate", guarded("compositionupdate", (event) => { if (st.prompt) composer.update(event); }), true);
@@ -1764,6 +2048,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   });
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
+  lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 
   return { state: st, debug, reset, tree };

@@ -3,6 +3,12 @@ import { aliasKeyTargets, buildRefIndexSliced, rekeyAliases } from "./refindex.j
 import { buildTitleIndex } from "./titles.js";
 
 const TTL_MS = 60_000;
+// The full rebuild's referenced-blocks query holds the main thread (about
+// 0.3 s in svy; Roam's async query runs there too), so it never starts while
+// a popup is open or within this long of the last key, click or edit: it
+// waits for a quiet moment instead of starting when a popup opens.
+const QUIET_MS = 2_000;
+const POPUP = ".rm-autocomplete__results";
 // An alias edit outside Burrow (by hand, roam-aliases, an undo) reaches the
 // index this long after Roam's watch reports it; edits in a burst coalesce.
 const ALIAS_SETTLE_MS = 250;
@@ -24,7 +30,7 @@ const ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u
 // they are older than the TTL. Nothing here runs on a keystroke.
 const yieldTo = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-export function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globalThis }) {
+export function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globalThis, doc = globalThis.document ?? null, now = () => performance.now() }) {
   let aliases = null;
   let refs = null;
   let titles = null;
@@ -61,10 +67,12 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     return [...rows.values()];
   };
 
-  // One pull watch per alias page that exists: it fires when a block that
-  // references the page is created, edited, moved or deleted, and when a
-  // block gains or loses the `Keyword::` prefix; edits elsewhere never fire it.
-  // Roam calls it with the pull before and after the change.
+  // One pull watch per spelling of the keyword's page: it fires when a block
+  // that references the page is created, edited, moved or deleted, and when
+  // a block gains or loses the `Keyword::` prefix; edits elsewhere never fire
+  // it. Roam calls it with the pull before and after the change. A page that
+  // does not exist yet is watched too: the watch fires when the first
+  // `Aliases::` block typed by hand creates it (checked live).
   const watches = new Map();
   let settleTimer = null;
   let watchCalls = 0;
@@ -79,7 +87,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     const addWatch = api.data?.addPullWatch;
     if (!lifecycle || lifecycle.disposed || typeof addWatch !== "function") return false;
     let added = false;
-    const wanted = new Set(keywordTitles(kw).filter((t) => api.pull("[:db/id]", [":node/title", t])));
+    const wanted = new Set(keywordTitles(kw));
     for (const [title, watch] of watches) {
       if (wanted.has(title)) continue;
       api.data.removePullWatch(ALIAS_PULL, watch.entity, watch.cb);
@@ -138,8 +146,6 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     const entries = [...new Set([...left, ...aliasKeyTargets(refs, next.byPage, aliases.byPage)])];
     aliases = next;
     aliasPrint = print;
-    // Burrow's own first alias in a graph without an alias page made one.
-    if (!watches.size) syncWatches(kw);
     perf.push("aliasRefresh", performance.now() - t0);
     const run = rekey = { refs, entries, at: 0, keys: new Map() };
     idle(() => rekeyStep(run));
@@ -155,13 +161,25 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     notify();
   }
 
-  const build = async () => {
+  // Last key, click or edit anywhere in the window (Burrow's own listeners
+  // stamp it), for the rebuild's quiet check.
+  let lastInput = -Infinity;
+  const stamp = () => { lastInput = now(); };
+  if (lifecycle && win?.addEventListener) {
+    for (const type of ["keydown", "pointerdown", "input", "wheel"]) lifecycle.event(win, type, stamp, { capture: true, passive: true });
+  }
+  const quiet = () => now() - lastInput >= QUIET_MS && !doc?.querySelector?.(POPUP);
+
+  // first: the initial build, which has no index to wait with.
+  const build = async ({ first = false } = {}) => {
     const t0 = performance.now();
     const calls = watchCalls;
     const nextKeyword = setting("aliasKeyword") || "Aliases";
     const aliasRows = readAliasRows(nextKeyword);
     const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
     const aliasRefRows = aliasUids.length ? await q(ALIAS_REFS, aliasUids) : [];
+    // The long query: not now if the user is typing or a popup opened meanwhile.
+    if (!first && refs && !quiet()) { perf.counters.rebuildsDeferred = (perf.counters.rebuildsDeferred || 0) + 1; return false; }
     const rows = await q(REFERENCED_BLOCKS);
     const titleRows = await q(TITLES);
     const separated = (titleRows || []).map(([t]) => t).filter((t) => /[#>]/.test(t));
@@ -187,17 +205,29 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     // An alias edit while the build awaited its queries: its rows are newer
     // than the ones this build read first.
     if (watchCalls !== calls) refreshAliases();
+    return true;
   };
 
+  // Builds at idle: the first one at once, later ones (the TTL, a keyword
+  // change) only at a quiet moment, checked again right before the long query.
+  let quietTimer = null;
   const schedule = () => {
     if (pending) return;
     pending = true;
-    idle(() => {
-      build()
-        .catch((error) => console.error("[burrow] index build failed", error))
-        .finally(() => { pending = false; });
-    });
+    const first = !refs;
+    const attempt = () => {
+      quietTimer = null;
+      if (lifecycle?.disposed) { pending = false; return; }
+      if (!first && !quiet()) { quietTimer = win.setTimeout(attempt, QUIET_MS); return; }
+      idle(() => {
+        build({ first })
+          .then((done) => { pending = false; if (done === false) schedule(); })
+          .catch((error) => { pending = false; console.error("[burrow] index build failed", error); });
+      });
+    };
+    attempt();
   };
+  lifecycle?.add(() => { if (quietTimer != null) win.clearTimeout(quietTimer); });
 
   return {
     get aliases() { return aliases; },
@@ -209,12 +239,10 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     // fn() runs after a build or an alias refresh.
     listen(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     get watched() { return [...watches.keys()]; },
+    // A popup opened: an index older than the TTL is rebuilt at the next
+    // quiet moment (after this popup closes and the typing stops), never now.
     refreshIfStale() {
-      if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) { schedule(); return; }
-      // An alias page that did not exist at the build (the first alias typed
-      // by hand creates it): look again at idle, one [:db/id] pull per
-      // spelling, and once it is there watch it and read its aliases.
-      idle(() => { if (keyword && syncWatches(keyword)) refreshAliases({ fresh: true }); });
+      if (!builtAt || Date.now() - builtAt > TTL_MS || keyword !== (setting("aliasKeyword") || "Aliases")) schedule();
     },
   };
 }

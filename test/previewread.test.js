@@ -29,12 +29,13 @@ function bigGraph(top = 500, kids = 3) {
     if (n.children.length) out[":block/children"] = kidsOf(n).map((c) => (depth > 0 ? raw(c, depth - 1) : { ":block/uid": c.uid }));
     return out;
   };
-  const calls = { pull: 0, slots: 0, brief: 0, entities: 0 };
+  const calls = { pull: 0, slots: 0, orders: 0, brief: 0, entities: 0, biggestRead: 0 };
   const pull = (pattern, ref) => {
     calls.pull += 1;
     const n = nodes.get(Array.isArray(ref) ? ref[1] : ref);
     if (!n) return null;
     if (pattern === "[:db/id]") return { ":db/id": n.eid };
+    if (pattern === "[:db/id :block/order]") { calls.entities += 1; return { ":db/id": n.eid, ":block/order": n.order }; }
     if (pattern.includes("_children")) {
       const up = (m) => {
         const out = raw(m, -1);
@@ -62,7 +63,24 @@ function bigGraph(top = 500, kids = 3) {
     calls.entities += count(n, 2);
     return raw(n, 2);
   };
-  return { pull, calls, nodes };
+  // The child-id query (ids in an order that is not the outline order), and
+  // pull_many for their orders, a batch at a time.
+  const q = (query, uid) => {
+    if (!query.includes(":block/children ?c")) return [];
+    const n = nodes.get(uid);
+    calls.slots += 1;
+    calls.entities += n?.children.length ?? 0;
+    calls.biggestRead = Math.max(calls.biggestRead, n?.children.length ?? 0);
+    return n ? kidsOf(n).map((c) => c.eid) : [];
+  };
+  const pullMany = (pattern, eids) => {
+    calls.orders += 1;
+    calls.entities += eids.length;
+    calls.biggestRead = Math.max(calls.biggestRead, eids.length);
+    return eids.map((eid) => ({ ":db/id": eid, ":block/order": nodes.get(eid).order }));
+  };
+  const source = () => createTreeSource({ pull, q, pullMany });
+  return { pull, q, pullMany, source, calls, nodes };
 }
 
 const text = (s) => s;
@@ -71,11 +89,12 @@ const shape = (model) => model.items.map((i) => (i.more != null ? `+${i.more}@${
 
 test("a page preview reads only the blocks it shows, and matches the full read", () => {
   const big = bigGraph(500, 3);
-  const bounded = previewModel({ page, target: null }, createTreeSource({ pull: big.pull, q: () => [] }).bounded(), text);
+  const bounded = previewModel({ page, target: null }, big.source().bounded(), text);
   assert.equal(big.calls.slots, 17, "the page's ids, then the ids under each of the 16 blocks shown");
   assert.equal(big.calls.brief, 16 + 16 * 3);
-  // 500 ids of the page's blocks, 48 ids under the 16 shown, then the 64 blocks shown.
-  assert.equal(big.calls.entities, 500 + 48 + 64);
+  // 500 ids of the page's blocks and their orders, the same for the 48 under the 16 shown, then the 64 blocks shown.
+  assert.equal(big.calls.entities, 2 * (500 + 48) + 64);
+  assert.equal(big.calls.orders, 4 + 16, "the page's 500 orders in batches of 150, one batch under each block shown");
   const full = bigGraph(500, 3);
   const whole = previewModel({ page, target: null }, createTreeSource({ pull: full.pull, q: () => [] }).full, text);
   assert.deepEqual(shape(bounded), shape(whole));
@@ -85,7 +104,7 @@ test("a page preview reads only the blocks it shows, and matches the full read",
 
 test("a block preview reads a window of 24 siblings around the target", () => {
   const big = bigGraph(300, 2);
-  const tree = createTreeSource({ pull: big.pull, q: () => [] });
+  const tree = big.source();
   const read = tree.bounded();
   read.trail("b150");
   const model = previewModel({ page, target: tree.get("b150") }, read, text);
@@ -100,7 +119,7 @@ test("a block preview reads a window of 24 siblings around the target", () => {
 
 test("a used-up slice stops before a read with PAUSE; the next slice goes on from there", () => {
   const big = bigGraph(200, 2);
-  const tree = createTreeSource({ pull: big.pull, q: () => [] });
+  const tree = big.source();
   let slices = 0;
   let model = null;
   while (!model) {
@@ -115,18 +134,49 @@ test("a used-up slice stops before a read with PAUSE; the next slice goes on fro
   }
   assert.ok(slices > 3);
   const once = bigGraph(200, 2);
-  assert.deepEqual(shape(model), shape(previewModel({ page, target: null }, createTreeSource({ pull: once.pull, q: () => [] }).bounded(), text)));
+  assert.deepEqual(shape(model), shape(previewModel({ page, target: null }, once.source().bounded(), text)));
   assert.equal(big.calls.slots, once.calls.slots, "no read is repeated across slices");
+  assert.equal(big.calls.orders, once.calls.orders);
   assert.equal(big.calls.brief, once.calls.brief);
 });
 
 test("bounded reads share the drill cache: a level read in full is not read again", () => {
   const big = bigGraph(40, 2);
-  const tree = createTreeSource({ pull: big.pull, q: () => [] });
+  const tree = big.source();
   tree.children("P");
   const before = big.calls.pull;
   previewModel({ page, target: null }, tree.bounded(), text);
   assert.equal(big.calls.pull, before, "the two levels are already known");
   tree.clear();
   assert.equal(tree.size, 0);
+});
+
+test("a node with 2,600 children is read in pages: no read takes more than 150 orders, slices go on where they stopped", () => {
+  const big = bigGraph(2600, 0);
+  const tree = big.source();
+  let slices = 0;
+  let model = null;
+  while (!model) {
+    slices += 1;
+    let budget = 2;
+    try {
+      model = previewModel({ page, target: null }, tree.bounded(() => budget-- <= 0), text);
+    } catch (error) {
+      if (error !== PAUSE) throw error;
+    }
+    assert.ok(slices < 60, "every slice makes progress");
+  }
+  assert.ok(slices >= 9, `${slices} slices`);
+  assert.equal(big.calls.orders, Math.ceil(2600 / 150), "each batch of orders read once");
+  assert.equal(big.calls.biggestRead, 2600, "the one id query lists them all (1.2 ms at 966 in svy); the orders come in batches");
+  assert.equal(shape(model).at(-1), "+2584@0");
+  assert.deepEqual(shape(model).slice(0, 2), ["b0@0", "b1@0"]);
+});
+
+test("without pull_many the orders are read one pull each, in the same batches", () => {
+  const big = bigGraph(400, 1);
+  const tree = createTreeSource({ pull: big.pull, q: big.q });
+  const model = previewModel({ page, target: null }, tree.bounded(), text);
+  assert.deepEqual(shape(model).slice(0, 2), ["b0@0", "b0k0@1"]);
+  assert.equal(big.calls.orders, 0);
 });

@@ -27,14 +27,19 @@ export function helpGroups(setting, mac = IS_MAC) {
   if (!on("aliasCreate")) off.push(`${k("altA")} add (Create aliases)`);
   if (!on("aliasDelete")) off.push(`${k("altBackspace")} delete (Delete aliases)`);
   if (off.length) aliases.notes.push(`Off, they write to your graph: ${off.join(", ")}. Settings → Burrow turns them on.`);
+  // ⌥⌫ acts on the selected chip, so it needs the chips too.
+  if (on("aliasDelete") && !(on("aliasPages") && on("aliasChips"))) {
+    aliases.notes.push(`${k("altBackspace")} deletes the selected alias chip: turn on ${on("aliasPages") ? "Alias chips" : "Alias rows in [[ and Alias chips"} (Settings → Burrow) to use it.`);
+  }
   groups.push(aliases);
 
   const drill = { title: "Drill", items: [], notes: [] };
   if (on("tabDrill")) {
-    drill.items.push(["⇥ or >", "list the page's blocks"], ["⇧⇥ or ⌫", "one level back"], ["type", "filter the list"]);
+    drill.items.push(["⇥ or >", "on a page: the blocks on it; on a block: its children"], ["⇧⇥ or ⌫", "one level back up"], ["type", "filter the list"]);
     if (on("drillOrdinals")) drill.items.push(["1 (b) iii", "numbered blocks first"]);
     drill.items.push(["esc", "back to the results"]);
   }
+  if (on("refOutline")) drill.items.push(["⇧⇥", "on a block row: up to its parent, the block highlighted"]);
   if (on("drill")) drill.items.push(["# >", "[[Page#heading > child"]);
   if (drill.items.length) groups.push(drill);
 
@@ -57,7 +62,7 @@ export function createHelpSheet({ doc, win, lifecycle }) {
 
   function render(groups, closeKey) {
     const head = el("div", "burrow-help-head");
-    head.append(el("span", "burrow-help-title", "Burrow keys"), el("span", "burrow-help-close", `${closeKey} or esc closes`));
+    head.append(el("span", "burrow-help-title", "Burrow keys"), el("span", "burrow-help-close", `${closeKey}, F1 or esc closes`));
     const grid = el("div", "burrow-help-grid");
     for (const group of groups) {
       const box = el("div", "burrow-help-group");
@@ -70,7 +75,7 @@ export function createHelpSheet({ doc, win, lifecycle }) {
       for (const note of group.notes) box.append(el("div", "burrow-help-note", note));
       grid.append(box);
     }
-    const foot = el("div", "burrow-help-foot", "Every key has its own switch in Settings → Burrow.");
+    const foot = el("div", "burrow-help-foot", `Every key has its own switch in Settings → Burrow. Opens with ${closeKey}, F1 (any keyboard layout) or the ? on the hint line.`);
     node.replaceChildren(head, grid, foot);
   }
 

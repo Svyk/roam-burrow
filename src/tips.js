@@ -7,7 +7,38 @@ const DELAY_MS = 450;
 const GAP = 6;
 const MAX_WIDTH = 320;
 
-export function createTips({ doc, win, lifecycle, enabled, avoid = () => null }) {
+// Where a tip goes: beside the picker (right, then left), level with the
+// element; above or below it when neither side has room; never over the
+// picker's own text or the text being edited. Pure, for the tests.
+//   el: the hovered element's rect; box: { width, height } of the tip;
+//   area: the picker's rect (popover and Burrow's panes together) or null;
+//   ta: the edited text's rect or null; view: { width, height }.
+export function placeTip(el, box, area, ta, view) {
+  const hits = (r, x, y) => r && x < r.right && x + box.width > r.left && y < r.bottom && y + box.height > r.top;
+  const free = (x, y) => !hits(area, x, y) && !hits(ta, x, y);
+  const clampY = (y) => Math.max(0, Math.min(view.height - box.height, y));
+  const clampX = (x) => Math.max(4, Math.min(view.width - box.width - 4, x));
+  if (area) {
+    const y = clampY(el.top);
+    const right = area.right + GAP;
+    if (right + box.width <= view.width - 4 && free(right, y)) return { left: right, top: y };
+    const left = area.left - GAP - box.width;
+    if (left >= 4 && free(left, y)) return { left, top: y };
+    const x = clampX(el.left);
+    const below = area.bottom + GAP;
+    if (below + box.height <= view.height && free(x, below)) return { left: x, top: below };
+    const above = area.top - GAP - box.height;
+    if (above >= 0 && free(x, above)) return { left: x, top: above };
+  }
+  // No room around the picker: under the element, or above it, off the text.
+  const x = clampX(el.left);
+  let top = el.bottom + GAP;
+  if (top + box.height > view.height || hits(ta, x, top)) top = el.top - GAP - box.height;
+  if (top < 0 || hits(ta, x, top)) top = Math.min(view.height - box.height, el.bottom + GAP);
+  return { left: x, top: Math.max(0, top) };
+}
+
+export function createTips({ doc, win, lifecycle, enabled, avoid = () => null, around = () => null }) {
   const node = doc.createElement("div");
   node.className = "burrow-tip";
   node.setAttribute("role", "tooltip");
@@ -37,8 +68,6 @@ export function createTips({ doc, win, lifecycle, enabled, avoid = () => null })
     node.replaceChildren(...parts);
   }
 
-  // Under the element when it fits and leaves the text being edited free,
-  // else above it; always inside the window.
   function place(rect, styleFrom) {
     for (const name of ["--burrow-bg", "--burrow-fg"]) node.style.setProperty(name, styleFrom.style.getPropertyValue(name) || "");
     node.style.zIndex = String((Number.parseInt(styleFrom.style.zIndex, 10) || 30) + 2);
@@ -47,14 +76,9 @@ export function createTips({ doc, win, lifecycle, enabled, avoid = () => null })
     node.style.top = "0px";
     node.hidden = false;
     const box = node.getBoundingClientRect();
-    const ta = avoid();
-    const hits = (top) => ta && top < ta.bottom && top + box.height > ta.top && rect.left < ta.right && rect.left + box.width > ta.left;
-    let top = rect.bottom + GAP;
-    if (top + box.height > win.innerHeight || hits(top)) top = rect.top - GAP - box.height;
-    if (top < 0 || hits(top)) top = Math.min(win.innerHeight - box.height, rect.bottom + GAP);
-    const left = Math.max(4, Math.min(rect.left, win.innerWidth - box.width - 4));
-    node.style.left = `${Math.round(left)}px`;
-    node.style.top = `${Math.round(Math.max(0, top))}px`;
+    const at = placeTip(rect, box, around(), avoid(), { width: win.innerWidth, height: win.innerHeight });
+    node.style.left = `${Math.round(at.left)}px`;
+    node.style.top = `${Math.round(at.top)}px`;
   }
 
   // resolve(target) -> { el, title, lines: [[keys, what]], themeFrom } or null.

@@ -2,7 +2,10 @@
 // open (Ctrl-O) it lies exactly over Roam's preview area, whose content a
 // reversible class on the popover hides; otherwise it sits beside the
 // popover where Roam's preview would open. Text only: no Roam blocks are
-// rendered, so a click cannot open an editor.
+// rendered, so a click cannot open an editor. TODO/DONE show as Roam's
+// read-only checkboxes (src/tasks.js).
+import { checkbox, hasTask, taskParts } from "./tasks.js";
+
 const SIBLING_WINDOW = 24;
 const CHILD_LIMIT = 16;
 const ITEM_LIMIT = 80;
@@ -31,6 +34,8 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
+  // A line with a task macro keeps it as a part, so it draws as a checkbox.
+  const parts = (s) => (hasTask(s) ? taskParts(s).map((p) => (p.task ? p : { text: text(p.text) })) : null);
   // kids === null: has children not read yet (or not known).
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
@@ -38,7 +43,7 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
     for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
-      items.push({ uid: kid.uid, text: text(kid.string || ""), depth, heading: kid.heading, target: false });
+      items.push({ uid: kid.uid, text: text(kid.string || ""), parts: parts(kid.string), depth, heading: kid.heading, target: false });
       if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
     if (total > CHILD_LIMIT) items.push({ more: total - CHILD_LIMIT, depth });
@@ -55,11 +60,11 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), depth: 0, heading: sib.heading, target: isTarget });
+    items.push({ uid: sib.uid, text: text(sib.string || ""), parts: parts(sib.string), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), depth: 0, heading: target.heading, target: true });
+  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), parts: parts(target.string), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
 
@@ -81,6 +86,7 @@ export function createPreview({ doc, win, lifecycle }) {
   // render adds costs style work, so the 0.4.0 three spans per line were
   // most of a draw.
   function render(model) {
+    // The pane says what it is (src/extension.css draws "Preview" before the trail).
     trailNode.replaceChildren();
     model.trail.forEach((part, i) => {
       if (i) trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-sep", textContent: " › " }));
@@ -97,7 +103,9 @@ export function createPreview({ doc, win, lifecycle }) {
       }
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
-      row.textContent = item.text || " ";
+      if (item.parts) {
+        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task) : part.text.trim());
+      } else row.textContent = item.text || " ";
       return row;
     });
     outline.replaceChildren(...rows);
@@ -159,6 +167,8 @@ export function createPreview({ doc, win, lifecycle }) {
   let filled = false;
   return {
     node: pane,
+    // Does this pane lie over `popover`'s preview area (its class hides Roam's)?
+    drills: (popover) => !pane.hidden && pop === popover && pane.classList.contains("burrow-preview-docked"),
     // The model's lines only, no layout read: show() places them (in a frame).
     fill(model, popover) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
