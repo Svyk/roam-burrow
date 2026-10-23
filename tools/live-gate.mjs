@@ -124,10 +124,13 @@ async function readBack() {
     const titles = new Set(api.q("[:find [?t ...] :where [?p :node/title ?t]]"));
     const newPages = [...titles].filter((t) => !g.titleSet.has(t)).filter(Boolean);
     // A page this case's typing created (an unclosed [[x left behind) is ours
-    // to delete, but only while it is empty and nothing else links to it.
+    // to delete, but only while it is empty, nothing else links to it and the
+    // case's own text names it: a page an outside write made meanwhile (notes'
+    // daily-plan job wrote two at 06:29 on 2026-10-23) is reported, not deleted.
+    const typed = [string, ...extraStrings].join("\n");
     for (const t of newPages) {
       const p = api.pull("[:block/uid {:block/children [:db/id]} {:block/_refs [:db/id]}]", [":node/title", t]);
-      if (p && !p[":block/children"]?.length && !p[":block/_refs"]?.length) await api.data.page.delete({ page: { uid: p[":block/uid"] } });
+      if (p && typed.includes(t) && !p[":block/children"]?.length && !p[":block/_refs"]?.length) await api.data.page.delete({ page: { uid: p[":block/uid"] } });
     }
     return { string, extraStrings, newPages };
   });

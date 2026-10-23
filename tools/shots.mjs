@@ -91,6 +91,8 @@ const SCENARIOS = [
   { id: "41-preview-scrolled", query: "((many 50", keys: ["preview-open", "wait:600"] },
   { id: "42-caret-inside-token", query: `((${config.ref}`, keys: ["preview-closed", "ArrowLeft", "wait:300"] },
   { id: "43-key-list-f1", query: `((${config.ref}`, keys: ["F1"] },
+  { id: "44-smartblock-child", query: "((zebra smart", keys: ["preview-open", "wait:500"] },
+  { id: "45-smartblock-tab", query: "((zebra smart", keys: ["preview-open", "Tab", "wait:400"] },
 ];
 
 const c = await connect(title);

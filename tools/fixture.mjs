@@ -321,22 +321,24 @@ export async function snapshotTitles(c) {
 }
 
 // Pages created since snapshotTitles: an unclosed `[[x` saved by Roam. Only
-// pages that are empty and that nothing links to are deleted.
+// pages that are empty, that nothing links to and whose title this connection
+// typed are deleted: an outside write in the meantime (notes' daily-plan job)
+// is left alone.
 export async function deleteNewPages(c) {
-  return c.evaluate(async () => {
+  return c.evaluate(async (typed) => {
     const api = window.roamAlphaAPI;
     const before = window.__burrowTitles || new Set();
     const created = api.q("[:find [?t ...] :where [?p :node/title ?t]]").filter((t) => !before.has(t));
     const deleted = [];
     for (const t of created) {
       const p = api.pull("[:block/uid {:block/children [:db/id]} {:block/_refs [:db/id]}]", [":node/title", t]);
-      if (p && !p[":block/children"]?.length && !p[":block/_refs"]?.length) {
+      if (p && typed.includes(t) && !p[":block/children"]?.length && !p[":block/_refs"]?.length) {
         await api.data.page.delete({ page: { uid: p[":block/uid"] } });
         deleted.push(t);
       }
     }
     return { created, deleted };
-  });
+  }, c.typed());
 }
 
 // A click that blurs the block without navigating anything: a point on the
