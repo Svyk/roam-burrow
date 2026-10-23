@@ -111,7 +111,7 @@ node tools/live-gate.mjs Svy svy --theme light   # any gate in light or dark mod
 node tools/shots.mjs Svy svy --label after --theme light   # before/after screenshots of every picker state (--only 21,24 for some)
 ```
 
-A run that crashes or is stopped with Ctrl-C leaves no fixture behind: Ctrl-C runs the cleanup, and a ledger in the system temp folder lets the next run remove exactly what a killed run created.
+A run that crashes or is stopped with Ctrl-C leaves no fixture behind: Ctrl-C runs the cleanup, and a ledger in the system temp folder lets the next run remove exactly what a killed run created. A page Roam made from the gate's typing (an unclosed `[[x`) is deleted only if it is empty, nothing links to it and the gate itself typed its title, so a page another device or job writes during a run is left alone. Keep the display awake for a long run (`caffeinate -d node tools/…`): with the display asleep, svy's window once stopped answering at the gate's first step and crashed when the display woke.
 
 Each prints a short summary; add `--json` for the full record.
 
