@@ -14,6 +14,7 @@ const KEYS = {
   ArrowRight: { code: "ArrowRight", keyCode: 39 },
   Home: { code: "Home", keyCode: 36 },
   End: { code: "End", keyCode: 35 },
+  F1: { code: "F1", keyCode: 112 },
 };
 
 export async function connect(titlePart) {

@@ -1,5 +1,5 @@
 import { nodeKey } from "./drill.js";
-import { hasTask, taskParts } from "./tasks.js";
+import { hasTask, taskParts, taskStatus } from "./tasks.js";
 import { ordinalQuery, startsWithOrdinal } from "./ordinal.js";
 import { matchFromKey, searchPlan } from "./search.js";
 
@@ -9,7 +9,7 @@ import { matchFromKey, searchPlan } from "./search.js";
 export function scopeRows(nodes, query, { strict = false, text = (s) => s, ordinals = false, hideEmpty = false } = {}) {
   const row = (node, ord = false) => {
     const shown = text(node.string ?? "");
-    const parts = hasTask(node.string) ? taskParts(node.string).map((p) => (p.task ? p : { text: text(p.text) })) : null;
+    const parts = hasTask(node.string) ? taskParts(node.string).map((p) => (p.task ? { ...p, status: taskStatus(node.string) } : { text: text(p.text) })) : null;
     return { uid: node.uid, text: shown, parts, empty: !shown.trim() && !parts, ord, heading: node.heading || 0, drillable: Boolean(node.kids?.length), node };
   };
   const kept = hideEmpty ? nodes.filter((node) => text(node.string ?? "").trim() || node.kids?.length) : nodes;

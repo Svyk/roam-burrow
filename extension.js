@@ -1975,9 +1975,19 @@ function taskParts(string) {
   return parts;
 }
 var hasTask = (string) => /\{\{\s*(?:\[\[)?(?:TODO|DONE)\b/.test(String(string ?? ""));
-function checkbox(doc, state) {
+function taskStatus(string) {
+  const m = String(string ?? "").match(/#\[\[task-status\/([^\]]+)\]\]|#task-status\/([^\s\]#,]+)/);
+  const name = (m?.[1] ?? m?.[2] ?? "").trim();
+  if (!name) return null;
+  return { status: name.toUpperCase().replace(/[\s-]+/g, "_"), shape: name.toLowerCase().replace(/[\s_]+/g, "-") };
+}
+function checkbox(doc, state, status = null) {
   const wrap = doc.createElement("span");
   wrap.className = `rm-checkbox rm-${state} burrow-check`;
+  if (status && state === "todo") {
+    wrap.dataset.tsCheckboxStatus = status.status;
+    wrap.dataset.tsCheckboxShape = status.shape;
+  }
   const label = doc.createElement("label");
   label.className = "check-container";
   const input = doc.createElement("input");
@@ -1993,8 +2003,9 @@ function checkbox(doc, state) {
 }
 function withTasks(doc, string, textOf = (s) => s) {
   const fragment = doc.createDocumentFragment();
+  const status = taskStatus(string);
   for (const part of taskParts(string)) {
-    if (part.task) fragment.append(checkbox(doc, part.task));
+    if (part.task) fragment.append(checkbox(doc, part.task, status));
     else fragment.append(textOf(part.text));
   }
   return fragment;
@@ -2024,7 +2035,7 @@ function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const trail = [page.title, ...trailNodes.slice(1).map((n) => text(n.string || ""))];
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
-  const parts = (s) => hasTask(s) ? taskParts(s).map((p) => p.task ? p : { text: text(p.text) }) : null;
+  const parts = (s) => hasTask(s) ? taskParts(s).map((p) => p.task ? { ...p, status: taskStatus(s) } : { text: text(p.text) }) : null;
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
     const { total: total2, kids } = read.window(uid, 0, CHILD_LIMIT);
@@ -2086,7 +2097,7 @@ function createPreview({ doc, win, lifecycle }) {
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
       if (item.parts) {
-        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task) : part.text.trim());
+        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task, part.status) : part.text.trim());
       } else row.textContent = item.text || " ";
       return row;
     });
@@ -2204,7 +2215,7 @@ function createPreview({ doc, win, lifecycle }) {
 function scopeRows(nodes, query, { strict = false, text = (s) => s, ordinals = false, hideEmpty = false } = {}) {
   const row = (node, ord = false) => {
     const shown = text(node.string ?? "");
-    const parts = hasTask(node.string) ? taskParts(node.string).map((p) => p.task ? p : { text: text(p.text) }) : null;
+    const parts = hasTask(node.string) ? taskParts(node.string).map((p) => p.task ? { ...p, status: taskStatus(node.string) } : { text: text(p.text) }) : null;
     return { uid: node.uid, text: shown, parts, empty: !shown.trim() && !parts, ord, heading: node.heading || 0, drillable: Boolean(node.kids?.length), node };
   };
   const kept = hideEmpty ? nodes.filter((node) => text(node.string ?? "").trim() || node.kids?.length) : nodes;
@@ -2305,7 +2316,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
+      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task, part.status) : highlight(part.text.trim(), level.query));
       else if (row.text) text.append(highlight(row.text, level.query));
       else if (row.drillable) {
         item.classList.add("burrow-empty-row");
@@ -2415,28 +2426,30 @@ function isDarkHost(doc = globalThis.document) {
 var DELAY_MS = 450;
 var GAP2 = 6;
 var MAX_WIDTH = 320;
+var MIN_WIDTH = 160;
 function placeTip(el, box, area, ta, view) {
-  const hits = (r, x2, y) => r && x2 < r.right && x2 + box.width > r.left && y < r.bottom && y + box.height > r.top;
-  const free = (x2, y) => !hits(area, x2, y) && !hits(ta, x2, y);
-  const clampY = (y) => Math.max(0, Math.min(view.height - box.height, y));
+  const hits = (r, x2, y2, w = box.width) => r && x2 < r.right && x2 + w > r.left && y2 < r.bottom && y2 + box.height > r.top;
+  const clampY = (y2) => Math.max(0, Math.min(view.height - box.height, y2));
   const clampX = (x2) => Math.max(4, Math.min(view.width - box.width - 4, x2));
-  if (area) {
-    const y = clampY(el.top);
-    const right = area.right + GAP2;
-    if (right + box.width <= view.width - 4 && free(right, y)) return { left: right, top: y };
-    const left = area.left - GAP2 - box.width;
-    if (left >= 4 && free(left, y)) return { left, top: y };
+  if (!area) {
     const x2 = clampX(el.left);
-    const below = area.bottom + GAP2;
-    if (below + box.height <= view.height && free(x2, below)) return { left: x2, top: below };
-    const above = area.top - GAP2 - box.height;
-    if (above >= 0 && free(x2, above)) return { left: x2, top: above };
+    let top = el.bottom + GAP2;
+    if (top + box.height > view.height || hits(ta, x2, top)) top = el.top - GAP2 - box.height;
+    return top >= 0 && !hits(ta, x2, top) ? { left: x2, top } : null;
   }
+  const y = clampY(el.top);
+  const right = view.width - 4 - (area.right + GAP2);
+  if (right >= box.width) return { left: area.right + GAP2, top: y };
+  const left = area.left - GAP2 - 4;
+  if (left >= box.width) return { left: area.left - GAP2 - box.width, top: y };
   const x = clampX(el.left);
-  let top = el.bottom + GAP2;
-  if (top + box.height > view.height || hits(ta, x, top)) top = el.top - GAP2 - box.height;
-  if (top < 0 || hits(ta, x, top)) top = Math.min(view.height - box.height, el.bottom + GAP2);
-  return { left: x, top: Math.max(0, top) };
+  const below = area.bottom + GAP2;
+  if (below + box.height <= view.height && !hits(ta, x, below)) return { left: x, top: below };
+  const above = Math.min(area.top, ta?.top ?? area.top) - GAP2 - box.height;
+  if (above >= 0 && !hits(area, x, above)) return { left: x, top: above };
+  const side = Math.max(right, left);
+  if (side >= MIN_WIDTH) return right >= left ? { left: area.right + GAP2, top: y, width: side } : { left: 4, top: y, width: side };
+  return null;
 }
 function createTips({ doc, win, lifecycle, enabled, avoid = () => null, around = () => null }) {
   const node = doc.createElement("div");
@@ -2475,16 +2488,29 @@ function createTips({ doc, win, lifecycle, enabled, avoid = () => null, around =
     for (const name of ["--burrow-bg", "--burrow-fg"]) node.style.setProperty(name, styleFrom.style.getPropertyValue(name) || "");
     node.style.zIndex = String((Number.parseInt(styleFrom.style.zIndex, 10) || 30) + 2);
     node.style.maxWidth = `${MAX_WIDTH}px`;
+    node.style.width = "";
     node.style.left = "0px";
     node.style.top = "0px";
     node.hidden = false;
-    const box = node.getBoundingClientRect();
-    const at = placeTip(rect, box, around(), avoid(), { width: win.innerWidth, height: win.innerHeight });
+    const view = { width: win.innerWidth, height: win.innerHeight };
+    const at = placeTip(rect, node.getBoundingClientRect(), around(), avoid(), view);
+    if (!at) {
+      hide();
+      return;
+    }
+    if (at.width) {
+      node.style.width = `${Math.floor(at.width)}px`;
+      at.top = Math.max(0, Math.min(view.height - node.getBoundingClientRect().height, at.top));
+    }
     node.style.left = `${Math.round(at.left)}px`;
     node.style.top = `${Math.round(at.top)}px`;
   }
+  let lastAt = null;
   function attach(container, resolve) {
-    lifecycle.event(container, "mouseover", (event) => {
+    lifecycle.event(container, "mousemove", (event) => {
+      const at = `${event.clientX},${event.clientY}`;
+      if (at === lastAt) return;
+      lastAt = at;
       if (!enabled()) {
         if (anchor) hide();
         return;

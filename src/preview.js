@@ -4,7 +4,7 @@
 // popover where Roam's preview would open. Text only: no Roam blocks are
 // rendered, so a click cannot open an editor. TODO/DONE show as Roam's
 // read-only checkboxes (src/tasks.js).
-import { checkbox, hasTask, taskParts } from "./tasks.js";
+import { checkbox, hasTask, taskParts, taskStatus } from "./tasks.js";
 
 const SIBLING_WINDOW = 24;
 const CHILD_LIMIT = 16;
@@ -35,7 +35,7 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
   // A line with a task macro keeps it as a part, so it draws as a checkbox.
-  const parts = (s) => (hasTask(s) ? taskParts(s).map((p) => (p.task ? p : { text: text(p.text) })) : null);
+  const parts = (s) => (hasTask(s) ? taskParts(s).map((p) => (p.task ? { ...p, status: taskStatus(s) } : { text: text(p.text) })) : null);
   // kids === null: has children not read yet (or not known).
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
@@ -104,7 +104,7 @@ export function createPreview({ doc, win, lifecycle }) {
       if (item.heading) row.classList.add(`burrow-h${item.heading}`);
       if (item.target) row.classList.add("burrow-target");
       if (item.parts) {
-        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task) : part.text.trim());
+        for (const part of item.parts) row.append(part.task ? checkbox(doc, part.task, part.status) : part.text.trim());
       } else row.textContent = item.text || " ";
       return row;
     });

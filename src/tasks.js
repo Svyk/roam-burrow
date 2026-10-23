@@ -19,12 +19,26 @@ export function taskParts(string) {
 
 export const hasTask = (string) => /\{\{\s*(?:\[\[)?(?:TODO|DONE)\b/.test(String(string ?? ""));
 
+// Better Tasks' status tag (`#[[task-status/In Review]]`), as the attributes
+// its stylesheet paints a block's checkbox by: { status: "IN_REVIEW", shape:
+// "in-review" }, or null.
+export function taskStatus(string) {
+  const m = String(string ?? "").match(/#\[\[task-status\/([^\]]+)\]\]|#task-status\/([^\s\]#,]+)/);
+  const name = (m?.[1] ?? m?.[2] ?? "").trim();
+  if (!name) return null;
+  return { status: name.toUpperCase().replace(/[\s-]+/g, "_"), shape: name.toLowerCase().replace(/[\s_]+/g, "-") };
+}
+
 // Roam's own row markup (`.rm-checkbox .check-container .checkmark`), so the
 // theme styles it as in Roam's list; disabled, and the pointer passes through
 // to the row (a click picks the row, it never toggles the task).
-export function checkbox(doc, state) {
+export function checkbox(doc, state, status = null) {
   const wrap = doc.createElement("span");
   wrap.className = `rm-checkbox rm-${state} burrow-check`;
+  if (status && state === "todo") {
+    wrap.dataset.tsCheckboxStatus = status.status;
+    wrap.dataset.tsCheckboxShape = status.shape;
+  }
   const label = doc.createElement("label");
   label.className = "check-container";
   const input = doc.createElement("input");
@@ -43,8 +57,9 @@ export function checkbox(doc, state) {
 // into a node or string (highlighting, markup stripping).
 export function withTasks(doc, string, textOf = (s) => s) {
   const fragment = doc.createDocumentFragment();
+  const status = taskStatus(string);
   for (const part of taskParts(string)) {
-    if (part.task) fragment.append(checkbox(doc, part.task));
+    if (part.task) fragment.append(checkbox(doc, part.task, status));
     else fragment.append(textOf(part.text));
   }
   return fragment;

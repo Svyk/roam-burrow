@@ -85,7 +85,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
+      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task, part.status) : highlight(part.text.trim(), level.query));
       else if (row.text) text.append(highlight(row.text, level.query));
       else if (row.drillable) {
         item.classList.add("burrow-empty-row");

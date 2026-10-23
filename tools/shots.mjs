@@ -17,11 +17,12 @@ import { parkInstalled, unparkInstalled } from "./installed.mjs";
 import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
 
 const GRAPHS = {
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr" },
+  // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr" },
 };
-// 0.5.0 help switches; the first-run line is marked seen except in its own shot.
-const HELP = ["helpTips", "helpSheet", "helpNudge"];
+// 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
+const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
@@ -77,6 +78,19 @@ const SCENARIOS = [
   { id: "29-tip-help-button", query: config.alias, keys: ["hover:.burrow-hints .burrow-help-button", "wait:700"] },
   { id: "30-prompt-refused", query: chipsQuery, keys: ["alt+a", "type:issue #42", "Enter"] },
   { id: "31-tip-scope-row", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "hover:.burrow-scope-list .burrow-row", "wait:700"], loose: true },
+  // 0.6.0: (( rows in Roam's list column, tasks, where the block lives, up and down the outline.
+  { id: "32-block-rows", query: `((${config.block}`, keys: ["preview-closed"] },
+  { id: "33-block-rows-preview", query: `((${config.block}`, keys: ["preview-open", "wait:500"] },
+  { id: "34-roam-row-highlighted", query: `((${config.block}`, keys: ["preview-open", "ArrowDown", "ArrowDown", "ArrowDown", "wait:400"] },
+  { id: "35-tip-block-row", query: `((${config.block}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "36-tasks", query: "((zebra task", keys: ["preview-open", "wait:500"] },
+  { id: "37-context-line", query: "((never grok", keys: ["preview-closed"] },
+  { id: "38-outline-up", query: "((never grok", keys: ["preview-open", "shift+Tab", "wait:400"] },
+  { id: "39-outline-up-twice", query: "((never grok", keys: ["preview-open", "shift+Tab", "shift+Tab", "wait:400"] },
+  { id: "40-tab-block-children", query: "((never grok", keys: ["preview-open", "Tab", "wait:400"] },
+  { id: "41-preview-scrolled", query: "((many 50", keys: ["preview-open", "wait:600"] },
+  { id: "42-caret-inside-token", query: `((${config.ref}`, keys: ["preview-closed", "ArrowLeft", "wait:300"] },
+  { id: "43-key-list-f1", query: `((${config.ref}`, keys: ["F1"] },
 ];
 
 const c = await connect(title);
@@ -179,6 +193,7 @@ async function runKeys(keys) {
   for (const k of keys) {
     const modified = k.match(/^(alt|shift)\+(.+)$/);
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
+    else if (k === "preview-closed") { if (await isExpanded()) await ctrlO(); }
     else if (k === "alt+slash") await altSlash();
     else if (k.startsWith("hover:")) {
       const p = await point(k.slice(6), null);

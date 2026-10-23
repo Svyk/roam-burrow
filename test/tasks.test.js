@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { hasTask, taskParts } from "../src/tasks.js";
+import { hasTask, taskParts, taskStatus } from "../src/tasks.js";
 
 test("TODO and DONE macros become task parts where they sit; the rest stays text", () => {
   assert.deepEqual(taskParts("{{[[DONE]]}} Watch [[Agents of S.H.I.E.L.D.]] S6"), [{ task: "done" }, { text: " Watch [[Agents of S.H.I.E.L.D.]] S6" }]);
@@ -22,4 +22,10 @@ test("hasTask finds a task macro and nothing else", () => {
   assert.equal(hasTask("{{todo-progress-bar}}"), false);
   assert.equal(hasTask("[[TODO]] page link"), false);
   assert.equal(hasTask(null), false);
+});
+
+test("taskStatus reads Better Tasks' status tag as its stylesheet's attributes", () => {
+  assert.deepEqual(taskStatus("{{[[TODO]]}} x #[[task-status/In Review]]"), { status: "IN_REVIEW", shape: "in-review" });
+  assert.deepEqual(taskStatus("{{[[TODO]]}} x #task-status/Active"), { status: "ACTIVE", shape: "active" });
+  assert.equal(taskStatus("{{[[TODO]]}} plain"), null);
 });

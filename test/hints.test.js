@@ -117,7 +117,7 @@ test("F1 opens the key list on any layout; ⌥/ as before", () => {
   assert.equal(isHelpKey(key("/")), false, "a plain / types");
 });
 
-test("hover tips go beside the picker, then above or below it, never over its text or the edited text", async () => {
+test("hover tips go beside the picker, then under it, then above it and the text; never over its text", async () => {
   const { placeTip } = await import("../src/tips.js");
   const view = { width: 1600, height: 900 };
   const box = { width: 200, height: 60 };
@@ -128,8 +128,14 @@ test("hover tips go beside the picker, then above or below it, never over its te
   const wide = { left: 300, top: 200, right: 1500, bottom: 500 };
   assert.deepEqual(placeTip(row, box, wide, ta, view), { left: 94, top: 240 }, "no room right: left of it");
   const full = { left: 50, top: 200, right: 1550, bottom: 500 };
-  assert.deepEqual(placeTip(row, box, full, ta, view), { left: 610, top: 506 }, "no room either side: below it");
-  const low = { left: 50, top: 300, right: 1550, bottom: 880 };
-  const at = placeTip({ ...row, top: 320, bottom: 353 }, box, low, { left: 600, top: 120, right: 1200, bottom: 140 }, view);
-  assert.deepEqual(at, { left: 610, top: 234 }, "and above it when below has no room, off the text");
+  assert.deepEqual(placeTip(row, box, full, ta, view), { left: 610, top: 506 }, "no room either side: under it");
+  // Notes' window (1095 px) with the preview open: under the picker is off-screen, above it the text.
+  const low = { left: 150, top: 400, right: 950, bottom: 880 };
+  const text = { left: 150, top: 370, right: 1000, bottom: 392 };
+  assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, box, low, text, { width: 1095, height: 900 }), { left: 610, top: 304 }, "above the picker and the edited text");
+  // Nothing free around it but a narrow side: a narrower tip there.
+  const tall = { left: 120, top: 10, right: 950, bottom: 890 };
+  const big = { width: 400, height: 60 };
+  assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, big, tall, null, { width: 1300, height: 900 }), { left: 956, top: 420, width: 340 }, "a 340 px side");
+  assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, big, tall, null, { width: 1095, height: 900 }), null, "no side of 160 px: no tip");
 });
