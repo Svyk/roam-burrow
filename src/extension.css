@@ -172,6 +172,8 @@
   opacity: 0.45;
 }
 
+.burrow-node[hidden] { display: none; }
+
 .burrow-node.burrow-more::before { content: none; }
 
 /* A task line in the preview: Roam's checkbox before the text, drawn on the

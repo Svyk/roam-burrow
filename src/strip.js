@@ -44,9 +44,11 @@ const POPUP_WAIT_FRAMES = 12;
 const PREVIEW_SLICE_MS = 3;
 // Reads that took longer than this leave the draw to the next slice.
 const PREVIEW_DRAW_ALONE_MS = 0.5;
-// The row preview draws this many lines in its draw slice (the highlighted
-// block sits in the first 13, its children follow), the rest in one more.
-const PREVIEW_FIRST_LINES = 40;
+// The row preview draws this many lines per idle slice: the first ones hold
+// the highlighted block (in the first 13) and its children, what the pane
+// shows; the rest follow in further slices. A line inserted (or removed)
+// costs about 0.07 ms in svy.
+const PREVIEW_FIRST_LINES = 24;
 const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 
 // Keyboard ownership (spec §4):
@@ -485,8 +487,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       rowPreviewId = null;
       if (previewTarget()?.key !== row.key) return;
       const t0 = performance.now();
-      preview.more();
+      preview.more(PREVIEW_FIRST_LINES);
       previewSample("rest", performance.now() - t0);
+      if (preview.pending) scheduleRowPreviewRest(row);
     };
     rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60);
   }

@@ -86,8 +86,10 @@ export function createPreview({ doc, win, lifecycle }) {
   // One element per line (the bullet is CSS): in svy's theme every node a
   // render adds costs style work, so the 0.4.0 three spans per line were
   // most of a draw.
-  // Lines of the shown model not drawn yet (render with a line limit).
+  // Lines of the shown model not drawn yet (render with a line limit), and
+  // where they go.
   let rest = null;
+  let restAt = 0;
   function render(model, lines = Infinity) {
     // The pane says what it is (src/extension.css draws "Preview" before the trail).
     trailNode.replaceChildren();
@@ -95,26 +97,43 @@ export function createPreview({ doc, win, lifecycle }) {
       if (i) trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-sep", textContent: " › " }));
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
-    outline.replaceChildren(...lineNodes(model.items.slice(0, lines)));
+    const first = model.items.slice(0, lines);
+    writeLines(first, 0);
     rest = model.items.length > lines ? model.items.slice(lines) : null;
+    restAt = first.length;
+    // Lines of the last outline past this one's end go; those this one draws
+    // later wait hidden.
+    const kids = outline.children;
+    while (kids.length > model.items.length) kids[kids.length - 1].remove();
+    for (let i = first.length; i < kids.length; i++) kids[i].hidden = true;
   }
 
-  function lineNodes(items) {
-    return items.map((item) => {
-      const row = doc.createElement("div");
-      row.className = "burrow-node";
-      row.style.setProperty("--burrow-depth", String(item.depth));
-      if (item.more != null) {
-        row.classList.add("burrow-more");
-        row.textContent = `+${item.more} more`;
-        return row;
+  // Lines are written into the outline's existing line nodes (in svy a new
+  // node costs about 0.06 ms to insert, a rewrite next to nothing); only
+  // lines past the last outline's count are made.
+  function writeLines(items, from) {
+    const kids = outline.children;
+    const made = [];
+    items.forEach((item, i) => {
+      const row = kids[from + i] || doc.createElement("div");
+      let cls = "burrow-node";
+      if (item.more != null) cls += " burrow-more";
+      else {
+        if (item.heading) cls += ` burrow-h${item.heading}`;
+        if (item.target) cls += " burrow-target";
+        if (item.task) cls += ` burrow-task-${item.task}`;
       }
-      if (item.heading) row.classList.add(`burrow-h${item.heading}`);
-      if (item.target) row.classList.add("burrow-target");
-      if (item.task) row.classList.add(`burrow-task-${item.task}`);
-      row.textContent = item.text || " ";
-      return row;
+      if (row.className !== cls) row.className = cls;
+      const depth = String(item.depth);
+      if (row.style.getPropertyValue("--burrow-depth") !== depth) row.style.setProperty("--burrow-depth", depth);
+      const text = item.more != null ? `+${item.more} more` : item.text || " ";
+      if (row.childNodes.length === 1 && row.firstChild.nodeType === 3) {
+        if (row.firstChild.data !== text) row.firstChild.data = text;
+      } else row.textContent = text;
+      if (row.hidden) row.hidden = false;
+      if (!row.parentNode) made.push(row);
     });
+    if (made.length) outline.append(...made);
   }
 
   // Docked over Roam's preview: the rect is read before the pane is written,
@@ -209,13 +228,15 @@ export function createPreview({ doc, win, lifecycle }) {
         onFrame?.(performance.now() - t0);
       });
     },
-    // Lines show() left for later, drawn now (appended: the scroll stays).
+    // Lines show() left for later, `lines` more of them drawn now (appended:
+    // the scroll stays).
     get pending() { return Boolean(rest) && !pane.hidden; },
-    more() {
+    more(lines = Infinity) {
       if (!rest || pane.hidden) return;
-      const items = rest;
-      rest = null;
-      outline.append(...lineNodes(items));
+      const items = rest.slice(0, lines);
+      rest = rest.length > lines ? rest.slice(lines) : null;
+      writeLines(items, restAt);
+      restAt += items.length;
     },
     hide() {
       cancelScroll();
