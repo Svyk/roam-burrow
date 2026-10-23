@@ -361,7 +361,10 @@ const CASES = [
   // Svy's 0.5.0 test (2026-10-22): ← into the token, ↑, Enter. Burrow gives the
   // popup to Roam at once (no rows of its own for a caret inside the token), so
   // ↑ and Enter are Roam's, on the row Roam shows highlighted: as without Burrow.
-  { name: "caret back into the token, ↑, Enter (Svy's footnote case)", keys: ["ArrowLeft", "snap", "ArrowUp", "snap", "Enter"],
+  // Roam re-queries a moment after the caret moves; an Enter before that makes
+  // its footnote of the older text (seen in notes with Burrow absent), so each
+  // arm waits for it.
+  { name: "caret back into the token, ↑, Enter (Svy's footnote case)", keys: ["ArrowLeft", "wait:500", "snap", "ArrowUp", "wait:300", "snap", "Enter"],
     check: ({ snaps: [a, b] }) => (a?.rows.length || b?.rows.length ? `Burrow rows after ← ${JSON.stringify(a?.rows)} / after ↑ ${JSON.stringify(b?.rows)}` : null) },
   // Back at the end of the token, Burrow ranks again and its original is selected.
   { name: "caret back to the end of the token brings Burrow's rows back", keys: ["ArrowLeft", "ArrowRight", "wait:250", "snap", "Enter"], on: committed,
