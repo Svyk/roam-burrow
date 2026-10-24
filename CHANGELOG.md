@@ -16,6 +16,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 - Live gates: six key-list cases (Roam's `((` row and `[[` row under the list, Burrow's row, the drill panel, Tab after F1, Shift+Enter / ⌘Enter / Shift+Tab), each also checking that no block was created anywhere in the graph; all six fail on 0.6.0. The gates' key runner takes `ctrl+` and `meta+` keys, which type nothing.
 - `--theme light|dark` works in a window whose svy-theme Appearance is fixed (notes is set to Dark): the gate does in memory what svy-theme's own switch does for the other mode (`bp3-dark` / `bp3-light` and `data-bp-appearance` on `<html>`, the topbar toggle's icon and label, which Better Tasks follows), writes no setting, and puts it all back at the end; if the run dies, the page puts it back by itself 20 s later. So the text-box gate now runs in all four combinations, svy and notes in light and dark.
+- Final gate run (2026-10-24, this build): `gate-all --theme dark` 8 of 8 PASS, svy and notes live in light PASS; text boxes 26 states each, 857 boxes in svy and 873 in notes, light and dark, none intersecting. Per key p95: svy `((` 2.6–2.7 ms, 2.5–2.7 ms with Roam's preview open (preview slices p95 1.3–1.4 ms, max 3.4–3.5 ms), drill-down 0.7–1.1 ms; notes 1.5–1.6 ms, drill-down 0.6 ms; input-to-paint p50 −0.3 to +0.8 ms against Burrow absent; the due rebuild 0 times while typing, 2.3–3.8 s after the popup closed.
 
 ## [0.6.0] - 2026-10-22
 

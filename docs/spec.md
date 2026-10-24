@@ -354,6 +354,8 @@ Where this section differs from §14 or §15, it wins.
 
 **Leftovers.** The Key hints setting text names the shipped labels; a unit test builds the alias and block rows' hints with `pickerHints` and checks the text names every label. §15's rebuild delay reads 2.1–4.0 s. BRW-8's report had four ⇧⇥ screenshots (dark and light, once and twice) with the pre-review drill hint line (`⇥/> its children · ⇧⇥ up · ^O preview · ↵ insert · esc results`); they are retaken with `tools/shots.mjs` (`--only 38,39`) on the shipped line.
 
+**Final run (2026-10-24, the 0.6.1 build).** `gate-all --theme dark`: 8 of 8 PASS in 2,396 s. Live in light: svy PASS (one earlier run lost the Roam-alone arm of the eight Tab cases to "focus failed" for about a minute, nothing of Burrow's loaded then; the cases passed again alone and in a full rerun), notes PASS with the switch above. Every live run: 107 byte-for-byte case runs, the six key-list cases, text boxes in 26 states (svy 857 boxes, notes 873, light and dark, none intersecting). Per key p95: svy `((` 2.6–2.7 ms, with Roam's preview open 2.5–2.7 ms (preview slices p95 1.3–1.4 ms, max 3.4–3.5 ms), drill-down 0.7–1.1 ms; notes 1.5–1.6 ms, drill-down 0.6 ms. Input-to-paint median p50 delta −0.3 to +0.8 ms against Burrow absent. Cold preview of `[[plexus` slice p95 3.1 ms, max 3.2 ms; context line reads p95 0.3–1.0 ms; alias refresh tasks p95 at most 1.3 ms; the due rebuild ran 0 times while typing and 2.3–3.8 s after the popup closed.
+
 ## Also noticed
 
 - `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
