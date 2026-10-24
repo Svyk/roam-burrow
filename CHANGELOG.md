@@ -4,6 +4,19 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-24
+
+### Fixed
+
+- **Enter under the key list ran a row you could not see** (the same class as the 0.5.0 footnote). With the key list (⌥/, F1 or the `?`) open over Roam's `((` or `[[` popover, Enter closed the list and went on: Roam ran its highlighted row, hidden under the list (in svy, `((ant man` made a new block), or Burrow inserted its own row or the drill panel's. Now Enter and Tab, with any modifier, only close the list; Esc, ⌥/ and F1 close it as before; any other key closes it and goes on. Checked in svy with Roam's list open: only plain Enter and Tab pick a row there (Shift+Enter types a newline, ⌘Enter toggles TODO, Alt or Ctrl with Tab does nothing), so the drill panel, the alias field and a selected Burrow row already kept every key that picks; the key list was the one overlay that let it through.
+- The **Key hints** setting in Settings → Burrow names the labels 0.6.0 shows (`⇥ blocks on this page`, `⇥ children of this block`, `⇧⇥ parent`; in the drill panel `↵ insert · ⇥/> children · ⇧⇥ up · esc results · ⌃O preview`), not 0.5.0's `⇥ drill` and `⇥/> drill · ⇧⇥ back · ⌃O preview`. The **Key list** setting says Enter and Tab only close the list.
+- `docs/spec.md` §15 gives the due rebuild's delay as 2.1–4.0 s, as the final run and this changelog.
+
+### Added
+
+- Live gates: six key-list cases (Roam's `((` row and `[[` row under the list, Burrow's row, the drill panel, Tab after F1, Shift+Enter / ⌘Enter / Shift+Tab), each also checking that no block was created anywhere in the graph; all six fail on 0.6.0. The gates' key runner takes `ctrl+` and `meta+` keys, which type nothing.
+- `--theme light|dark` works in a window whose svy-theme Appearance is fixed (notes is set to Dark): the gate does in memory what svy-theme's own switch does for the other mode (`bp3-dark` / `bp3-light` and `data-bp-appearance` on `<html>`, the topbar toggle's icon and label, which Better Tasks follows), writes no setting, and puts it all back at the end; if the run dies, the page puts it back by itself 20 s later. So the text-box gate now runs in all four combinations, svy and notes in light and dark.
+
 ## [0.6.0] - 2026-10-22
 
 ### Fixed

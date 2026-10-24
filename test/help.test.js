@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { helpGroups, helpKeyAction } from "../src/help.js";
-import { DEFAULTS } from "../src/settings.js";
+import { DEFAULTS, createSettingsPanel } from "../src/settings.js";
 
 const reader = (over = {}) => (id) => (id in over ? over[id] : DEFAULTS[id]);
 const flat = (groups) => groups.flatMap((g) => g.items.map(([k, what]) => `${g.title}: ${k} ${what}`));
@@ -62,4 +62,6 @@ test("with the key list open, Enter and Tab only close it, whatever the modifier
   // Anything else closes the list and goes on: typing types, arrows move.
   for (const k of ["x", "ArrowDown", "ArrowUp", "Backspace"]) assert.equal(helpKeyAction(key(k)), "pass", k);
   assert.equal(helpKeyAction(key("Escape", { shiftKey: true })), "pass");
+  const setting = createSettingsPanel().settings.find((s) => s.id === "helpSheet").description;
+  assert.match(setting, /Enter or Tab only closes it/);
 });
