@@ -66,7 +66,7 @@ const theme = flagValue("--theme");
 if (theme && theme !== "light" && theme !== "dark") throw new Error("--theme must be light or dark");
 const root = new URL("..", import.meta.url);
 const c = await connect(title);
-if (theme) await c.setTheme(theme);
+const themeSet = theme ? await c.setTheme(theme) : null;
 
 // ---- page-side helpers ----
 
@@ -1712,7 +1712,7 @@ async function runAbove() {
 
 // ---- main ----
 
-const report = { window: c.page.title, config: configName, theme, arms: {}, failures: [], lines: [] };
+const report = { window: c.page.title, config: configName, theme, themeSet, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
 const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
 const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES];
@@ -1736,7 +1736,7 @@ const cleanup = () => (cleaning ||= (async () => {
   } finally {
     try {
       report.restored = await unparkInstalled(c);
-      if (theme) await c.setTheme(null);
+      if (theme) report.themeRestored = await c.setTheme(null);
     } catch (error) {
       console.error("cleanup:", error);
     }
@@ -1976,17 +1976,21 @@ try {
   await cleanup();
 }
 if (report.installed.parked && !report.restored?.restored) report.failures.push(`installed Burrow ${report.installed.version} not restored`);
+if (themeSet?.flippedFrom && !report.themeRestored?.restored) report.failures.push(`svy-theme's ${themeSet.flippedFrom} classes not put back`);
 const label = `${configName}${theme ? ` (${theme})` : ""}`;
+const themeLine = themeSet ? `  theme ${theme}: ${themeSet.flippedFrom ? `svy-theme's fixed ${themeSet.flippedFrom} switched for the run (<html> classes, setting untouched), put back: ${report.themeRestored?.restored ? "yes" : "no"}` : "emulated prefers-color-scheme"}; body ${themeSet.body}` : null;
 if (flags.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else if (only) {
   console.log(`live gate ${label} --only ${JSON.stringify(only)}: ${report.failures.length ? "FAIL" : "PASS"}`);
+  if (themeLine) console.log(themeLine);
   console.log(`  installed Burrow: ${report.installed.parked ? `parked ${report.installed.version} for the run, restored: ${report.restored?.restored ? "yes" : "no"}` : "none in this window"}`);
   for (const r of report.only.runs) console.log(armLine(r.arm, r));
   for (const f of report.failures) console.log(`  FAIL ${f}`);
 } else if (!only) {
   const caseCount = Object.values(report.arms).reduce((n, a) => n + Object.keys(a).length, 0);
   console.log(`live gate ${label}: ${report.failures.length ? "FAIL" : "PASS"}`);
+  if (themeLine) console.log(themeLine);
   console.log(`  installed Burrow: ${report.installed.parked ? `parked ${report.installed.version} for the run, restored: ${report.restored?.restored ? "yes" : "no"}` : "none in this window"}`);
   console.log(`  acceptance ${q} -> ((${config.ref.uid})) first and selected: ${report.acceptance?.pass ? "yes" : "no"}`);
   console.log(`  byte-for-byte: ${caseCount} case runs (on / off / gone / drilloff), ${DRILL_CASES.length} of them drill cases, ${PASS_CASES.length} pass-through; retyped after a Roam key drop: ${retypes}`);

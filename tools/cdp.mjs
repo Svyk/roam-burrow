@@ -75,15 +75,77 @@ export async function connect(titlePart) {
     await call("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
   };
   const wheel = (x, y, deltaX, deltaY) => call("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX, deltaY });
-  // The override lives only as long as this connection; svy's theme follows it.
+  // The media override lives only as long as this connection; svy's theme
+  // (svy-theme on Auto) follows it. A window whose svy-theme Appearance is
+  // fixed (notes: Dark) ignores it, so it gets what svy-theme's own switch
+  // (applyAppearance) sets for the other mode: bp3-dark / bp3-light and
+  // data-bp-appearance on <html>, and the topbar toggle's icon, label and
+  // title, which Better Tasks reads for its own bt-theme class. In memory
+  // only: the setting is not written. setTheme(null) puts it all back, and so
+  // does the page by itself 20 s after this connection's last beat (a run
+  // that crashed or was killed).
+  let beat = null;
+  const stopBeat = () => { if (beat) clearInterval(beat); beat = null; };
   const setTheme = async (mode) => {
     await call("Emulation.setEmulatedMedia", { features: mode ? [{ name: "prefers-color-scheme", value: mode }] : [] });
-    if (!mode) return;
+    if (!mode) {
+      stopBeat();
+      const restored = await evaluate(() => { const flip = window.__burrowThemeFlip; if (flip) flip.restore(); return { restored: Boolean(flip) }; });
+      // Better Tasks syncs its own class 250 ms after a theme mutation.
+      if (restored.restored) await sleep(400);
+      return restored;
+    }
     for (let t0 = Date.now(); Date.now() - t0 < 4000;) {
       if (await evaluate(() => matchMedia("(prefers-color-scheme: dark)").matches) === (mode === "dark")) break;
       await sleep(50);
     }
+    const flipped = await evaluate((mode) => {
+      const root = document.documentElement;
+      const old = window.__burrowThemeFlip;
+      if (old && old.mode !== mode) old.restore();
+      if (window.__burrowThemeFlip) { window.__burrowThemeFlip.beat = Date.now(); return window.__burrowThemeFlip.from; }
+      const fixed = root.dataset.bpAppearance;
+      if ((fixed !== "dark" && fixed !== "light") || fixed === mode) return null;
+      const icon = document.querySelector(".blueprint-toggle-icon");
+      const label = document.querySelector(".blueprint-dm-toggle-label");
+      const wrap = document.querySelector(".blueprint-dm-toggle-wrap");
+      const ICONS = ["bp3-icon-clean", "bp3-icon-moon", "bp3-icon-flash"];
+      const flip = {
+        mode, from: fixed, dark: root.classList.contains("bp3-dark"), light: root.classList.contains("bp3-light"), beat: Date.now(),
+        icons: ICONS.filter((c) => icon?.classList.contains(c)), label: label?.textContent, title: wrap?.getAttribute("title"), aria: wrap?.getAttribute("aria-label"),
+      };
+      const toggle = (icons, text, title, aria) => {
+        if (icon) { icon.classList.remove(...ICONS); icon.classList.add(...icons); }
+        if (label && text != null) label.textContent = text;
+        if (wrap && title != null) wrap.setAttribute("title", title);
+        if (wrap && aria != null) wrap.setAttribute("aria-label", aria);
+      };
+      flip.restore = () => {
+        clearInterval(flip.timer);
+        root.classList.toggle("bp3-dark", flip.dark);
+        root.classList.toggle("bp3-light", flip.light);
+        root.dataset.bpAppearance = flip.from;
+        toggle(flip.icons, flip.label, flip.title, flip.aria);
+        window.__burrowThemeFlip = null;
+      };
+      flip.timer = setInterval(() => { if (Date.now() - flip.beat > 20000) flip.restore(); }, 2000);
+      root.classList.toggle("bp3-dark", mode === "dark");
+      root.classList.toggle("bp3-light", mode === "light");
+      root.dataset.bpAppearance = mode;
+      const name = mode === "dark" ? "Dark" : "Light";
+      toggle([mode === "dark" ? "bp3-icon-moon" : "bp3-icon-flash"], name, `Appearance: ${name}`, `Appearance: ${name}`);
+      window.__burrowThemeFlip = flip;
+      return fixed;
+    }, mode);
+    if (flipped && !beat) {
+      beat = setInterval(() => {
+        call("Runtime.evaluate", { expression: "window.__burrowThemeFlip && (window.__burrowThemeFlip.beat = Date.now())" }).catch(() => {});
+      }, 3000);
+      beat.unref?.();
+    }
     await sleep(600);
+    const body = await evaluate(() => getComputedStyle(document.body).backgroundColor);
+    return { mode, flippedFrom: flipped, body };
   };
   // Page.captureScreenshot clips are in unzoomed pixels; Roam Desktop runs zoomed.
   const screenshot = async (rect) => {
@@ -95,7 +157,7 @@ export async function connect(titlePart) {
     const result = await call("Page.captureScreenshot", params);
     return Buffer.from(result.data, "base64");
   };
-  const close = () => socket.close();
+  const close = () => { stopBeat(); socket.close(); };
   return { page, call, evaluate, key, type, typed: () => typed, click, wheel, setTheme, screenshot, close };
 }
 
