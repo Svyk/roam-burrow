@@ -63,14 +63,14 @@ test("a second load disposes the previous runtime before registering again", asy
 
 test("every feature has its own switch in the settings panel", () => {
   const ids = createSettingsPanel().settings.filter((s) => s.action.type === "switch").map((s) => s.id);
-  assert.deepEqual(ids.sort(), ["aliasChips", "aliasExpand", "aliasInline", "aliasPages", "aliasPreselect", "betterMatch", "drill", "drillPreview", "aliasCreate", "aliasDelete", "drillCap", "drillEmpty", "drillOrdinals", "helpNudge", "helpSheet", "helpTips", "keyHints", "pageBoost", "paneLayout", "perfHud", "pickMemory", "refPreselect", "refRanking", "refSearch", "refSearchHotkey", "rowPreview", "tabDrill"].sort());
+  assert.deepEqual(ids.sort(), ["aliasChips", "aliasExpand", "aliasInline", "aliasPages", "aliasPreselect", "betterMatch", "drill", "drillPreview", "aliasCreate", "aliasDelete", "drillCap", "drillEmpty", "drillOrdinals", "helpNudge", "helpSheet", "helpTips", "keyHints", "pageBoost", "paneLayout", "perfHud", "pickMemory", "refContext", "refOutline", "refPreselect", "refRanking", "refSearch", "refSearchHotkey", "rowPreview", "tabDrill"].sort());
   assert.equal(DEFAULTS.refPreselect, true);
   assert.equal(DEFAULTS.pickMemory, false);
 });
 
-test("0.5.0 defaults: writes and the hotkey are off, the help switches on, the tip not yet seen", () => {
-  assert.equal(VERSION, "0.5.0");
-  for (const id of ["rowPreview", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "helpTips", "helpSheet", "helpNudge"]) assert.equal(DEFAULTS[id], true, id);
+test("0.6.0 defaults: writes and the hotkey are off, the help and block navigation switches on, the tip not yet seen", () => {
+  assert.equal(VERSION, "0.6.0");
+  for (const id of ["rowPreview", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"]) assert.equal(DEFAULTS[id], true, id);
   for (const id of ["aliasCreate", "aliasDelete", "refSearchHotkey", "helpNudgeSeen"]) assert.equal(DEFAULTS[id], false, id);
   // The seen flag is stored, not shown as a switch.
   assert.equal(createSettingsPanel().settings.some((s) => s.id === "helpNudgeSeen"), false);

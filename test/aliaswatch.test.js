@@ -85,8 +85,9 @@ test("an alias edited outside Burrow reaches the index through the watch, withou
   const indexes = createIndexes({ api, perf: createPerf(), setting: (id) => settings[id], idle: (fn) => fn(), lifecycle, win });
   await indexes.build();
   const queries = api.calls.q;
-  assert.deepEqual(indexes.watched, ["Aliases"]);
-  assert.equal(api.watches.length, 1);
+  // Every spelling of the keyword is watched, whether its page exists or not.
+  assert.deepEqual(indexes.watched, ["Aliases", "aliases", "ALIASES"]);
+  assert.equal(api.watches.length, 3);
   assert.equal(api.watches[0].entity, '[:node/title "Aliases"]');
   assert.equal(indexes.titles.resolve("lorinator")?.uid, "LB");
   let heard = 0;
@@ -207,7 +208,7 @@ test("refreshAliasKeys with the previous map touches only the changed pages' blo
   assert.equal(index.byUid.get("r1").aliasKey, null);
 });
 
-test("an alias page created after the build is watched from the next popup", async () => {
+test("an alias page that does not exist yet is watched: the first alias typed by hand arrives through it", async () => {
   const api = fakeApi();
   let exists = false;
   const pull = api.pull;
@@ -216,20 +217,75 @@ test("an alias page created after the build is watched from the next popup", asy
   const win = timers();
   const indexes = createIndexes({ api, perf: createPerf(), setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win });
   await indexes.build();
-  assert.deepEqual(indexes.watched, []);
+  assert.deepEqual(indexes.watched, ["Aliases", "aliases", "ALIASES"], "watched before any of them exists");
   assert.equal(indexes.titles.resolve("lorinator"), null);
   const queries = api.calls.q;
-  indexes.refreshIfStale();
-  assert.equal(win.size, 0, "still no alias page: nothing to read");
-  // The first alias typed by hand creates the page.
+  // The first alias typed by hand creates the page; Roam fires its watch (checked live).
   exists = true;
-  indexes.refreshIfStale();
-  assert.deepEqual(indexes.watched, ["Aliases"]);
+  fire(api, 0);
   win.flush();
   assert.equal(indexes.titles.resolve("lorinator")?.uid, "LB");
-  assert.equal(api.calls.q, queries, "read by the pull, no rebuild");
-  indexes.refreshIfStale();
-  assert.equal(win.size, 0, "watched already: the next popup reads nothing");
+  assert.equal(api.calls.q, queries, "read by the watch, no rebuild");
+  await lifecycle.dispose();
+});
+
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((resolve) => setTimeout(resolve, 0)); };
+
+// A window whose listeners the test can fire, and a clock it moves.
+function quietWorld() {
+  const win = timers();
+  const listeners = new Map();
+  win.addEventListener = (type, fn) => listeners.set(type, fn);
+  win.removeEventListener = (type) => listeners.delete(type);
+  const world = { win, t: 100_000, popup: false };
+  world.key = () => listeners.get("keydown")?.({});
+  world.doc = { querySelector: () => (world.popup ? {} : null) };
+  world.now = () => world.t;
+  return world;
+}
+
+test("a rebuild waits for a quiet moment: never while a popup is open or within 2 s of a key", async () => {
+  const api = fakeApi();
+  const lifecycle = createLifecycle();
+  const w = quietWorld();
+  const perf = createPerf();
+  const indexes = createIndexes({ api, perf, setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win: w.win, doc: w.doc, now: w.now });
+  indexes.schedule();
+  await settle();
+  assert.equal(perf.counters.builds, 1, "the first build runs at once, there is no index yet");
+  const queries = api.calls.q;
+  w.popup = true;
+  indexes.schedule();
+  assert.equal(api.calls.q, queries, "a popup is open: not now");
+  assert.equal(w.win.size, 1, "checked again later");
+  w.win.flush();
+  assert.equal(api.calls.q, queries, "still open");
+  w.popup = false;
+  w.key();
+  w.t += 500;
+  w.win.flush();
+  assert.equal(api.calls.q, queries, "a key 0.5 s ago: not now");
+  w.t += 2_000;
+  w.win.flush();
+  await settle();
+  assert.equal(perf.counters.builds, 2, "quiet: rebuilt");
+  await lifecycle.dispose();
+});
+
+test("a rebuild that finds the user typing again before its long query stops there and waits", async () => {
+  const api = fakeApi();
+  const lifecycle = createLifecycle();
+  const w = quietWorld();
+  const perf = createPerf();
+  const indexes = createIndexes({ api, perf, setting: () => "Aliases", idle: (fn) => fn(), lifecycle, win: w.win, doc: w.doc, now: w.now });
+  await indexes.build({ first: true });
+  // A key lands while the build awaits its first, small query.
+  const q = api.data.async.fast.q;
+  api.data.async.fast.q = async (query, ...args) => { if (query.includes("(count ?r)") && !query.includes("?pt")) w.key(); return q(query, ...args); };
+  const done = await indexes.build();
+  assert.equal(done, false);
+  assert.equal(perf.counters.rebuildsDeferred, 1);
+  assert.equal(perf.counters.builds, 1, "the referenced-blocks query never ran");
   await lifecycle.dispose();
 });
 

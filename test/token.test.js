@@ -41,3 +41,15 @@ test("tokenStillValid refuses a moved caret, edited query, removed closer, or a 
   assert.equal(tokenStillValid("x ((ant mam))", 11, 11, token), false);
   assert.equal(tokenStillValid("x ((ant man", 11, 11, token), false);
 });
+
+test("a caret moved back into a closed token is no token: the popup is Roam's until the caret is back", () => {
+  // Svy's 0.5.0 test: ((agent)) with the caret after "agen".
+  assert.equal(findToken("((agent))", 6), null);
+  assert.equal(findToken("x [[lori boyd]] y", 9), null);
+  assert.deepEqual(findToken("((agent))", 7), { kind: "((", start: 0, end: 9, caret: 7, query: "agent", closed: true });
+  // An unclosed token at the end, or one whose closer is on another line, stays a token.
+  assert.equal(findToken("((agent", 6).query, "agen");
+  assert.equal(findToken("((agent\nmore))", 6).query, "agen");
+  // A later token's closer is not this one's.
+  assert.equal(findToken("((ab ((cd))", 4).query, "ab");
+});

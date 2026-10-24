@@ -23,6 +23,11 @@ export const DRILL_TREE = [
   // Two referenced blocks that rank the same in (( (the pick-memory case).
   { key: "pickA", string: "zebra burrow pick one" },
   { key: "pickB", string: "zebra burrow pick two" },
+  // Referenced tasks, drawn as Roam's checkboxes in Burrow's rows (0.6.0).
+  { key: "taskTodo", string: "{{[[TODO]]}} zebra task open" },
+  { key: "taskDone", string: "{{[[DONE]]}} zebra task closed" },
+  // A macro that only starts like a task (svy's SmartBlock button under a TODO on Patterns).
+  { key: "taskSmart", string: "{{[[TODO]]}} zebra smart parent", children: [{ key: "smartButton", string: "{{TODO today:SmartBlock:TODO today}}" }] },
   { key: "steps", string: "Steps section", children: [
     { key: "intro", string: "B-side" },
     { key: "one", string: "1. mix" }, { key: "two", string: "2. bake" },
@@ -146,7 +151,9 @@ export async function setupFixture(c, { drillTree = false } = {}) {
           }
         };
         await make(tree, pageUid);
-        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB}))`, uid: refsUid } });
+        // The referenced blocks the (( cases find: the pick-memory pair, the
+        // tasks, and a nested block (outline and context cases).
+        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50}))`, uid: refsUid } });
         created.drill.push(refsUid);
       }
       await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: "", uid: blockUid } });
@@ -314,22 +321,24 @@ export async function snapshotTitles(c) {
 }
 
 // Pages created since snapshotTitles: an unclosed `[[x` saved by Roam. Only
-// pages that are empty and that nothing links to are deleted.
+// pages that are empty, that nothing links to and whose title this connection
+// typed are deleted: an outside write in the meantime (notes' daily-plan job)
+// is left alone.
 export async function deleteNewPages(c) {
-  return c.evaluate(async () => {
+  return c.evaluate(async (typed) => {
     const api = window.roamAlphaAPI;
     const before = window.__burrowTitles || new Set();
     const created = api.q("[:find [?t ...] :where [?p :node/title ?t]]").filter((t) => !before.has(t));
     const deleted = [];
     for (const t of created) {
       const p = api.pull("[:block/uid {:block/children [:db/id]} {:block/_refs [:db/id]}]", [":node/title", t]);
-      if (p && !p[":block/children"]?.length && !p[":block/_refs"]?.length) {
+      if (p && typed.includes(t) && !p[":block/children"]?.length && !p[":block/_refs"]?.length) {
         await api.data.page.delete({ page: { uid: p[":block/uid"] } });
         deleted.push(t);
       }
     }
     return { created, deleted };
-  });
+  }, c.typed());
 }
 
 // A click that blurs the block without navigating anything: a point on the

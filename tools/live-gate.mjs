@@ -124,10 +124,13 @@ async function readBack() {
     const titles = new Set(api.q("[:find [?t ...] :where [?p :node/title ?t]]"));
     const newPages = [...titles].filter((t) => !g.titleSet.has(t)).filter(Boolean);
     // A page this case's typing created (an unclosed [[x left behind) is ours
-    // to delete, but only while it is empty and nothing else links to it.
+    // to delete, but only while it is empty, nothing else links to it and the
+    // case's own text names it: a page an outside write made meanwhile (notes'
+    // daily-plan job wrote two at 06:29 on 2026-10-23) is reported, not deleted.
+    const typed = [string, ...extraStrings].join("\n");
     for (const t of newPages) {
       const p = api.pull("[:block/uid {:block/children [:db/id]} {:block/_refs [:db/id]}]", [":node/title", t]);
-      if (p && !p[":block/children"]?.length && !p[":block/_refs"]?.length) await api.data.page.delete({ page: { uid: p[":block/uid"] } });
+      if (p && typed.includes(t) && !p[":block/children"]?.length && !p[":block/_refs"]?.length) await api.data.page.delete({ page: { uid: p[":block/uid"] } });
     }
     return { string, extraStrings, newPages };
   });
@@ -160,8 +163,15 @@ async function state() {
       phase: b?.state.phase ?? "gone",
       rows: [...document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row")].map((r) => ({
         text: r.textContent, active: r.classList.contains("burrow-active"),
+        checks: [...r.querySelectorAll(".burrow-check")].map((n) => `${n.classList.contains("burrow-done") ? "done" : "todo"}:${getComputedStyle(n, "::after").content !== "none" ? "on" : "off"}:${getComputedStyle(n).pointerEvents === "none" ? "ro" : "rw"}`),
       })),
       firstUid: b?.state.rows?.[0]?.uid ?? null,
+      activeUid: b && b.state.phase === "OWNED" ? b.state.rows?.[b.state.active]?.uid ?? null : null,
+      context: document.querySelector(".burrow-strip:not([hidden]) .burrow-context")?.textContent ?? null,
+      nativeActiveVisible: (() => {
+        const row = [...document.querySelectorAll(".rm-autocomplete__results-scroll > div")].find((n) => n.style.backgroundColor);
+        return row ? getComputedStyle(row).backgroundColor : null;
+      })(),
       popup: Boolean(document.querySelector(".rm-autocomplete__results")),
       preview: (() => {
         const pane = document.querySelector(".burrow-preview:not([hidden])");
@@ -169,6 +179,8 @@ async function state() {
         return {
           trail: pane.querySelector(".burrow-trail")?.textContent,
           target: pane.querySelector(".burrow-target")?.textContent ?? null,
+          checks: [...pane.querySelectorAll(".burrow-node.burrow-task-todo, .burrow-node.burrow-task-done")].length,
+          label: getComputedStyle(pane.querySelector(".burrow-trail"), "::before").content,
           previewMore: pane.querySelector(".burrow-more")?.textContent ?? null,
           targetVisible: (() => {
             const t = pane.querySelector(".burrow-target");
@@ -225,6 +237,7 @@ async function state() {
         return {
           scope: panel ? {
             crumb: panel.querySelector(".burrow-scope-crumb")?.textContent ?? "",
+            what: panel.querySelector(".burrow-scope-what")?.textContent ?? "",
             rows: scopeRowsList.map((r) => r.textContent),
             rowsFull: scopeRowsList.map((r) => ({ text: r.textContent, cls: r.className })),
             active: scopeRowsList.find((r) => r.classList.contains("burrow-active"))?.textContent ?? null,
@@ -287,7 +300,7 @@ async function setArm(arm) {
       if (dev.module) await dev.module.default.onunload();
       dev.module = null;
       document.getElementById("burrow-dev-css")?.remove();
-      const leftovers = document.querySelectorAll(".burrow-strip, .burrow-hud, .burrow-owns-selection, [class*=burrow-pad]").length;
+      const leftovers = document.querySelectorAll(".burrow-strip, .burrow-hints, .burrow-hud, .burrow-owning, .rm-autocomplete__results [class*=burrow-]").length;
       if (leftovers) throw new Error(`${leftovers} Burrow node(s) left after unload`);
       return { arm, leftovers };
     }
@@ -348,6 +361,21 @@ const CASES = [
   { name: "click away", keys: ["click"] },
   { name: "IME composition then Escape", keys: ["ime", "Escape"] },
   { name: "caret moved before commit", keys: ["caret-move", "Enter"] },
+  // Svy's 0.5.0 test (2026-10-22): ← into the token, ↑, Enter. Burrow gives the
+  // popup to Roam at once (no rows of its own for a caret inside the token), so
+  // ↑ and Enter are Roam's, on the row Roam shows highlighted: as without Burrow.
+  // Roam re-queries a moment after the caret moves; an Enter before that makes
+  // its footnote of the older text (seen in notes with Burrow absent), so each
+  // arm waits for it.
+  { name: "caret back into the token, ↑, Enter (Svy's footnote case)", keys: ["ArrowLeft", "wait:500", "snap", "ArrowUp", "wait:300", "snap", "Enter"],
+    check: ({ snaps: [a, b] }) => (a?.rows.length || b?.rows.length ? `Burrow rows after ← ${JSON.stringify(a?.rows)} / after ↑ ${JSON.stringify(b?.rows)}` : null) },
+  // Back at the end of the token, Burrow ranks again and its original is selected.
+  { name: "caret back to the end of the token brings Burrow's rows back", keys: ["ArrowLeft", "ArrowRight", "wait:250", "snap", "Enter"], on: committed,
+    check: ({ snaps: [a] }) => (a?.rows[0]?.active ? null : `rows after → ${JSON.stringify(a?.rows)}`) },
+  // A pick Burrow cannot write (here the block it ranked for is no longer the
+  // focused one): Enter stays Burrow's and writes nothing; no Roam row runs.
+  { name: "a refused pick keeps Enter: nothing written, no Roam row runs", keys: ["refuse-focus", "Enter", "restore-focus", "snap"], on: open,
+    check: ({ snaps: [a] }) => (a?.popup ? null : "the popup closed") },
   { name: "scorer throws", pre: "break", keys: ["Enter"] },
   { name: "unloaded mid-popup", keys: ["unload", "Enter"] },
 ];
@@ -495,6 +523,10 @@ async function palette(label) {
   }
 }
 
+const restoreFocus = () => c.evaluate(() => {
+  if (window.__burrowGateFocus) { window.roamAlphaAPI.ui.getFocusedBlock = window.__burrowGateFocus; window.__burrowGateFocus = null; }
+});
+
 async function runKeys(keys, snaps = []) {
   for (const k of keys) {
     const modified = k.match(/^(alt|shift)\+(.+)$/);
@@ -567,7 +599,16 @@ async function runKeys(keys, snaps = []) {
     } else if (k.startsWith("insert:")) await c.call("Input.insertText", { text: k.slice(7) });
     else if (k.startsWith("drop:")) await dropText(k.slice(5));
     else if (k.startsWith("exec:")) await c.evaluate((t) => document.execCommand("insertText", false, t), k.slice(5));
-    else if (k === "caret-move") {
+    else if (k === "refuse-focus") {
+      // The block Burrow ranked for is no longer the focused one, as far as its commit check can tell.
+      await c.evaluate(() => {
+        const ui = window.roamAlphaAPI.ui;
+        if (!window.__burrowGateFocus) window.__burrowGateFocus = ui.getFocusedBlock;
+        ui.getFocusedBlock = () => ({ "block-uid": "zzzzzzzzz", "window-id": "gate" });
+      });
+    } else if (k === "restore-focus") {
+      await restoreFocus();
+    } else if (k === "caret-move") {
       await c.evaluate(() => { const ta = document.activeElement; ta.setSelectionRange(ta.selectionStart - 1, ta.selectionStart - 1); });
     } else if (k === "unload") {
       await c.evaluate(async () => { const d = window.__burrowDev; if (d?.module) await d.module.default.onunload(); });
@@ -697,7 +738,7 @@ const ALIAS_CASES = [
     },
   },
   {
-    name: "hint line: no ⇥ drill on a page without blocks", query: `[[${FIXTURE_PAGE} Empty`, settings: { aliasCreate: false }, noRows: true,
+    name: "hint line: no ⇥ on a page without blocks", query: `[[${FIXTURE_PAGE} Empty`, settings: { aliasCreate: false }, noRows: true,
     keys: ["snap", "Escape"],
     check: ({ snaps: [a] }) => (a?.hints === "" && a.helpButton === "?" ? null : `hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`),
   },
@@ -707,13 +748,13 @@ const ALIAS_CASES = [
     keys: ["snap", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "wait:300", "snap", "Escape"],
     check: ({ snaps: [a, b] }) => {
       if (a?.hints !== "" || a.helpButton !== null) return `on the empty page: hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`;
-      return b?.hints === "⇥ drill" && b.helpButton === null ? null : `on the page with blocks: hints ${JSON.stringify(b?.hints)} button ${JSON.stringify(b?.helpButton)}`;
+      return b?.hints === "⇥ blocks on this page" && b.helpButton === null ? null : `on the page with blocks: hints ${JSON.stringify(b?.hints)} button ${JSON.stringify(b?.helpButton)}`;
     },
   },
   {
-    name: "hint line: ⇥ drill on a page with blocks", query: `[[${FIXTURE_PAGE}`, noRows: true,
+    name: "hint line: ⇥ blocks on this page, on a page with blocks", query: `[[${FIXTURE_PAGE}`, noRows: true,
     keys: ["snap", "Escape"],
-    check: ({ snaps: [a] }) => (a?.hints === "⇥ drill · ⌥A add alias" && a.helpButton === "?" ? null : `hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`),
+    check: ({ snaps: [a] }) => (a?.hints === "⇥ blocks on this page · ⌥A add alias" && a.helpButton === "?" ? null : `hints ${JSON.stringify(a?.hints)} button ${JSON.stringify(a?.helpButton)}`),
   },
   {
     name: "key list: ⌥/ opens it in the popover's place, Esc closes it, the text stays", query: config.preselect.query, mayCreatePage: true,
@@ -732,7 +773,7 @@ const ALIAS_CASES = [
   },
   {
     name: "key list: keys of switches that are off are left out, the write keys named", query: config.preselect.query, mayCreatePage: true,
-    settings: { aliasCreate: false, aliasDelete: false, tabDrill: false, drill: false },
+    settings: { aliasCreate: false, aliasDelete: false, tabDrill: false, drill: false, refOutline: false },
     keys: ["alt+slash", "snap", "Escape", "Escape"],
     check: ({ snaps: [a] }) => {
       if (!a?.sheet) return "no key list";
@@ -793,10 +834,101 @@ const ALIAS_CASES = [
 ];
 
 // The pre-selected alias row's page has blocks, so Tab drills and the line says so.
-const HINTS_ROW = "↵ pick alias · ⌥↓ more aliases · ⇥ drill · ⌥A add alias";
+const HINTS_ROW = "↵ pick alias · ⌥↓ more aliases · ⇥ blocks on this page · ⌥A add alias";
 // The Chips page holds its alias block, so it can be drilled into too.
-const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ drill · esc rows";
-const HINTS_SCOPE = ["⇥/> drill", "⇧⇥ back", "⌃O preview", "↵ insert", "esc results"];
+const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ blocks on this page · esc rows";
+// Two levels down (page, then a section): ⇧⇥ goes up a level.
+const HINTS_SCOPE = ["↵ insert", "⇥/> children", "⇧⇥ up", "esc results", "⌃O preview"];
+
+// (( block navigation and tasks (0.6.0), on the fixture's referenced blocks.
+const BLOCK_CASES = [
+  {
+    name: "(( TODO and DONE show as Roam's read-only checkboxes, in the rows and the preview", query: "((zebra task", restorePreview: true,
+    keys: ["snap", "preview-open", "wait:600", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      const checks = (a?.rows || []).flatMap((row) => row.checks);
+      if (!checks.includes("todo:off:ro") || !checks.includes("done:on:ro")) return `row checkboxes ${JSON.stringify(a?.rows)}`;
+      if ((a.rows || []).some((row) => row.text.includes("{{"))) return `macro text left in a row ${JSON.stringify(a.rows)}`;
+      if (!b?.preview?.checks) return `no checkbox in the preview ${JSON.stringify(b?.preview)}`;
+      return b.preview.label === '"Preview"' ? null : `preview label ${JSON.stringify(b.preview.label)}`;
+    },
+  },
+  {
+    // Review of 0.6.0: a macro that only starts like a task made the preview throw.
+    name: "(( a child that only starts like a task (a SmartBlock button): preview draws, Tab drills", query: "((zebra smart", restorePreview: true,
+    keys: ["preview-open", "wait:600", "snap", "Tab", "wait:300", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (!a?.rows[0]?.active || !a.rows[0].checks.includes("todo:off:ro")) return `row ${JSON.stringify(a?.rows)}`;
+      if (!a.rowPreview?.docked || !a.preview?.target?.includes("zebra smart parent") || !(a.preview.checks >= 1)) return `preview ${JSON.stringify(a?.preview)} ${JSON.stringify(a?.rowPreview)}`;
+      if (!b?.scope || !b.scope.rows.some((row) => row.includes("{{TODO today:SmartBlock:TODO today}}"))) return `drill panel ${JSON.stringify(b?.scope)} phase`;
+      return null;
+    },
+  },
+  {
+    name: "(( where the block lives: page › parent and its children under the highlighted row", query: "((never grok",
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      if (!a?.rows[0]?.active) return `first row not selected ${JSON.stringify(a?.rows)}`;
+      return a.context === `in ${FIXTURE_PAGE} › Alpha section⇥ 1 child` ? null : `context line ${JSON.stringify(a.context)}`;
+    },
+  },
+  {
+    name: "(( where the block lives: off, no line", query: "((never grok", settings: { refContext: false },
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.rows.length && a.context === null ? null : `rows ${a?.rows.length} context ${JSON.stringify(a?.context)}`),
+  },
+  {
+    name: "(( ⇧⇥ goes up to the parent, ⇧⇥ again higher, Enter picks the highlighted parent", query: "((never grok",
+    keys: ["snap", "shift+Tab", "snap", "shift+Tab", "snap", "Enter"],
+    check: ({ snaps: [a, b, d], string }) => {
+      if (a?.hints !== "↵ insert ref · ⇥ children of this block · ⇧⇥ parent") return `hints ${JSON.stringify(a?.hints)}`;
+      if (!b?.scope?.crumb.includes("Alpha section") || !b.scope.what.includes("children of this block: Alpha section") || !b.scope.active?.includes("never grok for writing")) return `after ⇧⇥ ${JSON.stringify(b?.scope)}`;
+      if (!d?.scope?.what.includes("blocks on this page") || !d.scope.active?.includes("Alpha section")) return `after ⇧⇥ ⇧⇥ ${JSON.stringify(d?.scope)}`;
+      return string === `${SEED}((${fx.drill.alpha}))` ? null : `inserted ${JSON.stringify(string)}`;
+    },
+  },
+  {
+    name: "(( Tab on a block lists its children under its whole trail", query: "((never grok",
+    keys: ["Tab", "snap", "Enter"],
+    check: ({ snaps: [a], string }) => {
+      if (!a?.scope?.crumb.includes(FIXTURE_PAGE) || !a.scope.crumb.includes("Alpha section") || a.scope.what !== "Drillchildren of this block: never grok for writing") return `scope ${JSON.stringify(a?.scope)}`;
+      return string === `${SEED}((${fx.drill.grand}))` ? null : `inserted ${JSON.stringify(string)}`;
+    },
+  },
+  {
+    name: "(( Up and down the outline off: ⇧⇥ is not Burrow's, Tab lists the block alone", query: "((never grok", settings: { refOutline: false },
+    keys: ["snap", "Tab", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if (a?.hints !== "↵ insert ref · ⇥ children of this block") return `hints ${JSON.stringify(a?.hints)}`;
+      return b?.scope && !b.scope.crumb.includes(FIXTURE_PAGE) && b.scope.crumb.includes("never grok") ? null : `scope ${JSON.stringify(b?.scope)}`;
+    },
+  },
+  {
+    name: "the pointer selects a Burrow row; Enter inserts the one it shows", query: "((zebra task",
+    keys: ["snap", "hover:.burrow-strip .burrow-row[data-index=\"1\"]", "wait:150", "snap", "Enter"],
+    check: ({ snaps: [a, b], string }) => {
+      if (a?.rows.length !== 2 || !a.rows[0].active) return `before ${JSON.stringify(a?.rows)}`;
+      if (!b?.rows[1]?.active || b.rows[0].active || !b.activeUid) return `after the hover ${JSON.stringify(b?.rows)}`;
+      return string === `${SEED}((${b.activeUid}))` ? null : `inserted ${JSON.stringify(string)} for ${b.activeUid}`;
+    },
+  },
+  {
+    name: "Ctrl-O does not scroll Roam's list under Burrow's rows", query: config.ref.query, restorePreview: true,
+    keys: ["snap", "ctrl+o", "wait:500", "snap", "ctrl+o", "wait:500", "snap", "Escape"],
+    check: ({ snaps }) => (snaps.every((snap) => snap?.listScroll === 0 && snap.rows[0]?.active) ? null : `list scroll ${JSON.stringify(snaps.map((snap) => snap?.listScroll))}`),
+  },
+  {
+    name: "key list: F1 opens and closes it, on any keyboard layout", query: config.preselect.query, mayCreatePage: true,
+    keys: ["F1", "snap", "F1", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => (a?.sheet && b && !b.sheet && b.popup ? null : `F1: sheet ${JSON.stringify(a?.sheet?.groups)}, after ${JSON.stringify(b?.sheet)}`),
+  },
+  {
+    name: "key list: with Delete aliases on and Alias chips off it says ⌥⌫ needs the chips", query: config.preselect.query, mayCreatePage: true,
+    settings: { aliasDelete: true, aliasChips: false },
+    keys: ["alt+slash", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a] }) => (a?.sheet?.notes.join(" ").includes("⌥⌫ deletes the selected alias chip: turn on Alias chips") && !a.sheet.keys.includes("⌥⌫") ? null : `notes ${JSON.stringify(a?.sheet?.notes)} keys ${JSON.stringify(a?.sheet?.keys)}`),
+  },
+];
 
 // A cut chip is not an overlap: boxes must not overlap, a cut chip carries its
 // full alias as a title, and the active chip is whole whenever it can be.
@@ -1063,7 +1195,7 @@ const TAB_CASES = [
     expect: ([s]) => {
       // The Alpha section level: its first child is a leaf unless the row carries ▸.
       const drillable = (s?.scope?.active ?? "").includes("▸");
-      const want = HINTS_SCOPE.filter((part, i) => drillable || i).join(" · ");
+      const want = HINTS_SCOPE.filter((part) => drillable || !part.startsWith("⇥/>")).join(" · ");
       return s?.scopeHints === want ? null : `scope hints ${JSON.stringify(s?.scopeHints)} != ${JSON.stringify(want)} (active ${JSON.stringify(s?.scope?.active)})`;
     },
   },
@@ -1312,37 +1444,131 @@ const collectRects = () => c.evaluate(() => {
   return pairs;
 });
 
-// Four layouts: Roam's preview closed and open, default settings and
-// aliasInline off. Roam's preview is left as it was found.
-async function runOverlap() {
-  const pairs = [];
-  let initial = null;
-  const open = async (want) => {
-    const primed = await prime(SEED);
-    if (!primed.ok) throw new Error("overlap: focus failed");
-    await c.type(config.listed.query, TYPE_MS);
-    await settle("on");
-    initial ??= await isExpanded();
-    if (want != null && (await isExpanded()) !== want) await ctrlO();
+// Text boxes (0.6.0 gate): every text drawn in the picker (Roam's popover and
+// roam-aliases' rows in it, Burrow's rows, hint line, previews, drill panel,
+// key list, hover tip) and the edited text, each text node's line boxes from
+// the DOM, cut to what its scrolling or clipping ancestors show (and, in a
+// pane with a sticky header, to below that header). No two boxes of
+// different text nodes may intersect. Small overlaps between lines of one
+// paragraph (inline boxes taller than the line height) do not count.
+const textOverlaps = () => c.evaluate(() => {
+  const roots = [...document.querySelectorAll(".rm-autocomplete__results, .burrow-preview:not([hidden]), .burrow-scope:not([hidden]), .burrow-help:not([hidden]), .burrow-tip:not([hidden])")];
+  const shownCache = new Map();
+  const shown = (el) => {
+    if (shownCache.has(el)) return shownCache.get(el);
+    let ok = true;
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.opacity === "0") { ok = false; break; }
+    }
+    shownCache.set(el, ok);
+    return ok;
   };
-  const close = async () => { await c.key("Escape"); await readBack(); };
+  // The text's own element clips too (an ellipsized span).
+  const clipOf = (el) => {
+    let r = { l: -Infinity, t: -Infinity, r: Infinity, b: Infinity };
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.overflowX !== "visible" || cs.overflowY !== "visible") {
+        const b = n.getBoundingClientRect();
+        let top = b.top;
+        // A sticky header covers what scrolls under it.
+        const sticky = [...n.children].find((k) => getComputedStyle(k).position === "sticky" && !k.contains(el));
+        if (sticky) top = Math.max(top, sticky.getBoundingClientRect().bottom);
+        r = { l: Math.max(r.l, b.left), t: Math.max(r.t, top), r: Math.min(r.r, b.right), b: Math.min(r.b, b.bottom) };
+      }
+    }
+    return r;
+  };
+  const items = [];
+  const range = document.createRange();
+  for (const root of roots) {
+    if (!shown(root)) continue;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent.trim() || !node.parentElement || !shown(node.parentElement)) continue;
+      const clip = clipOf(node.parentElement);
+      range.selectNodeContents(node);
+      for (const box of range.getClientRects()) {
+        const r = { l: Math.max(box.left, clip.l), t: Math.max(box.top, clip.t), r: Math.min(box.right, clip.r), b: Math.min(box.bottom, clip.b) };
+        if (r.r - r.l > 1 && r.b - r.t > 1) items.push({ node, text: node.textContent.trim().slice(0, 32), h: box.height, ...r });
+      }
+    }
+  }
+  // The text being edited: its line(s), inside its padding.
+  const ta = document.activeElement?.tagName === "TEXTAREA" ? document.activeElement : null;
+  if (ta) {
+    const b = ta.getBoundingClientRect();
+    const cs = getComputedStyle(ta);
+    items.push({ node: ta, text: `[text] ${ta.value.slice(-24)}`, h: b.height, l: b.left, t: b.top + parseFloat(cs.paddingTop), r: b.right, b: b.bottom - parseFloat(cs.paddingBottom) });
+  }
+  const pairs = [];
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const a = items[i]; const b = items[j];
+      if (a.node === b.node) continue;
+      const w = Math.min(a.r, b.r) - Math.max(a.l, b.l);
+      const h = Math.min(a.b, b.b) - Math.max(a.t, b.t);
+      if (w > 2 && h > Math.max(3, 0.3 * Math.min(a.b - a.t, b.b - b.t))) pairs.push(`${JSON.stringify(a.text)} x ${JSON.stringify(b.text)}`);
+    }
+  }
+  return { boxes: items.length, pairs: [...new Set(pairs)] };
+});
+
+// Every picker state, both of Roam's preview layouts where it applies; Roam's
+// preview is left as it was found.
+async function runTextOverlap() {
+  const states = [];
+  const problems = [];
+  let initial = null;
+  const visit = async (label, query, keys, { settings = null, preview = null } = {}) => {
+    await withSettings("on", settings, async () => {
+      const primed = await prime(SEED);
+      if (!primed.ok) { problems.push(`${label}: focus failed`); return; }
+      await c.type(query, TYPE_MS);
+      await settle(query.startsWith("((") || settings?.aliasInline === false ? "gone" : "on");
+      initial ??= await isExpanded();
+      if (preview != null && (await isExpanded()) !== preview) await ctrlO();
+      await runKeys(keys);
+      await sleep(250);
+      const r = await textOverlaps();
+      states.push({ label, boxes: r.boxes, pairs: r.pairs.length });
+      for (const pair of r.pairs) problems.push(`${label}: ${pair}`);
+      await c.key("Escape");
+      await sleep(120);
+      if (await c.evaluate(() => Boolean(document.querySelector(".burrow-scope:not([hidden]), .burrow-help:not([hidden])")))) await c.key("Escape");
+      await readBack();
+    });
+  };
   try {
-    for (const settings of [{}, { aliasInline: false }]) {
-      await withSettings("on", settings, async () => {
-        for (const expanded of [false, true]) {
-          await open(expanded);
-          await sleep(300);
-          for (const pair of await collectRects()) pairs.push(`${JSON.stringify(settings)} preview ${expanded ? "open" : "closed"}: ${pair}`);
-          await close();
-        }
-      });
+    for (const preview of [false, true]) {
+      const p = preview ? "preview open" : "preview closed";
+      await visit(`(( rows, ${p}`, config.ref.query, [], { preview });
+      await visit(`(( rows, a tip on a row, ${p}`, config.ref.query, ["hover:.burrow-strip .burrow-row", "wait:700"], { preview });
+      await visit(`(( Roam's row highlighted, ${p}`, config.ref.query, ["down-past-strip"], { preview });
+      await visit(`(( tasks, ${p}`, "((zebra task", [], { preview });
+      // The preview scrolls to a line far down its siblings: its header stays on top.
+      await visit(`(( preview scrolled to its highlighted line, ${p}`, "((many 50", ["wait:400"], { preview });
+      await visit(`(( ⇧⇥ up to the parent, ${p}`, "((never grok", ["shift+Tab", "wait:300"], { preview });
+      await visit(`(( Tab into a block, ${p}`, "((never grok", ["Tab", "wait:300"], { preview });
+      await visit(`[[ alias row and chips, ${p}`, config.chips.query, ["alt+ArrowDown"], { preview });
+      await visit(`[[ alias row, roam-aliases' own rows, ${p}`, config.listed.query, [], { preview, settings: { aliasInline: false } });
+      await visit(`[[ drill-down, ${p}`, DRILL_Q, [], { preview });
+      await visit(`[[ Tab drill panel, ${p}`, `[[${DRILL_PAGE}`, ["Tab", "wait:300"], { preview });
+      await visit(`key list, ${p}`, config.preselect.query, ["alt+slash", "wait:200"], { preview });
+      await visit(`alias field, ${p}`, `[[${FIXTURE_PAGE} Empty`, ["alt+a", "type:zq field"], { preview, settings: { aliasCreate: true } });
     }
   } finally {
-    await open(null);
-    if ((await isExpanded()) !== initial) await ctrlO();
-    await close();
+    const primed = await prime(SEED);
+    if (primed.ok) {
+      await c.type(config.listed.query, TYPE_MS);
+      await settle("on");
+      if (initial != null && (await isExpanded()) !== initial) await ctrlO();
+      await c.key("Escape");
+      await readBack();
+    }
   }
-  return { layouts: 4, pairs };
+  return { states, problems };
 }
 // Write cases change the graph: edits are measured from just after priming,
 // and whatever the case wrote is put back in a finally.
@@ -1403,6 +1629,7 @@ async function runAbove() {
       for (const name of ["strip", "hints", "preview"]) if (hits(g[name], g.ta)) problems.push(`(a) ${name} covers the text`);
     }
     for (const pair of await collectRects()) problems.push(`(a) overlap ${pair}`);
+    for (const pair of (await textOverlaps()).pairs) problems.push(`(a) text overlap ${pair}`);
     mine.push(a);
     await c.key("Escape");
     await readBack();
@@ -1436,11 +1663,12 @@ async function runAbove() {
 
 const report = { window: c.page.title, config: configName, theme, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
-const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES];
+const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
 const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
+const TEXT = "text boxes: no text overlaps another in any picker state";
 if (only) {
-  const names = [...BYTE_CASES, ...ALIAS_RUN_CASES, ...WRITE_CASES, ...TAB_CASES].map((k) => k.name).concat(ABOVE);
+  const names = [...BYTE_CASES, ...ALIAS_RUN_CASES, ...WRITE_CASES, ...TAB_CASES].map((k) => k.name).concat(ABOVE, TEXT);
   if (!names.includes(only)) throw new Error(`unknown case ${JSON.stringify(only)}; names: ${names.map((n) => JSON.stringify(n)).join(", ")}`);
 }
 // One cleanup for the finally path and for SIGINT / SIGTERM / a crash, so the
@@ -1449,6 +1677,7 @@ if (only) {
 let cleaning = null;
 const cleanup = () => (cleaning ||= (async () => {
   try {
+    await restoreFocus();
     await setArm("gone");
     report.cleanup = await cleanupFixture(c, { keep });
   } catch (error) {
@@ -1498,10 +1727,12 @@ const byteVerdict = (kase, { on, off, gone, drilloff }) => {
     failures.push(`${kase.name}: preview more ${JSON.stringify(on.before?.preview?.previewMore)} != ${JSON.stringify(kase.previewMore)}`);
   }
   if (expected) {
-    if (on.string !== expected || on.extraStrings.length || on.newPages.length) failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
+    if (on.string !== expected || on.extraStrings.length || on.newPages.length) failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)}/${JSON.stringify(on.newPages)} != ${JSON.stringify(expected)}`);
   } else if (!sameResult(on, gone)) {
     failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
   }
+  const problem = kase.check?.(on);
+  if (problem) failures.push(`${kase.name}: ${problem}`);
   return failures;
 };
 const aliasVerdict = (kase, r) => {
@@ -1544,7 +1775,7 @@ try {
     const kind = BYTE_CASES.some((k) => k.name === only) ? "byte"
       : ALIAS_RUN_CASES.some((k) => k.name === only) ? "alias"
       : WRITE_CASES.some((k) => k.name === only) ? "write"
-      : only === ABOVE ? "above" : "tab";
+      : only === ABOVE ? "above" : only === TEXT ? "text" : "tab";
     report.only = { name: only, kind, runs: [] };
     if (kind === "byte") {
       const kase = BYTE_CASES.find((k) => k.name === only);
@@ -1569,6 +1800,14 @@ try {
         const r = await (kind === "write" ? runWriteCase(kase) : runAliasCase(kase));
         report.only.runs.push({ arm: "on", ...r });
         report.failures.push(...aliasVerdict(kase, r));
+      }
+    } else if (kind === "text") {
+      for (let i = 0; i < repeat; i++) {
+        await setArm("on");
+        const r = await runTextOverlap();
+        report.overlap = r;
+        report.only.runs.push({ arm: "on", string: `${r.states.length} states, ${r.states.reduce((n, st) => n + st.boxes, 0)} boxes: ${r.problems.length ? r.problems.join("; ") : "ok"}` });
+        for (const problem of r.problems) report.failures.push(`${TEXT}: ${problem}`);
       }
     } else if (kind === "above") {
       for (let i = 0; i < repeat; i++) {
@@ -1649,8 +1888,8 @@ try {
     note(kase.name, report.tab[kase.name].on, before);
   }
   await setArm("on");
-  report.overlap = await runOverlap();
-  for (const pair of report.overlap.pairs) report.failures.push(`overlap ${pair}`);
+  report.overlap = await runTextOverlap();
+  for (const problem of report.overlap.problems) report.failures.push(`text overlap ${problem}`);
   {
     const before = report.failures.length;
     report.above = await runAbove();
@@ -1708,7 +1947,7 @@ if (flags.includes("--json")) {
   console.log(`  drill preview: trail ${JSON.stringify(p?.trail)}, highlighted ${JSON.stringify(p?.target)}, in view ${p?.targetVisible}`);
   console.log(`  fast typing then Enter: ${JSON.stringify(report.fast?.string)}`);
   for (const line of report.lines || []) console.log(`  ${line}`);
-  console.log(`  overlap: ${report.overlap?.layouts} layouts, ${report.overlap?.pairs.length} overlapping pairs`);
+  console.log(`  text boxes: ${report.overlap?.states.length} picker states, ${report.overlap?.states.reduce((n, st) => n + st.boxes, 0)} text boxes, ${report.overlap?.problems.length} intersecting pairs`);
   for (const f of report.failures) console.log(`  FAIL ${f}`);
 }
 process.exitCode = report.failures.length ? 1 : 0;

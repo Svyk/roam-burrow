@@ -3,8 +3,12 @@
 // rebuilt when the level, query or row list changes; moving the highlight
 // touches classes only.
 import { hintsKey, keyLabel, renderHints as paintHints } from "./hints.js";
+import { checkbox } from "./tasks.js";
 
 const MAX_LABEL = 40;
+// Crumbs above the last one are cut shorter, so the level the list shows
+// stays readable on a long trail (page › parent › block).
+const MAX_ANCESTOR = 22;
 
 export function createScopePanel({ doc, win, lifecycle, highlight }) {
   const node = doc.createElement("div");
@@ -13,6 +17,9 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
   node.hidden = true;
   const crumb = doc.createElement("div");
   crumb.className = "burrow-scope-crumb";
+  // What the list is: a page's blocks or a block's children (Tab drills).
+  const what = doc.createElement("div");
+  what.className = "burrow-scope-what";
   const list = doc.createElement("div");
   list.className = "burrow-scope-list";
   const hintsLine = doc.createElement("div");
@@ -26,25 +33,28 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
   helpButton.setAttribute("aria-label", `Burrow keys (${keyLabel("altSlash")})`);
   helpButton.textContent = "?";
   hintsLine.append(hintsList, helpButton);
-  node.append(crumb, list, hintsLine);
+  node.append(crumb, what, list, hintsLine);
   lifecycle.node(node, doc.body);
   let listKey = null;
 
   const span = (className, textContent) => Object.assign(doc.createElement("span"), { className, textContent });
-  const ellipsize = (text) => (text.length > MAX_LABEL ? `${text.slice(0, MAX_LABEL - 1)}…` : text);
+  const ellipsize = (text, max = MAX_LABEL) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
   function renderCrumb(scope) {
     const level = scope.levels[scope.levels.length - 1];
     const parts = [span("burrow-crumb burrow-crumb-root", scope.rootLabel)];
     scope.levels.forEach((l, i) => {
       parts.push(span("burrow-sep", " › "));
-      const part = span("burrow-crumb", ellipsize(l.label));
+      const part = span("burrow-crumb", ellipsize(l.label, i < scope.levels.length - 1 && scope.levels.length > 2 ? MAX_ANCESTOR : MAX_LABEL));
+      part.title = l.label;
       part.dataset.level = String(i);
       parts.push(part);
     });
     const filter = span("burrow-scope-filter", level.query || "type to filter");
     filter.classList.toggle("burrow-placeholder", !level.query);
     crumb.replaceChildren(...parts, filter);
+    const label = level.isPage ? "blocks on this page" : "children of this block";
+    what.replaceChildren(span("burrow-tag", "Drill"), level.isPage ? `${label}` : `${label}: ${ellipsize(level.label)}`);
   }
 
   function renderList(scope) {
@@ -75,7 +85,8 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
-      if (row.text) text.append(highlight(row.text, level.query));
+      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
+      else if (row.text) text.append(highlight(row.text, level.query));
       else if (row.drillable) {
         item.classList.add("burrow-empty-row");
         text.append(span("burrow-empty", "(empty) ▸"));
@@ -94,13 +105,14 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     if (!on) return;
     const level = scope.levels[scope.levels.length - 1];
     const active = scope.rows[level.active];
-    const items = [];
-    if (active?.drillable) items.push(["⇥/>", "drill", "Go into the highlighted block: its children are listed here"]);
+    // Most needed first: in a 400 px panel the line may end in an ellipsis,
+    // and then it is Ctrl-O (also in the key list) that is cut, never esc.
+    const items = [["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"]];
+    if (active?.drillable) items.push(["⇥/>", "children", "Go into the highlighted block: its children are listed here"]);
     items.push(
-      ["⇧⇥", "back", "One level back (Backspace on an empty filter too); from the first level, back to the results"],
-      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
-      ["↵", active?.more != null ? "more" : "insert", active?.more != null ? "List the next 50 blocks" : "Insert the highlighted block's ((uid)) in place of the whole [[…]]"],
+      ["⇧⇥", scope.levels.length > 1 ? "up" : "back", scope.levels.length > 1 ? "One level up the outline: the parent's children, the parent highlighted (Backspace on an empty filter too)" : "Back to the results (Backspace on an empty filter too)"],
       ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
+      [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
     );
     const key = hintsKey(items);
     if (key === hintsShown) return;
@@ -109,13 +121,14 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     paintHints(doc, hintsList, items);
   }
 
-  function paintActive(scope, hintsOn, helpOn = false) {
+  // scroll: bring the active row into view (keys); a hover never scrolls.
+  function paintActive(scope, hintsOn, helpOn = false, scroll = true) {
     const level = scope.levels[scope.levels.length - 1];
     list.querySelectorAll(".burrow-row").forEach((item, i) => {
       const on = i === level.active;
       item.classList.toggle("burrow-active", on);
       item.setAttribute("aria-selected", String(on));
-      if (on) item.scrollIntoView?.({ block: "nearest" });
+      if (on && scroll) item.scrollIntoView?.({ block: "nearest" });
     });
     renderHints(scope, hintsOn, helpOn);
   }

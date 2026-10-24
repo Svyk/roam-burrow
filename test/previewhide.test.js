@@ -30,3 +30,17 @@ test("hideEmpty keeps an empty target but drops empty siblings", () => {
   const ids = previewModel({ page, target: { uid: "t" } }, tree, text, { hideEmpty: true }).items.map((i) => i.uid);
   assert.deepEqual(ids, ["a", "e2", "t", "b"]);
 });
+
+test("a sibling or child holding a macro that only starts like a task draws as text, never throws", () => {
+  // svy: emTmVEQNG under the TODO ssK8TddXh on Patterns.
+  const smart = { uid: "sb", string: "{{TODO today:SmartBlock:TODO today}}", kids: [] };
+  const done = { uid: "d", string: "{{[[DONE]]}} done", kids: [] };
+  const tree2 = {
+    children: (uid) => (uid === "p" ? [{ uid: "t", string: "{{[[TODO]]}} [[Tasks/today]]", kids: [smart] }, smart, done] : uid === "t" ? [smart] : []),
+    twoLevels: (uid) => tree2.children(uid),
+    trail: () => [{ uid: "p", title: "P" }],
+  };
+  const items = previewModel({ page, target: { uid: "t", string: "{{[[TODO]]}} [[Tasks/today]]" } }, tree2, text).items;
+  assert.deepEqual(items.map((i) => [i.uid, i.task]), [["t", "todo"], ["sb", null], ["sb", null], ["d", "done"]]);
+  assert.deepEqual(previewModel({ page, target: null }, tree2, text).items.map((i) => i.task), ["todo", null, null, "done"]);
+});

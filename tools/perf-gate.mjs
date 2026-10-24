@@ -16,7 +16,7 @@
 // Burrow sets off (src/indexes.js refreshAliases; read only, 8 refreshes 250
 // ms apart, as the watch's settle spaces them, each re-keying the most linked
 // alias page): the p95 of each kind of its idle tasks is held to 4 ms too.
-// Placing the strip and hint line (a frame callback, src/strip.js
+// Docking the preview over Roam's (a frame callback, src/strip.js
 // placePanes) is reported as well: its read meets the frame's own layout.
 // --cold "[[plexus": first draws only. Opens that popup --runs x 4 times with
 // Roam's preview open (each popup starts with nothing read), selects the alias
@@ -120,6 +120,9 @@ async function endRun() {
       builds: perf ? perf.counters.builds : null,
       // Burrow's deferred (idle) preview draw: one sample per idle slice.
       preview: perf?.summary ? perf.summary("preview") : null,
+      previewKinds: perf?.summary ? Object.fromEntries(["read", "draw", "rest", "scroll"].map((k) => [k, perf.summary(`preview.${k}`)])) : null,
+      // The context line's idle read (page, parent, child count) per block highlighted.
+      context: perf?.summary ? perf.summary("context") : null,
       // Has-children checks for the hint line (one small pull per page or block highlighted).
       kidChecks: perf ? perf.counters.kidChecks || 0 : null,
       popup: Boolean(document.querySelector(".rm-autocomplete__results")),
@@ -301,6 +304,9 @@ try {
       process.stderr.write(`run ${run} arm ${arm}\n`);
       await c.type(opener, 60);
       await sleep(600);
+      // The index falls due for its rebuild (as after the 60 s TTL) with the
+      // popup open: it must wait until the typing stops and the popup closes.
+      await c.evaluate(() => window.__BURROW?.indexes?.schedule());
       if (withPreview) {
         previewInitial ??= await isExpanded();
         if (!(await isExpanded())) await ctrlO();
@@ -324,16 +330,35 @@ try {
         await new Promise((resolve) => setTimeout(resolve, 400));
       });
       r.pages = await deleteNewPages(c);
+      // The rebuild that was due all through the typing: it runs now, at the
+      // first quiet moment, and its long task falls outside any typing.
+      if (arm === "on") {
+        r.quiet = await c.evaluate(async () => {
+          const perf = window.__BURROW_PERF;
+          const longs = [];
+          const po = new PerformanceObserver((list) => { for (const e of list.getEntries()) longs.push(Math.round(e.duration)); });
+          po.observe({ type: "longtask" });
+          const t0 = performance.now();
+          while (!perf.counters.builds && performance.now() - t0 < 10000) await new Promise((resolve) => setTimeout(resolve, 50));
+          const after = Math.round(performance.now() - t0);
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          po.disconnect();
+          return { built: perf.counters.builds, after, longest: Math.max(0, ...longs), deferred: perf.counters.rebuildsDeferred || 0 };
+        });
+      }
       report.results.push({
         run, arm, keys: r.keys, strayKeys: r.aborted, popupAtEnd: r.popup, build: loaded.build,
         paintP50: pct(r.latency, 0.5), paintP95: pct(r.latency, 0.95),
         burrowP50: pct(r.burrowInput, 0.5), burrowP95: pct(r.burrowInput, 0.95), burrowMax: pct(r.burrowInput, 1),
         renderP95: pct(r.burrowRender, 0.95), previewP95: r.preview?.p95 ?? null, previewMax: r.preview?.max ?? null, previewSamples: r.preview?.n ?? 0, burrowSamples: r.burrowInput?.length ?? 0,
+        contextP95: r.context?.n ? r.context.p95 : null, contextMax: r.context?.n ? r.context.max : null, contextSamples: r.context?.n ?? 0,
+        previewKinds: r.previewKinds ? Object.fromEntries(Object.entries(r.previewKinds).map(([k, v]) => [k, v?.n ? `${v.n}× p95 ${v.p95.toFixed(1)}` : "none"])) : null,
         kidChecks: r.kidChecks,
         aliasReadP95: pct(r.aliasRefresh?.read, 0.95), aliasSwapP95: pct(r.aliasRefresh?.swap, 0.95), aliasRekeyP95: pct(r.aliasRefresh?.rekey, 0.95), aliasPage: r.aliasRefresh?.page ?? null, aliasLinked: r.aliasRefresh?.linked ?? 0,
         placeP95: r.place?.p95 ?? null, placeMax: r.place?.max ?? null,
         aliasRefreshMax: pct([...(r.aliasRefresh?.read || []), ...(r.aliasRefresh?.swap || []), ...(r.aliasRefresh?.rekey || [])], 1),
         queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
+        quietRebuild: r.quiet ?? null,
         pagesDeleted: r.pages?.deleted,
       });
     }
@@ -364,6 +389,11 @@ report.summary = {
   placeP95: by("on", "placeP95"),
   placeMax: by("on", "placeMax"),
   queriesPerKey: by("on", "queriesDuringRun"),
+  rebuildsWhileTyping: by("on", "buildsDuringRun"),
+  contextP95: by("on", "contextP95"),
+  contextMax: by("on", "contextMax"),
+  contextSamples: by("on", "contextSamples"),
+  quietRebuild: by("on", "quietRebuild"),
 };
 // Budget (spec §6): Burrow JS <= 4 ms p95 per input, input-to-paint p95
 // within +5 ms of Burrow absent, 0 queries per key. Each run pairs its two
@@ -392,12 +422,17 @@ const verdict = {
   paintP95Delta: +median(report.summary.paintP95Deltas).toFixed(2),
   queries: Math.max(...report.summary.queriesPerKey),
   strayKeys: report.results.reduce((n, r) => n + (r.strayKeys?.length || 0), 0),
+  // A due rebuild never runs while typing in an open popup (spec §15).
+  rebuildsWhileTyping: Math.max(0, ...report.summary.rebuildsWhileTyping),
+  // The context line's idle reads: the same 4 ms budget.
+  contextP95Max: Math.max(0, ...report.summary.contextP95.filter((v) => v != null)),
 };
 // A run that recorded no keys (or no Burrow samples with Burrow on) measured
 // nothing, so it can never count as a pass.
 verdict.emptyRuns = report.results.filter((r) => !r.keys || (r.arm === "on" && !r.burrowSamples)).length
   + Math.max(0, runs * 2 - report.results.length);
 verdict.pass = !report.error && verdict.emptyRuns === 0 && verdict.burrowP95Max <= 4 && verdict.paintP95Delta <= 5 && verdict.queries === 0 && verdict.strayKeys === 0
+  && verdict.rebuildsWhileTyping === 0 && verdict.contextP95Max <= 4
   && verdict.aliasRefreshP95Max <= 4
   && (!withPreview || (verdict.previewP95Max != null && verdict.previewP95Max <= 4));
 report.verdict = verdict;
@@ -407,12 +442,15 @@ if (args.includes("--json")) {
   console.log(`cost gate ${title}${drill ? " (drill)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
+  if (withPreview) console.log(`  preview slices by kind: ${report.results.filter((r) => r.arm === "on").map((r) => Object.entries(r.previewKinds || {}).map(([k, v]) => `${k} ${v}`).join(", ")).join(" / ")}`);
   console.log(`  has-children checks for the hint line: ${report.summary.kidChecks.join(" / ")} per run`);
+  console.log(`  context line reads (idle): ${report.summary.contextSamples.join(" / ")} per run, p95 ${report.summary.contextP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.contextMax.map((v) => v ?? "none").join(" / ")} ms (budget <= 4)`);
   console.log(`  alias refresh after an outside edit, idle tasks p95: read ${report.summary.aliasReadP95.join(" / ")} ms, swap ${report.summary.aliasSwapP95.join(" / ")} ms, re-key slices ${report.summary.aliasRekeyP95.join(" / ")} ms (budget <= 4); max ${report.summary.aliasRefreshMax.join(" / ")} ms; the edited page is linked by ${report.summary.aliasLinked.join(" / ")} indexed blocks`);
-  console.log(`  placing the strip and hint line in the frame p95: ${report.summary.placeP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.placeMax.map((v) => v ?? "none").join(" / ")} ms`);
+  console.log(`  docking the preview in the frame (the strip and hint line sit in Roam's column, nothing to place) p95: ${report.summary.placeP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.placeMax.map((v) => v ?? "none").join(" / ")} ms`);
   console.log(`  input-to-paint median delta p50 ${verdict.paintP50Delta} ms, p95 ${verdict.paintP95Delta} ms (budget <= +5)`);
   console.log(`  per-run p95 deltas: ${report.summary.paintP95Deltas.join(" / ")} ms; Burrow-absent paint p50 ${report.summary.paintP50.gone.join(" / ")} ms`);
   console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);
+  console.log(`  due index rebuild: ${report.summary.rebuildsWhileTyping.join(" / ")} while typing (must be 0); ran ${report.summary.quietRebuild.map((q) => (q?.built ? `${(q.after / 1000).toFixed(1)} s after the popup closed (long task ${q.longest} ms)` : "not yet")).join(" / ")}`);
   console.log(`  ${notRestored ? `installed Burrow ${report.installed.version} not restored` : report.installed.parked ? `installed Burrow: parked ${report.installed.version} for the run, restored` : "installed Burrow: none in this window"}`);
   if (drill) {
     const on = report.results.filter((r) => r.arm === "on");

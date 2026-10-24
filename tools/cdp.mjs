@@ -14,6 +14,7 @@ const KEYS = {
   ArrowRight: { code: "ArrowRight", keyCode: 39 },
   Home: { code: "Home", keyCode: 36 },
   End: { code: "End", keyCode: 35 },
+  F1: { code: "F1", keyCode: 112 },
 };
 
 export async function connect(titlePart) {
@@ -43,7 +44,11 @@ export async function connect(titlePart) {
     }
     return result.result.value;
   };
+  // Every character this connection typed, so fixture.deleteNewPages deletes
+  // only a page whose title the run itself typed.
+  let typed = "";
   const key = async (name, modifiers = 0) => {
+    if (name.length === 1 && !modifiers) typed += name;
     const digit = /^\d$/.test(name);
     const spec = KEYS[name] || (digit
       ? { code: `Digit${name}`, keyCode: 48 + Number(name), text: name }
@@ -53,6 +58,7 @@ export async function connect(titlePart) {
     await call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
   };
   const type = async (text, delay = 25) => {
+    typed += text;
     for (const ch of text) {
       const code = ch === " " ? "Space" : /[a-z]/i.test(ch) ? `Key${ch.toUpperCase()}` : /\d/.test(ch) ? `Digit${ch}` : "";
       await call("Input.dispatchKeyEvent", { type: "keyDown", key: ch, code, text: ch, unmodifiedText: ch });
@@ -88,7 +94,7 @@ export async function connect(titlePart) {
     return Buffer.from(result.data, "base64");
   };
   const close = () => socket.close();
-  return { page, call, evaluate, key, type, click, wheel, setTheme, screenshot, close };
+  return { page, call, evaluate, key, type, typed: () => typed, click, wheel, setTheme, screenshot, close };
 }
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

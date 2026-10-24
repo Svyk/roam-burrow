@@ -6,11 +6,11 @@ import { createRefSearch } from "./refsearch.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 
 let activeLifecycle = null;
 
-const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge"];
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 
 function safeLocalStorage() {
   try { return globalThis.localStorage ?? null; } catch { return null; }
@@ -45,12 +45,32 @@ function installPerfHud({ lifecycle, perf, setting }) {
   }, 1000);
 }
 
+// The live instance, kept on the window: Roam can load the extension a
+// second time without unloading the first (svy ran two 0.5.0 instances side
+// by side, each drawing rows and taking keys), and a module-level variable
+// does not reach across module instances. A new load disposes the old one,
+// unless the dev tools have parked it on purpose (tools/installed.mjs).
+const LIVE = "__burrowLive";
+
+async function disposePrevious() {
+  const win = globalThis.window;
+  const prior = win?.[LIVE];
+  if (!prior || win.__burrowParked) return;
+  win[LIVE] = null;
+  try { await prior.dispose(); } catch (error) { console.error("[burrow] could not unload the previous instance", error); }
+}
+
 export async function onload({ extensionAPI, extension }) {
   if (!extensionAPI) throw new TypeError("Roam did not provide extensionAPI");
   if (activeLifecycle) await activeLifecycle.dispose();
+  await disposePrevious();
 
   const lifecycle = createLifecycle();
   activeLifecycle = lifecycle;
+  if (globalThis.window) {
+    globalThis.window[LIVE] = lifecycle;
+    lifecycle.add(() => { if (globalThis.window[LIVE] === lifecycle) globalThis.window[LIVE] = null; });
+  }
   try {
     const api = globalThis.window?.roamAlphaAPI;
     const setting = createSettingsReader(extensionAPI);

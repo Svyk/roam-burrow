@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { hintsKey, isAltSlash, keyLabel, pickerHints, renderHints } from "../src/hints.js";
+import { hintsKey, isAltSlash, isHelpKey, keyLabel, pickerHints, renderHints } from "../src/hints.js";
 
 function fakeDoc() {
   const make = () => {
@@ -56,16 +56,20 @@ const keys = (items) => items.map(([k, label]) => `${k} ${label}`).join(" · ");
 
 test("pickerHints: the drill key only where Tab drills", () => {
   const alias = (drill) => ({ kind: "[[", row: { kind: "alias", chips: true, drill, aliasNew: true }, on: ON });
-  assert.equal(keys(pickerHints(alias(true), true)), "↵ pick alias · ⌥↓ more aliases · ⇥ drill · ⌥A add alias");
+  assert.equal(keys(pickerHints(alias(true), true)), "↵ pick alias · ⌥↓ more aliases · ⇥ blocks on this page · ⌥A add alias");
   assert.equal(keys(pickerHints(alias(false), true)), "↵ pick alias · ⌥↓ more aliases · ⌥A add alias");
   assert.equal(keys(pickerHints({ ...alias(true), on: { ...ON, tabDrill: false } }, true)), "↵ pick alias · ⌥↓ more aliases · ⌥A add alias");
   const native = (drill, aliasNew = false) => ({ kind: "[[", row: null, native: { drill, aliasNew }, on: ON });
-  assert.equal(keys(pickerHints(native(true), true)), "⇥ drill");
+  assert.equal(keys(pickerHints(native(true), true)), "⇥ blocks on this page");
   assert.deepEqual(pickerHints(native(false), true), []);
   assert.equal(keys(pickerHints(native(false, true), false)), "Alt+A add alias");
   assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: false }, on: ON }, true)), "↵ insert ref");
-  assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: true }, on: ON }, true)), "↵ insert ref · ⇥ drill");
-  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true }, on: ON }, true)), "↵ insert block · ⇥/> drill");
+  assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: true }, on: ON }, true)), "↵ insert ref · ⇥ children of this block");
+  assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: true }, on: { ...ON, refOutline: true } }, true)), "↵ insert ref · ⇥ children of this block · ⇧⇥ parent");
+  assert.equal(keys(pickerHints({ kind: "((", row: { kind: "ref", drill: false }, on: { ...ON, refOutline: true } }, true)), "↵ insert ref · ⇧⇥ parent");
+  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true }, on: ON }, true)), "↵ insert block · ⇥/> children of this block");
+  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true, block: true }, on: { ...ON, refOutline: true } }, true)), "↵ insert block · ⇥/> children of this block · ⇧⇥ parent");
+  assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true, block: false }, on: { ...ON, refOutline: true } }, true)), "↵ insert block · ⇥/> children of this block");
   assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: true }, on: { ...ON, tabDrill: false } }, true)), "↵ insert block · > next level");
   assert.equal(keys(pickerHints({ kind: "[[", row: { kind: "drill", drill: false }, on: ON }, true)), "↵ insert block");
 });
@@ -73,14 +77,14 @@ test("pickerHints: the drill key only where Tab drills", () => {
 test("pickerHints: chips, prompts, rows above, link format; every item carries a tip", () => {
   const chips = { kind: "[[", chips: true, row: { kind: "alias", chips: true, drill: false }, on: { ...ON, aliasDelete: true } };
   assert.equal(keys(pickerHints(chips, true)), "←→ alias · ⌥⌫ delete · ↵ insert · esc rows");
-  assert.equal(keys(pickerHints({ ...chips, row: { ...chips.row, drill: true } }, true)), "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ drill · esc rows");
+  assert.equal(keys(pickerHints({ ...chips, row: { ...chips.row, drill: true } }, true)), "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ blocks on this page · esc rows");
   assert.equal(keys(pickerHints({ ...chips, on: ON }, true)), "←→ alias · ↵ insert · esc rows");
   assert.equal(keys(pickerHints({ kind: "[[", prompt: "add", row: null, on: ON }, true)), "↵ save alias · esc cancel");
   assert.equal(keys(pickerHints({ kind: "[[", prompt: "delete", row: null, on: ON }, true)), "↵ delete · esc keep");
   assert.equal(keys(pickerHints({ kind: "((", row: null, rowsAbove: true, on: ON }, true)), "↑ referenced");
-  assert.equal(keys(pickerHints({ kind: "[[", row: null, rowsAbove: true, native: { drill: true }, on: ON }, true)), "↑ alias rows · ⇥ drill");
+  assert.equal(keys(pickerHints({ kind: "[[", row: null, rowsAbove: true, native: { drill: true }, on: ON }, true)), "↑ alias rows · ⇥ blocks on this page");
   assert.equal(pickerHints({ kind: "[[", row: { kind: "alias" }, on: { ...ON, pageOnly: true } }, true)[0][2], "Insert [[Page]]");
-  const all = [chips, { kind: "[[", row: { kind: "alias", chips: true, drill: true, aliasNew: true }, on: ON }, { kind: "((", row: { kind: "ref", drill: true }, on: ON }];
+  const all = [chips, { kind: "[[", row: { kind: "alias", chips: true, drill: true, aliasNew: true }, on: ON }, { kind: "((", row: { kind: "ref", drill: true }, on: { ...ON, refOutline: true } }];
   for (const s of all) for (const item of pickerHints(s, true)) assert.ok(item[2] && item[2].length > 8, JSON.stringify(item));
 });
 
@@ -101,4 +105,37 @@ test("isAltSlash goes by the typed character, not the key's position", () => {
   assert.equal(isAltSlash(alt("÷", "Slash", { altKey: false })), false);
   assert.equal(isAltSlash(alt("÷", "Slash", { metaKey: true })), false);
   assert.equal(isAltSlash(alt("/", "Slash", { ctrlKey: true })), false);
+});
+
+test("F1 opens the key list on any layout; ⌥/ as before", () => {
+  const key = (k, more = {}) => ({ key: k, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...more });
+  assert.equal(isHelpKey(key("F1")), true);
+  assert.equal(isHelpKey(key("F1", { shiftKey: true })), false);
+  assert.equal(isHelpKey(key("F1", { metaKey: true })), false);
+  assert.equal(isHelpKey(key("÷", { altKey: true })), true);
+  assert.equal(isHelpKey(key("–", { altKey: true })), false, "German ⌥- still types its en dash");
+  assert.equal(isHelpKey(key("/")), false, "a plain / types");
+});
+
+test("hover tips go beside the picker, then under it, then above it and the text; never over its text", async () => {
+  const { placeTip } = await import("../src/tips.js");
+  const view = { width: 1600, height: 900 };
+  const box = { width: 200, height: 60 };
+  const area = { left: 600, top: 200, right: 1000, bottom: 500 };
+  const row = { left: 610, top: 240, right: 990, bottom: 273 };
+  const ta = { left: 600, top: 170, right: 1200, bottom: 190 };
+  assert.deepEqual(placeTip(row, box, area, ta, view), { left: 1006, top: 240 }, "right of the picker, level with the row");
+  const wide = { left: 300, top: 200, right: 1500, bottom: 500 };
+  assert.deepEqual(placeTip(row, box, wide, ta, view), { left: 94, top: 240 }, "no room right: left of it");
+  const full = { left: 50, top: 200, right: 1550, bottom: 500 };
+  assert.deepEqual(placeTip(row, box, full, ta, view), { left: 610, top: 506 }, "no room either side: under it");
+  // Notes' window (1095 px) with the preview open: under the picker is off-screen, above it the text.
+  const low = { left: 150, top: 400, right: 950, bottom: 880 };
+  const text = { left: 150, top: 370, right: 1000, bottom: 392 };
+  assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, box, low, text, { width: 1095, height: 900 }), { left: 610, top: 304 }, "above the picker and the edited text");
+  // Nothing free around it but a narrow side: a narrower tip there.
+  const tall = { left: 120, top: 10, right: 950, bottom: 890 };
+  const big = { width: 400, height: 60 };
+  assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, big, tall, null, { width: 1300, height: 900 }), { left: 956, top: 420, width: 340 }, "a 340 px side");
+  assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, big, tall, null, { width: 1095, height: 900 }), null, "no side of 160 px: no tip");
 });

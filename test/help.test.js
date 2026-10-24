@@ -27,8 +27,22 @@ test("keys of switches that are off are left out; the write keys appear once on"
   assert.ok(lines.some((l) => l.startsWith("Aliases: Alt+⌫")));
   assert.ok(lines.some((l) => l.startsWith("Pick: Alt+Shift+9")));
   assert.deepEqual(notes(on), []);
-  const off = helpGroups(reader({ tabDrill: false, drill: false, aliasChips: false, drillPreview: false, rowPreview: false }), true);
+  const off = helpGroups(reader({ tabDrill: false, drill: false, refOutline: false, aliasChips: false, drillPreview: false, rowPreview: false }), true);
   assert.deepEqual(off.map((g) => g.title), ["Pick", "Aliases", "Preview"]);
   assert.ok(!flat(off).some((l) => l.includes("⌥↓") || l.includes("in a drill")));
   assert.match(flat(helpGroups(reader({ aliasLinkFormat: "[[Page]]" }), true)).join(" "), /\[\[alias ↵ inserts \[\[Page\]\]/);
+});
+
+test("Delete aliases on with Alias chips off: the key list says ⌥⌫ needs the chips", () => {
+  const groups = helpGroups(reader({ aliasCreate: true, aliasDelete: true, aliasChips: false }), true);
+  assert.ok(!flat(groups).some((l) => l.includes("⌥⌫")), "not listed as a key that works");
+  assert.equal(notes(groups).join(" "), "⌥⌫ deletes the selected alias chip: turn on Alias chips (Settings → Burrow) to use it.");
+  const noRows = helpGroups(reader({ aliasDelete: true, aliasPages: false }), true);
+  assert.match(notes(noRows).join(" "), /turn on Alias rows in \[\[ and Alias chips/);
+  assert.deepEqual(notes(helpGroups(reader({ aliasCreate: true, aliasDelete: true }), true)), [], "with the chips on there is nothing to say");
+});
+
+test("the outline key is listed with Up and down the outline on, and gone with it off", () => {
+  assert.ok(flat(helpGroups(reader(), true)).some((l) => l.startsWith("Drill: ⇧⇥ on a block row")));
+  assert.ok(!flat(helpGroups(reader({ refOutline: false }), true)).some((l) => l.startsWith("Drill: ⇧⇥ on a block row")));
 });

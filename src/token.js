@@ -15,7 +15,20 @@ export function findToken(value, caret) {
   // lastIndexOf; an opener of the other kind before it is irrelevant.
   if (kind === "[[" && query.includes("[[")) return null;
   const end = value.startsWith(close, caret) ? caret + close.length : caret;
+  // The caret moved back into a token that closes further on (`((agen|t))`):
+  // Roam searches the text before the caret, but a Burrow pick there would
+  // leave `t))` behind, so the popup is Roam's alone until the caret is back.
+  if (end === caret && insideClosed(value, caret, kind === "[[" ? "[[" : "((", close)) return null;
   return { kind, start, end, caret, query, closed: end !== caret };
+}
+
+function insideClosed(value, caret, open, close) {
+  const rest = value.slice(caret);
+  const at = rest.indexOf(close);
+  if (at <= 0) return false;
+  const line = rest.indexOf("\n");
+  if (line >= 0 && line < at) return false;
+  return !rest.slice(0, at).includes(open);
 }
 
 // Exact replacement of the token span; every byte outside it is untouched.

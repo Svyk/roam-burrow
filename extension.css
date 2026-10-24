@@ -1,11 +1,16 @@
 /* Burrow. Every rule is scoped to Burrow's own nodes, or to Roam's popover
    only while it carries a Burrow class. Colors are sampled from the popover. */
+/* The strip lies in Roam's list column, above Roam's results: it takes its
+   own room, so no native row is ever under it. Padding as Roam's list. */
 .burrow-strip {
-  position: fixed;
-  z-index: 30;
+  flex: none;
+  /* Its height is set from its rows (src/strip.js sizeStrip): what changes
+     inside it never lays out Roam's column again. */
+  contain: strict;
   box-sizing: border-box;
-  background: var(--burrow-bg, #fff);
-  color: var(--burrow-fg, #182026);
+  padding: 4px 4px 3px;
+  background: transparent;
+  color: inherit;
   border-bottom: 1px solid rgba(16, 22, 26, 0.12);
   overflow: hidden;
 }
@@ -30,10 +35,8 @@
   white-space: nowrap;
 }
 
-.burrow-row:hover {
-  background: rgba(138, 155, 168, 0.15);
-}
-
+/* One highlight: the pointer selects a row (src/strip.js), so there is no
+   separate hover color. */
 .burrow-row.burrow-active {
   background: var(--burrow-active, rgba(138, 155, 168, 0.3));
 }
@@ -48,9 +51,29 @@
   opacity: 0.55;
 }
 
-.rm-autocomplete__results.burrow-owns-selection .rm-autocomplete__results-scroll > div {
+/* While a Burrow row holds the selection, Roam's own highlight is muted. Keyed
+   on Burrow's strip (right before Roam's list), not on a popover class, which
+   Roam rewrites; a sibling selector, which costs less to keep up than :has(). */
+.burrow-strip.burrow-owning:not([hidden]) ~ .rm-autocomplete__results-scroll > div {
   background-color: transparent !important;
 }
+
+/* Roam scrolls its active row into view by the row's offsetTop: with
+   Burrow's strip above the list, that must count from the list itself. */
+.burrow-strip ~ .rm-autocomplete__results-scroll {
+  position: relative;
+}
+
+/* TODO / DONE in Burrow's rows and previews: Roam's own checkbox (its 12 px box,
+   border, blue and tick), one element, read-only. */
+.burrow-check { display: inline-block; position: relative; box-sizing: border-box; width: 12px; height: 12px; margin: 0 5px 0 1px; vertical-align: -1px; border: 1px solid rgb(167, 182, 194); border-radius: 2px; pointer-events: none; }
+.burrow-check.burrow-done { border: none; background-color: rgb(19, 124, 189); }
+.burrow-check.burrow-done::after { content: ""; position: absolute; left: 3.5px; top: 0.25px; width: 5px; height: 10px; box-sizing: border-box; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(40deg) scale(0.8); }
+
+/* Under the highlighted block row: its page and parent (refContext). */
+.burrow-context { display: flex; align-items: baseline; gap: 8px; box-sizing: border-box; height: 18px; padding: 0 6px 2px 18px; font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; }
+.burrow-context-trail { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: 0.6; }
+.burrow-context-kids { flex: none; opacity: 0.6; }
 
 .burrow-hud {
   position: fixed;
@@ -85,11 +108,14 @@
   display: none;
 }
 
+/* Sticky over the outline: the lines are positioned (their bullet), so the
+   trail needs its own layer and an opaque background, or they overprint it. */
 .burrow-trail {
   position: sticky;
   top: 0;
+  z-index: 1;
   padding: 8px 0 6px;
-  background: inherit;
+  background: var(--burrow-bg, #fff);
   font-size: 12px;
   line-height: 16px;
   white-space: nowrap;
@@ -100,6 +126,22 @@
 .burrow-crumb {
   opacity: 0.7;
 }
+
+/* What a pane is: "Preview" before a preview's trail, "Drill" before the
+   drill list's line. */
+.burrow-trail::before, .burrow-tag {
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  background: rgba(138, 155, 168, 0.2);
+}
+.burrow-trail::before { content: "Preview"; display: inline-block; }
 
 .burrow-sep {
   opacity: 0.45;
@@ -130,7 +172,28 @@
   opacity: 0.45;
 }
 
+.burrow-node[hidden] { display: none; }
+
 .burrow-node.burrow-more::before { content: none; }
+
+/* A task line in the preview: Roam's checkbox before the text, drawn on the
+   line itself (one element per line), the tick as an image. */
+.burrow-node.burrow-task-todo, .burrow-node.burrow-task-done { padding-left: calc(37px + var(--burrow-depth, 0) * 18px); }
+.burrow-node.burrow-task-todo::after, .burrow-node.burrow-task-done::after {
+  content: "";
+  position: absolute;
+  left: calc(20px + var(--burrow-depth, 0) * 18px);
+  top: 6px;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgb(167, 182, 194);
+  border-radius: 2px;
+}
+.burrow-node.burrow-task-done::after {
+  border: none;
+  background: rgb(19, 124, 189) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.2 6.3l2 2 3.8-4.6' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='square'/%3E%3C/svg%3E") center / 12px 12px no-repeat;
+}
 
 .burrow-node.burrow-h1 { font-size: 1.25em; font-weight: 600; }
 .burrow-node.burrow-h2 { font-size: 1.12em; font-weight: 600; }
@@ -161,8 +224,9 @@
   visibility: hidden;
 }
 
-/* Alias chips, key hints, and the roam-aliases fold / pane layout. */
-.burrow-hints { position: fixed; z-index: 30; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
+/* Alias chips, key hints, and the roam-aliases fold / pane layout. The hint
+   line is the last thing in Roam's list column, under its footer. */
+.burrow-hints { flex: none; contain: strict; box-sizing: border-box; height: 22px; display: flex; align-items: center; gap: 8px; padding: 0 8px; font-size: 12px; line-height: 16px; background: var(--burrow-footer-bg, var(--burrow-bg, #fff)); color: var(--burrow-footer-fg, var(--burrow-fg, #182026)); border-top: 1px solid rgba(16, 22, 26, 0.12); pointer-events: none; white-space: nowrap; overflow: hidden; }
 /* The items take what is left of the line; the ? (or the first-run line) keeps its place at the end. */
 .burrow-hints-list { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .burrow-hints .burrow-hint, .burrow-help-button { pointer-events: auto; }
@@ -195,16 +259,6 @@
 .rm-autocomplete__results.burrow-fold-aliases.alias-container .dont-unfocus-block { max-width: none !important; }
 .rm-aliases [data-burrow-folded] { display: none !important; }
 
-/* Room for Burrow's rows over Roam's list column: 33px per row + 1 (strip.js ROW_HEIGHT), +28px with the alias
-   chips (CHIPS_HEIGHT); the hint line 22px (HINTS_HEIGHT). Static classes: a class toggle restyles the popover only. */
-.rm-autocomplete__results.burrow-pad-1 > .rm-autocomplete__results-main { padding-top: 34px !important; }
-.rm-autocomplete__results.burrow-pad-2 > .rm-autocomplete__results-main { padding-top: 67px !important; }
-.rm-autocomplete__results.burrow-pad-3 > .rm-autocomplete__results-main { padding-top: 100px !important; }
-.rm-autocomplete__results.burrow-pad-1c > .rm-autocomplete__results-main { padding-top: 62px !important; }
-.rm-autocomplete__results.burrow-pad-2c > .rm-autocomplete__results-main { padding-top: 95px !important; }
-.rm-autocomplete__results.burrow-pad-3c > .rm-autocomplete__results-main { padding-top: 128px !important; }
-.rm-autocomplete__results.burrow-pad-foot > .rm-autocomplete__results-main { padding-bottom: 22px !important; }
-
 .rm-autocomplete__results.burrow-layout.alias-container { min-width: 0 !important; }
 .rm-autocomplete__results.burrow-layout.alias-container .dont-unfocus-block { max-width: none !important; }
 .rm-autocomplete__results.burrow-layout .rm-aliases { position: static !important; float: none !important; min-width: 0 !important; width: auto !important; max-height: 96px !important; flex: none; overflow: auto; border-bottom: 1px solid rgba(16, 22, 26, 0.12); }
@@ -224,6 +278,8 @@
 .burrow-scope-crumb .burrow-crumb { cursor: pointer; opacity: 0.7; }
 .burrow-scope-crumb .burrow-crumb:last-of-type { opacity: 1; font-weight: 600; }
 .burrow-scope-filter { margin-left: 8px; }
+.burrow-scope-what { flex: none; padding: 3px 10px; font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.8; border-bottom: 1px solid rgba(16, 22, 26, 0.12); }
+.burrow-scope.burrow-dark .burrow-scope-what { border-bottom-color: rgba(255, 255, 255, 0.1); }
 .burrow-scope-filter.burrow-placeholder { opacity: 0.45; }
 .burrow-scope-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px; }
 .burrow-scope .burrow-row { height: auto; min-height: 33px; white-space: normal; }
