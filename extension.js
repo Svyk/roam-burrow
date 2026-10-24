@@ -1650,6 +1650,13 @@ function renderHints(doc, node, items) {
 
 // src/help.js
 var WIDE = 620;
+var MODIFIERS = /* @__PURE__ */ new Set(["Shift", "Alt", "Meta", "Control", "CapsLock"]);
+function helpKeyAction(event) {
+  if (event.key === "Enter" || event.key === "Tab" || isHelpKey(event)) return "close";
+  if (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) return "close";
+  if (MODIFIERS.has(event.key)) return "keep";
+  return "pass";
+}
 function helpGroups(setting, mac = IS_MAC) {
   const k = (name) => keyLabel(name, mac);
   const on = (id) => Boolean(setting(id));
@@ -3558,14 +3565,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     sheet.node.classList.toggle("burrow-dark", strip.classList.contains("burrow-dark"));
   }
   function helpKey(event) {
-    if (isHelpKey(event) || event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-      consume(event);
-      closeHelp();
-      return true;
-    }
-    if (["Shift", "Alt", "Meta", "Control", "CapsLock"].includes(event.key)) return true;
+    const action = helpKeyAction(event);
+    if (action === "keep") return true;
+    if (action === "close") consume(event);
     closeHelp();
-    return false;
+    return action === "close";
   }
   function onHintsMouseDown(event) {
     event.preventDefault();
@@ -3791,6 +3795,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     if (tips.visible) tips.hide();
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    if (st.help && event.target === st.ta && helpKey(event)) return;
     if (st.phase === "OWNED" && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
       trace({ ev: "stale-key", key: event.key });
       evaluate(st.ta);
@@ -3801,7 +3806,6 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       }
       if (st.phase === "IDLE") return;
     }
-    if (st.help && event.target === st.ta && helpKey(event)) return;
     if (isHelpKey(event) && setting("helpSheet") && event.target === st.ta && !event.isComposing && !st.composing && !st.prompt?.compose) {
       if (openHelp()) {
         consume(event);

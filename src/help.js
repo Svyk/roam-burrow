@@ -2,9 +2,21 @@
 // grouped, for the switches that are on. Keys of switches that are off are
 // left out; the two that write to the graph are named with where to turn
 // them on. The sheet takes the popover's place, like the Tab drill panel.
-import { IS_MAC, keyLabel } from "./hints.js";
+import { IS_MAC, isHelpKey, keyLabel } from "./hints.js";
 
 const WIDE = 620;
+const MODIFIERS = new Set(["Shift", "Alt", "Meta", "Control", "CapsLock"]);
+
+// A key while the list is open. The list covers the picker, so no row is
+// visible under it: Enter and Tab, with any modifier, only close it and never
+// reach a row (Roam's or Burrow's). Esc, ⌥/ and F1 close it too; a modifier
+// alone keeps it; any other key closes it and then does what it does.
+export function helpKeyAction(event) {
+  if (event.key === "Enter" || event.key === "Tab" || isHelpKey(event)) return "close";
+  if (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) return "close";
+  if (MODIFIERS.has(event.key)) return "keep";
+  return "pass";
+}
 
 // groups: [{ title, items: [[keys, what]], notes: [text] }]
 export function helpGroups(setting, mac = IS_MAC) {

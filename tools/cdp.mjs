@@ -54,7 +54,9 @@ export async function connect(titlePart) {
       ? { code: `Digit${name}`, keyCode: 48 + Number(name), text: name }
       : { code: `Key${name.toUpperCase()}`, keyCode: name.toUpperCase().charCodeAt(0), text: name });
     const base = { key: name, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode, modifiers };
-    await call("Input.dispatchKeyEvent", { type: spec.text ? "keyDown" : "rawKeyDown", ...base, text: spec.text, unmodifiedText: spec.text });
+    // With Ctrl (2) or ⌘ (4) held a key types nothing.
+    const text = modifiers & 6 ? undefined : spec.text;
+    await call("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", ...base, text, unmodifiedText: text });
     await call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
   };
   const type = async (text, delay = 25) => {

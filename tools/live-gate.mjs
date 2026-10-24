@@ -20,7 +20,7 @@ import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
 import {
-  CHIP_ALIASES, CHIP_LONG, CHIPS_ALIAS_STRING, FIXTURE_PAGE, aliasBlockString, childStrings, cleanupFixture, deleteBlock, editedSince, guardReport,
+  CHIP_ALIASES, CHIP_LONG, CHIPS_ALIAS_STRING, FIXTURE_PAGE, aliasBlockString, childStrings, cleanupFixture, createdSince, deleteBlock, editedSince, guardReport,
   neutralClick, onAbort, pageNow, placeLow, placeNormal, primeFixture, setAliasBlock, setupFixture,
 } from "./fixture.mjs";
 
@@ -529,7 +529,7 @@ const restoreFocus = () => c.evaluate(() => {
 
 async function runKeys(keys, snaps = []) {
   for (const k of keys) {
-    const modified = k.match(/^(alt|shift)\+(.+)$/);
+    const modified = k.match(/^(alt|ctrl|meta|shift)\+(.+)$/);
     if (k === "snap") snaps.push(await state());
     else if (k === "alt+shift+9") await altShift9();
     else if (k === "alt+slash") await altSlash();
@@ -585,7 +585,7 @@ async function runKeys(keys, snaps = []) {
     else if (k.startsWith("wait:")) await sleep(Number(k.slice(5)));
     else if (k === "low") await placeLow(c);
     else if (k === "normal") await placeNormal(c);
-    else if (modified) await c.key(modified[2], modified[1] === "alt" ? 1 : 8);
+    else if (modified) await c.key(modified[2], { alt: 1, ctrl: 2, meta: 4, shift: 8 }[modified[1]]);
     else if (k.startsWith("type:")) await c.type(k.slice(5), TYPE_MS);
     else if (k === "click") await neutralClick(c);
     else if (k === "down-past-strip") {
@@ -927,6 +927,53 @@ const BLOCK_CASES = [
     settings: { aliasDelete: true, aliasChips: false },
     keys: ["alt+slash", "snap", "Escape", "Escape"],
     check: ({ snaps: [a] }) => (a?.sheet?.notes.join(" ").includes("⌥⌫ deletes the selected alias chip: turn on Alias chips") && !a.sheet.keys.includes("⌥⌫") ? null : `notes ${JSON.stringify(a?.sheet?.notes)} keys ${JSON.stringify(a?.sheet?.keys)}`),
+  },
+  // BRW-9: the key list covers the picker, so Enter or Tab under it may only
+  // close it. Before, the key went on to the row under the list: Roam's
+  // highlighted (( row (a footnote, a block ref), Burrow's row, a drill row.
+  {
+    name: "key list over Roam's highlighted (( row: Enter only closes it, no Roam row runs", query: config.ref.query, created: true,
+    keys: ["down-past-strip", "wait:200", "snap", "alt+slash", "snap", "Enter", "wait:300", "snap", "Escape"], on: open,
+    check: ({ snaps: [a, b, d] }) => {
+      if (a?.phase !== "ARMED" || !a.nativeActiveVisible) return `before ⌥/: phase ${a?.phase}, Roam's highlight ${a?.nativeActiveVisible}`;
+      if (!b?.sheet || !b.popoverCovered) return `no key list over the popover ${JSON.stringify(b?.sheet)} covered ${b?.popoverCovered}`;
+      if (d?.sheet || !d?.popup || d.value !== open || d.phase !== "ARMED") return `after Enter: sheet ${JSON.stringify(d?.sheet?.groups)} popup ${d?.popup} value ${JSON.stringify(d?.value)} phase ${d?.phase}`;
+      return null;
+    },
+  },
+  {
+    name: "key list over Roam's highlighted (( row: Tab only closes it (F1)", query: config.ref.query, created: true,
+    keys: ["down-past-strip", "wait:200", "F1", "snap", "Tab", "wait:300", "snap", "Escape"], on: open,
+    check: ({ snaps: [a, b] }) => (a?.sheet && b && !b.sheet && b.popup && !b.scope && b.value === open ? null : `F1 ${JSON.stringify(a?.sheet?.groups)}; after Tab sheet ${JSON.stringify(b?.sheet)} popup ${b?.popup} scope ${JSON.stringify(b?.scope)} value ${JSON.stringify(b?.value)}`),
+  },
+  {
+    name: "key list: Shift+Enter, ⌘Enter, Shift+Tab only close it too", query: config.ref.query, created: true,
+    keys: ["down-past-strip", "wait:200", "alt+slash", "shift+Enter", "wait:200", "snap", "alt+slash", "meta+Enter", "wait:200", "snap", "alt+slash", "shift+Tab", "wait:200", "snap", "Escape"], on: open,
+    check: ({ snaps }) => (snaps.every((s) => s && !s.sheet && s.popup && s.value === open) ? null : `after each key ${JSON.stringify(snaps.map((s) => [s?.value, Boolean(s?.sheet), s?.popup]))}`),
+  },
+  {
+    name: "key list over Roam's highlighted [[ row: Enter only closes it, the popup stays", query: `[[${FIXTURE_PAGE}`, noRows: true, created: true,
+    keys: ["alt+slash", "snap", "Enter", "wait:300", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => (a?.sheet && b && !b.sheet && b.popup && b.value === `${SEED}[[${FIXTURE_PAGE}]]` ? null : `after Enter: sheet ${JSON.stringify(b?.sheet)} popup ${b?.popup} value ${JSON.stringify(b?.value)}`),
+  },
+  {
+    name: "key list over Burrow's highlighted row: Enter only closes it, the row stays highlighted", query: config.ref.query, created: true,
+    keys: ["snap", "alt+slash", "snap", "Enter", "wait:300", "snap", "Escape"], on: open,
+    check: ({ snaps: [a, b, d] }) => {
+      if (!a?.rows[0]?.active) return `first row not selected ${JSON.stringify(a?.rows)}`;
+      if (!b?.sheet) return "no key list";
+      return d && !d.sheet && d.rows[0]?.active && d.value === open ? null : `after Enter: sheet ${JSON.stringify(d?.sheet)} rows ${JSON.stringify(d?.rows)} value ${JSON.stringify(d?.value)}`;
+    },
+  },
+  {
+    name: "key list over the drill panel: Enter only closes it, the panel stays", query: `[[${FIXTURE_PAGE}`, noRows: true, created: true,
+    keys: ["Tab", "wait:300", "snap", "alt+slash", "snap", "Enter", "wait:300", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a, b, d], string }) => {
+      if (!a?.scope?.active) return `no drill panel ${JSON.stringify(a?.scope)}`;
+      if (!b?.sheet) return "no key list over the panel";
+      if (d?.sheet || d?.scope?.active !== a.scope.active || d.value !== `${SEED}[[${FIXTURE_PAGE}]]`) return `after Enter: sheet ${JSON.stringify(d?.sheet)} scope ${JSON.stringify(d?.scope)} value ${JSON.stringify(d?.value)}`;
+      return string === `${SEED}[[${FIXTURE_PAGE}]]` ? null : `inserted ${JSON.stringify(string)}`;
+    },
   },
 ];
 
@@ -1339,6 +1386,7 @@ async function runAliasCase(kase) {
     before.roamAliasesRows = await c.evaluate(() => document.querySelectorAll(".rm-aliases .rm-autocomplete-result").length);
     const snaps = [];
     const initialPreview = kase.restorePreview ? await isExpanded() : null;
+    const t0 = kase.created ? await pageNow(c) : null;
     let after;
     try {
       await runKeys(kase.keys, snaps);
@@ -1346,7 +1394,10 @@ async function runAliasCase(kase) {
     } finally {
       if (kase.restorePreview) await restorePreviewState(initialPreview);
     }
-    return { before, snaps, ...after, misses, wheelSteps };
+    // Blocks created anywhere in the graph while the keys ran (a footnote, a
+    // block below), besides the new blocks on the fixture page readBack counts.
+    const created = kase.created ? await createdSince(c, t0) : undefined;
+    return { before, snaps, ...after, created, misses, wheelSteps };
   });
 }
 
@@ -1740,6 +1791,7 @@ const aliasVerdict = (kase, r) => {
   if (r.error) failures.push(`${kase.name}: ${r.error}`);
   else {
     if (r.newPages?.length && !kase.mayCreatePage) failures.push(`${kase.name}: created ${r.newPages}`);
+    if (kase.created && (r.extraStrings?.length || r.created?.length)) failures.push(`${kase.name}: blocks created ${JSON.stringify([...r.extraStrings, ...r.created])}`);
     if (kase.on && (r.string !== kase.on || (r.newPages.length && !kase.mayCreatePage))) failures.push(`${kase.name}: ${JSON.stringify(r.string)} != ${JSON.stringify(kase.on)} rows ${JSON.stringify(r.before?.rows)}`);
     for (const miss of r.misses ?? []) failures.push(`${kase.name}: ${miss}`);
     const failure = kase.check?.(r);
