@@ -18,7 +18,7 @@ import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan" },
   notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -97,6 +97,16 @@ const SCENARIOS = [
   { id: "46-roam-row-before-key-list", query: `((${config.ref}`, keys: ["preview-closed", "down-past-strip", "wait:300"] },
   { id: "47-key-list-over-roam-row", query: `((${config.ref}`, keys: ["preview-closed", "down-past-strip", "alt+slash", "wait:300"] },
   { id: "48-key-list-enter-closes", query: `((${config.ref}`, keys: ["preview-closed", "down-past-strip", "alt+slash", "Enter", "wait:400"] },
+  // 0.7.0: prose before code in (( (Svy's `((black pan`, svy only), then rows drawn like Roam on the fixture's rich blocks.
+  ...(config.black ? [{ id: "49-black-pan", query: `((${config.black}`, keys: ["preview-closed"] }] : []),
+  { id: "50-rich-rows", query: "((zebra rich", keys: ["preview-closed"] },
+  { id: "51-rich-code", query: "((zebra_plot", keys: ["preview-closed"] },
+  { id: "52-rich-macros", query: "((zebra macros", keys: ["preview-closed"] },
+  { id: "53-rich-media", query: "((zebra media", keys: ["preview-closed"] },
+  { id: "54-rich-snippet", query: "((zebra snippet", keys: ["preview-closed"] },
+  { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
+  { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
+  { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
 ];
 
 const c = await connect(title);
