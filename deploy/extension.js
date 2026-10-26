@@ -21,7 +21,18 @@ for (const [key, vals] of Object.entries(ABBREV_FORWARD)) {
   for (const word of vals) ABBREV_REVERSE.set(word, key);
 }
 function stripRoamMarkup(value) {
-  return String(value == null ? "" : value).replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 ").replace(/\{\{[^{}]*\}\}/g, " ").replace(/\(\(([^()]*)\)\)/g, " ").replace(/\[([^\]]*)\]\(\[\[([^\]]*)\]\]\)/g, "$1 $2").replace(/\[\[|\]\]|#\[\[|\*\*|\^\^|__|~~/g, " ").replace(/(^|\s)#(?=\S)/g, "$1");
+  return stripMacros(String(value == null ? "" : value).replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 ")).replace(/\(\(([^()]*)\)\)/g, " ").replace(/\[([^\]]*)\]\(\[\[([^\]]*)\]\]\)/g, "$1 $2").replace(/\[\[|\]\]|#\[\[|\*\*|\^\^|__|~~/g, " ").replace(/(^|\s)#(?=\S)/g, "$1");
+}
+function stripMacros(value) {
+  let out = value;
+  for (let prev = null; prev !== out; ) {
+    prev = out;
+    out = out.replace(/\{\{[^{}]*\}\}/g, " ");
+  }
+  return out;
+}
+function looksLikeCode(query) {
+  return /[`(){}[\]=<>$;\\|]|::|->|<-/.test(query) || /[\p{L}\p{N}][._][\p{L}\p{N}]/u.test(query) || /\p{Ll}{2,}\p{Lu}/u.test(query);
 }
 function searchKey(value) {
   let raw = String(value == null ? "" : value).toLowerCase();
@@ -164,14 +175,29 @@ function strictMatch(target, plan) {
   let level = 3;
   for (const q of plan.clauses) {
     let score = -1;
-    if (target.raw === q.raw) score = 1200;
-    else if (target.spaced === q.spaced) score = 1160;
-    else if (target.compact === q.compact) score = 1120;
-    else if (target.spaced.startsWith(q.spaced)) score = 980;
-    else if (target.compact.startsWith(q.compact)) score = 940;
-    else if (wordIncludes(target, q)) score = 840;
-    else if (compactIncludes(target, q.compact)) score = 800;
-    else {
+    let lv = 1;
+    if (target.raw === q.raw) {
+      score = 1200;
+      lv = 3;
+    } else if (target.spaced === q.spaced) {
+      score = 1160;
+      lv = 3;
+    } else if (target.compact === q.compact) {
+      score = 1120;
+      lv = 3;
+    } else if (target.spaced.startsWith(q.spaced)) {
+      score = 980;
+      lv = 2;
+    } else if (target.compact.startsWith(q.compact)) {
+      score = 940;
+      lv = 2;
+    } else if (wordIncludes(target, q)) {
+      score = 840;
+      lv = 2;
+    } else if (compactIncludes(target, q.compact)) {
+      score = 800;
+      lv = 2;
+    } else {
       let at = -1, ordered = true, gap = 0;
       for (const token of q.tokens) {
         const next = target.tokens.indexOf(token, at + 1);
@@ -183,12 +209,17 @@ function strictMatch(target, plan) {
         at = next;
       }
       if (ordered) score = 640 - Math.min(120, gap * 8);
-      else if (q.tokens.every((token) => tokenSet(target).has(token))) score = 500;
-      else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) score = 440;
-      else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6 && target.tokens.length >= q.compact.length && initialsOf(target).startsWith(q.compact)) score = 380;
+      else if (q.tokens.every((token) => tokenSet(target).has(token))) {
+        const places = q.tokens.map((token) => target.tokens.indexOf(token));
+        const spread = Math.max(...places) - Math.min(...places) + 1 - q.tokens.length;
+        score = 500 - Math.min(40, spread * 2);
+      } else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) {
+        score = 440;
+        lv = 0;
+      } else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6 && target.tokens.length >= q.compact.length && initialsOf(target).startsWith(q.compact)) score = 380;
     }
     if (score < 0) return { score: -1, level: 0 };
-    level = Math.min(level, score >= 1120 ? 3 : score >= 800 ? 2 : score === 440 ? 0 : 1);
+    level = Math.min(level, lv);
     total += score;
   }
   return { score: total - Math.min(80, Math.max(0, target.compact.length - plan.compactLength)), level };
@@ -442,6 +473,18 @@ function aliasInsertion(entry, format) {
 var BLOCK_REF = /\(\(([\w-]{9})\)\)/g;
 var PAGE_REF = /\[\[([^[\]]+)\]\]|#([^\s[\]#,]+)/g;
 var RECALL_MAX_TOKENS = 40;
+var LONG_TOKENS = 64;
+function splitCode(string) {
+  const code = [];
+  const prose = String(string).replace(/```[\w+#.-]*[ \t]*\n?([\s\S]*?)(?:```|$)/g, (_, text) => {
+    code.push(text);
+    return " ";
+  }).replace(/`([^`\n]+)`/g, (_, text) => {
+    code.push(text);
+    return " ";
+  });
+  return { prose, code: code.join("\n") };
+}
 async function buildRefIndexSliced(rows, aliasesByPage, { sliceMs = 8, yieldTo: yieldTo2 }) {
   const index = startRefIndex(rows);
   let at = 0;
@@ -464,15 +507,19 @@ function startRefIndex(rows) {
 function keyEntry(entry, index, aliasesByPage) {
   const { byUid } = index;
   const quotes = [];
-  const resolved = entry.string.replace(BLOCK_REF, (_, uid) => {
-    quotes.push(uid);
+  const { prose, code } = splitCode(entry.string);
+  const resolved = stripMacros(prose).replace(BLOCK_REF, (_, uid) => {
     const target = byUid.get(uid);
     return target ? ` ${target.string} ` : " ";
   });
+  for (const m of entry.string.matchAll(BLOCK_REF)) quotes.push(m[1]);
   entry.key = searchKey(stripRoamMarkup(resolved));
   entry.quotes = quotes;
+  entry.codeKey = code.trim() ? searchKey(code) : null;
+  entry.words = entry.key.tokens.length + (entry.codeKey?.tokens.length || 0);
+  entry.long = entry.words > LONG_TOKENS;
   entry.pureQuote = quotes.length === 1 && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, "")) ? quotes[0] : null;
-  const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  const linked = [...prose.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
   for (const title of new Set(linked)) {
     const list = index.byLinked.get(title);
@@ -546,17 +593,27 @@ function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => fa
   if (changed) index.prefilter = null;
   return { next: at, changed };
 }
-function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
+function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false } = {}) {
   if (!index || !plan) return [];
   const hits = /* @__PURE__ */ new Map();
+  const withCode = !prose || code;
   const consider = (entry, opts) => {
     let match = matchFromKey(entry.key, plan, opts);
     let viaAlias = false;
+    let inCode = false;
+    if (withCode && entry.codeKey) {
+      const codeMatch = matchFromKey(entry.codeKey, plan, opts);
+      if (isPrecise(codeMatch) && (!isPrecise(match) || rankOf(codeMatch) > rankOf(match))) {
+        match = codeMatch;
+        inCode = true;
+      }
+    }
     if (aliasExpand && entry.aliasKey) {
       const aliasMatch = matchFromKey(entry.aliasKey, plan, opts);
       if (isPrecise(aliasMatch) && (!isPrecise(match) || rankOf(aliasMatch) > rankOf(match))) {
         match = aliasMatch;
         viaAlias = true;
+        inCode = false;
       }
     }
     if (!isPrecise(match)) return false;
@@ -564,11 +621,11 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
     if (entry.pureQuote && index.byUid.has(entry.pureQuote)) target = index.byUid.get(entry.pureQuote);
     const previous = hits.get(target.uid);
     if (previous && rankOf(previous.match) >= rankOf(match)) return true;
-    hits.set(target.uid, { entry: target, match, viaAlias });
+    hits.set(target.uid, { entry: target, match, viaAlias, inCode });
     return true;
   };
   const strictHit = /* @__PURE__ */ new Set();
-  for (const entry of prefiltered(index, plan, aliasExpand)) {
+  for (const entry of prefiltered(index, plan, aliasExpand, withCode)) {
     if (consider(entry, { strict: true })) strictHit.add(entry);
   }
   const words = plan.clauses.reduce((n, q) => n + q.tokens.length, 0);
@@ -583,8 +640,16 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
   const rows = [...hits.values()];
   const pick = (hit) => picked?.get(hit.entry.uid) || 0;
   const onPage = (hit) => Number(currentPage != null && hit.entry.page === currentPage);
-  rows.sort((a, b) => rankOf(b.match) - rankOf(a.match) || pick(b) - pick(a) || Number(a.quoter) - Number(b.quoter) || refStep(b.entry.refs) - refStep(a.entry.refs) || Number(b.viaAlias) - Number(a.viaAlias) || onPage(b) - onPage(a) || b.match.score - a.match.score || a.entry.string.length - b.entry.string.length || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
-  return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter }) => ({
+  const titled = (hit) => {
+    var _a;
+    if (hit.titled == null) {
+      (_a = hit.entry).titleKeys ?? (_a.titleKeys = (hit.entry.linked || []).map((t) => searchKey(t)));
+      hit.titled = Number(hit.entry.titleKeys.some((k) => matchFromKey(k, plan, { strict: true }).level >= 2));
+    }
+    return hit.titled;
+  };
+  rows.sort((a, b) => rankOf(b.match) - rankOf(a.match) || pick(b) - pick(a) || Number(a.quoter) - Number(b.quoter) || (prose ? Number(a.entry.long) - Number(b.entry.long) : 0) || refStep(b.entry.refs) - refStep(a.entry.refs) || Number(b.viaAlias) - Number(a.viaAlias) || onPage(b) - onPage(a) || (prose ? titled(b) - titled(a) : 0) || b.match.score - a.match.score || a.entry.string.length - b.entry.string.length || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
+  return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter, inCode }) => ({
     uid: entry.uid,
     string: entry.string,
     refs: entry.refs,
@@ -594,14 +659,16 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
     score: match.score,
     viaAlias,
     quoter,
+    inCode,
+    long: entry.long,
     picked: Boolean(picked?.get(entry.uid)),
     onPage: currentPage != null && entry.page === currentPage
   }));
 }
 var PREFILTER_CACHE = 24;
-function prefiltered(index, plan, aliasExpand) {
+function prefiltered(index, plan, aliasExpand, withCode) {
   const maybe = strictPrefilter(plan);
-  const sig = `${aliasExpand ? 1 : 0}${maybe.initial ?? ""}${maybe.needles.join("")}`;
+  const sig = `${aliasExpand ? 1 : 0}${withCode ? 1 : 0}${maybe.initial ?? ""}${maybe.needles.join("")}`;
   const cache = index.prefilter || (index.prefilter = /* @__PURE__ */ new Map());
   const hit = cache.get(sig);
   if (hit) {
@@ -611,14 +678,15 @@ function prefiltered(index, plan, aliasExpand) {
   }
   let source = index.entries;
   for (const [, cached] of cache) {
-    if (cached.initial == null && cached.aliasExpand === aliasExpand && cached.needles.length === maybe.needles.length && cached.needles.every((n, i) => maybe.needles[i].includes(n)) && cached.length < source.length) {
+    if (cached.initial == null && cached.aliasExpand === aliasExpand && cached.withCode === withCode && cached.needles.length === maybe.needles.length && cached.needles.every((n, i) => maybe.needles[i].includes(n)) && cached.length < source.length) {
       source = cached;
     }
   }
-  const list = source.filter((entry) => maybe(entry.key) || aliasExpand && maybe(entry.aliasKey));
+  const list = source.filter((entry) => maybe(entry.key) || aliasExpand && maybe(entry.aliasKey) || withCode && maybe(entry.codeKey));
   list.needles = maybe.needles;
   list.initial = maybe.initial;
   list.aliasExpand = aliasExpand;
+  list.withCode = withCode;
   cache.set(sig, list);
   if (cache.size > PREFILTER_CACHE) cache.delete(cache.keys().next().value);
   return list;
@@ -1160,6 +1228,7 @@ var DEFAULTS = Object.freeze({
   aliasChips: true,
   refRanking: true,
   refPreselect: true,
+  refProse: true,
   betterMatch: true,
   drill: true,
   drillPreview: true,
@@ -1195,6 +1264,7 @@ var SWITCHES = [
   ["aliasChips", "Alias chips", "Under a selected alias row, the page's other aliases as chips. ⌥↓ moves into them, ←/→ picks one (the line also scrolls with the mouse wheel or trackpad, and a chip shows its full alias when selected or hovered), Enter inserts the page shown as that alias, Esc goes back to the rows."],
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
+  ["refProse", "Prose before code in ((", "Burrow's (( rows match a block's own words: code blocks, inline code and the insides of {{embed}}, {{roam/render}} and other macros count only when what you type looks like code (it has ( ) . _ = or the like). A block of more than 64 words ranks after shorter blocks that match as well, and a match inside a [[page]] or #tag the block links comes first among equals. Off: code counts like any text and length does not count (0.6.1)."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
   ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
   ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
@@ -2762,7 +2832,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         recall,
         aliasExpand: setting("aliasExpand"),
         picked: memory?.lookup("ref", token.query),
-        currentPage: setting("pageBoost") ? st.pageTitle : null
+        currentPage: setting("pageBoost") ? st.pageTitle : null,
+        prose: setting("refProse"),
+        code: looksLikeCode(token.query)
       }).map((hit) => ({
         kind: "ref",
         key: `ref:${hit.uid}`,
@@ -2770,6 +2842,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         refs: hit.refs,
         level: hit.level,
         page: hit.page,
+        inCode: hit.inCode,
         ...rowText(hit.string),
         insertion: `((${hit.uid}))`,
         pick: hit.uid

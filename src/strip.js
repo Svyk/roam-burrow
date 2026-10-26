@@ -9,7 +9,7 @@ import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { rankRefs } from "./refindex.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
-import { searchKey, searchPlan, stripRoamMarkup } from "./search.js";
+import { looksLikeCode, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
 import { checkbox, hasTask, taskParts } from "./tasks.js";
 import { isDarkHost } from "./theme.js";
 import { createTips } from "./tips.js";
@@ -175,9 +175,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       return rankRefs(indexes.refs, plan, {
         limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
         picked: memory?.lookup("ref", token.query), currentPage: setting("pageBoost") ? st.pageTitle : null,
+        prose: setting("refProse"), code: looksLikeCode(token.query),
       })
         .map((hit) => ({
-          kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page,
+          kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
           ...rowText(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
         }));
     }

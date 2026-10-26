@@ -126,3 +126,67 @@ test("cached prefilter sets give the same ranking as a cold index", () => {
     assert.deepEqual(rankRefs(warm, searchPlan(q)).map((r) => r.uid), rankRefs(cold, searchPlan(q)).map((r) => r.uid), q);
   }
 });
+
+const RCODE = "```r\n# Load required libraries\nlibrary(ggplot2)\nlibrary(dplyr)\n" +
+  "p <- ggplot(df, aes(x = Date, y = Count)) +\n  theme(axis.text = element_text(size = 10, color = \"black\"),\n" +
+  "        panel.grid = element_blank())\nzebra_plot <- function(d) d\n" + "x <- 1\n".repeat(80) + "```";
+const WATCH = "{{[[TODO]]}} Watch [[Black Panther]]";
+const uids = (ranked) => ranked.map((r) => r.uid);
+
+test("svy 0.7: code blocks do not match a prose query, the Black Panther task does", () => {
+  const rows = [["xkeryyXeP", RCODE, 1], ["dLpZ2t-lA", RCODE, 1], ["cs1PFq5go", WATCH, 1]];
+  assert.deepEqual(uids(rankRefs(buildRefIndex(rows), searchPlan("black pan"))), ["cs1PFq5go"]);
+});
+
+test("svy 0.7: only code blocks in the pool give nothing, prose off gives the 0.6.1 hits", () => {
+  const index = buildRefIndex([["xkeryyXeP", RCODE, 1], ["dLpZ2t-lA", RCODE, 1]]);
+  assert.deepEqual(rankRefs(index, searchPlan("black pan")), []);
+  assert.deepEqual(uids(rankRefs(index, searchPlan("black pan"), { prose: false })).sort(), ["dLpZ2t-lA", "xkeryyXeP"]);
+});
+
+test("prose off lets a many-ref code block win; default hides it", () => {
+  const index = buildRefIndex([["xkeryyXeP", RCODE, 9], ["cs1PFq5go", WATCH, 1]]);
+  assert.equal(rankRefs(index, searchPlan("black pan"), { prose: false })[0].uid, "xkeryyXeP");
+  assert.deepEqual(uids(rankRefs(index, searchPlan("black pan"))), ["cs1PFq5go"]);
+});
+
+test("a code-looking query finds code blocks and marks them inCode", () => {
+  const index = buildRefIndex([["xkeryyXeP", RCODE, 1], ["dLpZ2t-lA", RCODE, 1]]);
+  const found = rankRefs(index, searchPlan("zebra_plot"), { code: true });
+  assert.deepEqual(uids(found).sort(), ["dLpZ2t-lA", "xkeryyXeP"]);
+  assert.ok(found.every((r) => r.inCode === true));
+  assert.deepEqual(rankRefs(index, searchPlan("zebra_plot"), { code: false }), []);
+});
+
+test("a long block ranks after a short one for the same words, unless prose is off", () => {
+  const index = buildRefIndex([["long0001x", "We talked about black panther " + "and more words ".repeat(40), 7], ["cs1PFq5go", WATCH, 1]]);
+  const ranked = rankRefs(index, searchPlan("black pan"));
+  assert.deepEqual(uids(ranked), ["cs1PFq5go", "long0001x"]);
+  assert.equal(ranked[1].long, true);
+  assert.equal(rankRefs(index, searchPlan("black pan"), { prose: false })[0].uid, "long0001x");
+});
+
+test("a match in a linked page title comes first among equals", () => {
+  const index = buildRefIndex([["shed00001", "black panels for the shed", 1], ["cs1PFq5go", WATCH, 1]]);
+  const ranked = rankRefs(index, searchPlan("black pan"));
+  assert.deepEqual(uids(ranked), ["cs1PFq5go", "shed00001"]);
+  assert.ok(ranked[1].score > ranked[0].score);
+  assert.equal(rankRefs(index, searchPlan("black pan"), { prose: false })[0].uid, "shed00001");
+});
+
+test("a contiguous phrase beats scattered words whatever the refs", () => {
+  const index = buildRefIndex([["scatter01", "panther in the black forest", 30], ["phrase001", "black panther notes", 1]]);
+  const ranked = rankRefs(index, searchPlan("black panther"));
+  assert.deepEqual(uids(ranked), ["phrase001", "scatter01"]);
+  assert.equal(ranked[1].level, 1);
+});
+
+test("closer scattered words rank first", () => {
+  const index = buildRefIndex([["far000001", "ant " + "x ".repeat(10) + "man", 1], ["near00001", "ant big man", 1]]);
+  assert.equal(rankRefs(index, searchPlan("ant man"))[0].uid, "near00001");
+});
+
+test("a # or [[ inside code is not a linked page", () => {
+  const index = buildRefIndex([["c00000001", "```js\nconst a = '#tag [[Page]]'\n```", 1]]);
+  assert.equal(index.entries[0].linked, null);
+});

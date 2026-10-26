@@ -1,4 +1,4 @@
-import { isPrecise, matchFromKey, searchKey, strictPrefilter, stripRoamMarkup } from "./search.js";
+import { isPrecise, matchFromKey, searchKey, strictPrefilter, stripMacros, stripRoamMarkup } from "./search.js";
 
 const BLOCK_REF = /\(\(([\w-]{9})\)\)/g;
 const PAGE_REF = /\[\[([^[\]]+)\]\]|#([^\s[\]#,]+)/g;
@@ -6,6 +6,24 @@ const PAGE_REF = /\[\[([^[\]]+)\]\]|#([^\s[\]#,]+)/g;
 // The recall tier (typos, initialisms) walks every target token; on long
 // paragraphs that dominates the per-key cost, so it only runs on short blocks.
 const RECALL_MAX_TOKENS = 40;
+
+// About 400 characters; svy has 5,314 referenced blocks, 140 of them longer;
+// notes 3,775, 77 longer (measured 2026-10-25).
+const LONG_TOKENS = 64;
+
+// Fenced and inline code, apart from the prose around it: a query of plain
+// words must not match inside ggplot code. Each code span leaves one space.
+export function splitCode(string) {
+  const code = [];
+  const prose = String(string).replace(/```[\w+#.-]*[ \t]*\n?([\s\S]*?)(?:```|$)/g, (_, text) => {
+    code.push(text);
+    return " ";
+  }).replace(/`([^`\n]+)`/g, (_, text) => {
+    code.push(text);
+    return " ";
+  });
+  return { prose, code: code.join("\n") };
+}
 
 // rows: [uid, string, inboundRefCount, pageTitle] for blocks that other
 // blocks reference.
@@ -41,19 +59,24 @@ function startRefIndex(rows) {
 function keyEntry(entry, index, aliasesByPage) {
   const { byUid } = index;
   const quotes = [];
-  const resolved = entry.string.replace(BLOCK_REF, (_, uid) => {
-    quotes.push(uid);
+  const { prose, code } = splitCode(entry.string);
+  // Macros go before refs resolve, so an embed's or render's ((uid)) is not pulled in.
+  const resolved = stripMacros(prose).replace(BLOCK_REF, (_, uid) => {
     const target = byUid.get(uid);
     return target ? ` ${target.string} ` : " ";
   });
+  for (const m of entry.string.matchAll(BLOCK_REF)) quotes.push(m[1]);
   entry.key = searchKey(stripRoamMarkup(resolved));
   entry.quotes = quotes;
+  entry.codeKey = code.trim() ? searchKey(code) : null;
+  entry.words = entry.key.tokens.length + (entry.codeKey?.tokens.length || 0);
+  entry.long = entry.words > LONG_TOKENS;
   // A block that is nothing but `((X))` is a quoter of X and folds into it.
   entry.pureQuote = quotes.length === 1
     && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, ""))
     ? quotes[0] : null;
   // The pages it links, kept so an alias edit can re-key it (refreshAliasKeys).
-  const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  const linked = [...prose.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
   // Page title -> the blocks that link it, for aliasKeyTargets.
   for (const title of new Set(linked)) {
@@ -149,22 +172,36 @@ export function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
 }
 
 // Ranking (spec §3): match band, a row picked before for this query (pick
-// memory, most recent first), originals before quoters, inbound refs in log2
-// steps, alias hit, on the page being edited, score, shorter text, uid.
+// memory, most recent first), originals before quoters, long blocks (more
+// than 64 words) after shorter ones, inbound refs in log2 steps, alias hit,
+// on the page being edited, a match inside a linked [[page]] or #tag, score
+// (start of block and word distance), shorter text, uid. With prose off the
+// long and title steps are skipped and code matches like prose (the 0.6.1
+// order).
 // Pass 1 is strict only;
 // recall (typos, abbreviations) runs only when the strip is not yet full,
 // because recall rows rank below every strict row.
-export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
+export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false } = {}) {
   if (!index || !plan) return [];
   const hits = new Map();
+  const withCode = !prose || code;
   const consider = (entry, opts) => {
     let match = matchFromKey(entry.key, plan, opts);
     let viaAlias = false;
+    let inCode = false;
+    if (withCode && entry.codeKey) {
+      const codeMatch = matchFromKey(entry.codeKey, plan, opts);
+      if (isPrecise(codeMatch) && (!isPrecise(match) || rankOf(codeMatch) > rankOf(match))) {
+        match = codeMatch;
+        inCode = true;
+      }
+    }
     if (aliasExpand && entry.aliasKey) {
       const aliasMatch = matchFromKey(entry.aliasKey, plan, opts);
       if (isPrecise(aliasMatch) && (!isPrecise(match) || rankOf(aliasMatch) > rankOf(match))) {
         match = aliasMatch;
         viaAlias = true;
+        inCode = false;
       }
     }
     if (!isPrecise(match)) return false;
@@ -172,11 +209,11 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
     if (entry.pureQuote && index.byUid.has(entry.pureQuote)) target = index.byUid.get(entry.pureQuote);
     const previous = hits.get(target.uid);
     if (previous && rankOf(previous.match) >= rankOf(match)) return true;
-    hits.set(target.uid, { entry: target, match, viaAlias });
+    hits.set(target.uid, { entry: target, match, viaAlias, inCode });
     return true;
   };
   const strictHit = new Set();
-  for (const entry of prefiltered(index, plan, aliasExpand)) {
+  for (const entry of prefiltered(index, plan, aliasExpand, withCode)) {
     if (consider(entry, { strict: true })) strictHit.add(entry);
   }
   // A recall row needs one word exact and another fuzzy, so a one-word
@@ -195,17 +232,29 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
   const rows = [...hits.values()];
   const pick = (hit) => picked?.get(hit.entry.uid) || 0;
   const onPage = (hit) => Number(currentPage != null && hit.entry.page === currentPage);
+  // 1 when the query matches inside a page or tag the block links; worked out
+  // once per hit, and only when the comparator gets this far.
+  const titled = (hit) => {
+    if (hit.titled == null) {
+      hit.entry.titleKeys ??= (hit.entry.linked || []).map((t) => searchKey(t));
+      hit.titled = Number(hit.entry.titleKeys.some((k) => matchFromKey(k, plan, { strict: true }).level >= 2));
+    }
+    return hit.titled;
+  };
   rows.sort((a, b) => rankOf(b.match) - rankOf(a.match)
     || pick(b) - pick(a)
     || Number(a.quoter) - Number(b.quoter)
+    || (prose ? Number(a.entry.long) - Number(b.entry.long) : 0)
     || refStep(b.entry.refs) - refStep(a.entry.refs)
     || Number(b.viaAlias) - Number(a.viaAlias)
     || onPage(b) - onPage(a)
+    || (prose ? titled(b) - titled(a) : 0)
     || b.match.score - a.match.score
     || a.entry.string.length - b.entry.string.length
     || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
-  return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter }) => ({
+  return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter, inCode }) => ({
     uid: entry.uid, string: entry.string, refs: entry.refs, page: entry.page, level: match.level, tier: match.tier, score: match.score, viaAlias, quoter,
+    inCode, long: entry.long,
     picked: Boolean(picked?.get(entry.uid)), onPage: currentPage != null && entry.page === currentPage,
   }));
 }
@@ -216,9 +265,9 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
 // returns to a cached set.
 const PREFILTER_CACHE = 24;
 
-function prefiltered(index, plan, aliasExpand) {
+function prefiltered(index, plan, aliasExpand, withCode) {
   const maybe = strictPrefilter(plan);
-  const sig = `${aliasExpand ? 1 : 0}\u0002${maybe.initial ?? ""}\u0002${maybe.needles.join("\u0001")}`;
+  const sig = `${aliasExpand ? 1 : 0}${withCode ? 1 : 0}\u0002${maybe.initial ?? ""}\u0002${maybe.needles.join("\u0001")}`;
   const cache = index.prefilter || (index.prefilter = new Map());
   const hit = cache.get(sig);
   if (hit) {
@@ -228,23 +277,23 @@ function prefiltered(index, plan, aliasExpand) {
   }
   let source = index.entries;
   for (const [, cached] of cache) {
-    if (cached.initial == null && cached.aliasExpand === aliasExpand && cached.needles.length === maybe.needles.length
+    if (cached.initial == null && cached.aliasExpand === aliasExpand && cached.withCode === withCode && cached.needles.length === maybe.needles.length
         && cached.needles.every((n, i) => maybe.needles[i].includes(n)) && cached.length < source.length) {
       source = cached;
     }
   }
-  const list = source.filter((entry) => maybe(entry.key) || (aliasExpand && maybe(entry.aliasKey)));
+  const list = source.filter((entry) => maybe(entry.key) || (aliasExpand && maybe(entry.aliasKey)) || (withCode && maybe(entry.codeKey)));
   list.needles = maybe.needles;
   list.initial = maybe.initial;
   list.aliasExpand = aliasExpand;
+  list.withCode = withCode;
   cache.set(sig, list);
   if (cache.size > PREFILTER_CACHE) cache.delete(cache.keys().next().value);
   return list;
 }
 
-// Bands: exact and substring hits share one band so inbound refs decide
-// between them (the referenced original wins); token-wise hits come next,
-// recall hits after.
+// Bands: a contiguous phrase or prefix (levels 2-3) always beats scattered
+// words (level 1), whatever the refs; recall hits come after.
 function rankOf(match) {
   return Math.min(match.level, 2);
 }

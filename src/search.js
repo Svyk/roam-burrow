@@ -18,13 +18,31 @@ for (const [key, vals] of Object.entries(ABBREV_FORWARD)) {
 // Roam markup removed before keying, so `[[Ant-Man]]`, `**bold**` and
 // `Attr:: value` key on their visible words.
 export function stripRoamMarkup(value) {
-  return String(value == null ? "" : value)
-    .replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 ")
-    .replace(/\{\{[^{}]*\}\}/g, " ")
+  return stripMacros(String(value == null ? "" : value)
+    .replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 "))
     .replace(/\(\(([^()]*)\)\)/g, " ")
     .replace(/\[([^\]]*)\]\(\[\[([^\]]*)\]\]\)/g, "$1 $2")
     .replace(/\[\[|\]\]|#\[\[|\*\*|\^\^|__|~~/g, " ")
     .replace(/(^|\s)#(?=\S)/g, "$1");
+}
+
+// Innermost-first, so repeat until none is left (bounded by nesting depth):
+// `{{embed: {{[[TODO]]}} x}}` must go whole.
+export function stripMacros(value) {
+  let out = value;
+  for (let prev = null; prev !== out;) {
+    prev = out;
+    out = out.replace(/\{\{[^{}]*\}\}/g, " ");
+  }
+  return out;
+}
+
+// A query that looks like code ("panel.grid", "library(gg", "zebra_plot")
+// may match code text; plain words ("black pan") never do.
+export function looksLikeCode(query) {
+  return /[`(){}[\]=<>$;\\|]|::|->|<-/.test(query)
+    || /[\p{L}\p{N}][._][\p{L}\p{N}]/u.test(query)
+    || /\p{Ll}{2,}\p{Lu}/u.test(query);
 }
 
 // "EMP 26" finds "EMP26-002-BHP", "ant man" finds "Ant-Man": letter/number
@@ -176,13 +194,14 @@ function strictMatch(target, plan) {
   let level = 3;
   for (const q of plan.clauses) {
     let score = -1;
-    if (target.raw === q.raw) score = 1200;
-    else if (target.spaced === q.spaced) score = 1160;
-    else if (target.compact === q.compact) score = 1120;
-    else if (target.spaced.startsWith(q.spaced)) score = 980;
-    else if (target.compact.startsWith(q.compact)) score = 940;
-    else if (wordIncludes(target, q)) score = 840;
-    else if (compactIncludes(target, q.compact)) score = 800;
+    let lv = 1;
+    if (target.raw === q.raw) { score = 1200; lv = 3; }
+    else if (target.spaced === q.spaced) { score = 1160; lv = 3; }
+    else if (target.compact === q.compact) { score = 1120; lv = 3; }
+    else if (target.spaced.startsWith(q.spaced)) { score = 980; lv = 2; }
+    else if (target.compact.startsWith(q.compact)) { score = 940; lv = 2; }
+    else if (wordIncludes(target, q)) { score = 840; lv = 2; }
+    else if (compactIncludes(target, q.compact)) { score = 800; lv = 2; }
     else {
       let at = -1, ordered = true, gap = 0;
       for (const token of q.tokens) {
@@ -192,16 +211,21 @@ function strictMatch(target, plan) {
         at = next;
       }
       if (ordered) score = 640 - Math.min(120, gap * 8);
-      else if (q.tokens.every((token) => tokenSet(target).has(token))) score = 500;
-      else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) score = 440;
+      else if (q.tokens.every((token) => tokenSet(target).has(token))) {
+        // Scattered words: the closer together, the higher (500 down to 460).
+        const places = q.tokens.map((token) => target.tokens.indexOf(token));
+        const spread = Math.max(...places) - Math.min(...places) + 1 - q.tokens.length;
+        score = 500 - Math.min(40, spread * 2);
+      }
+      // 440 (every word only a prefix, any order) is level 0: on a real graph
+      // it is mostly noise ("ant man" -> "antibiotics ... management").
+      else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) { score = 440; lv = 0; }
       else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6
           && target.tokens.length >= q.compact.length
           && initialsOf(target).startsWith(q.compact)) score = 380;
     }
     if (score < 0) return { score: -1, level: 0 };
-    // 440 (every word only a prefix, any order) is level 0: on a real graph
-    // it is mostly noise ("ant man" -> "antibiotics ... management").
-    level = Math.min(level, score >= 1120 ? 3 : score >= 800 ? 2 : score === 440 ? 0 : 1);
+    level = Math.min(level, lv);
     total += score;
   }
   return { score: total - Math.min(80, Math.max(0, target.compact.length - plan.compactLength)), level };
