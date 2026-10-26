@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { hintsKey, isAltSlash, isHelpKey, keyLabel, pickerHints, renderHints } from "../src/hints.js";
+import { createSettingsPanel } from "../src/settings.js";
 
 function fakeDoc() {
   const make = () => {
@@ -138,4 +139,15 @@ test("hover tips go beside the picker, then under it, then above it and the text
   const big = { width: 400, height: 60 };
   assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, big, tall, null, { width: 1300, height: 900 }), { left: 956, top: 420, width: 340 }, "a 340 px side");
   assert.deepEqual(placeTip({ ...row, top: 420, bottom: 453 }, big, tall, null, { width: 1095, height: 900 }), null, "no side of 160 px: no tip");
+});
+
+test("the Key hints setting names the labels the hint line shows", () => {
+  const description = createSettingsPanel().settings.find((s) => s.id === "keyHints").description;
+  const parts = (items) => items.map(([keys, label]) => `${keys} ${label}`);
+  const alias = pickerHints({ kind: "[[", row: { kind: "alias", chips: true, drill: true, aliasNew: true }, on: { tabDrill: true } }, true);
+  const ref = pickerHints({ kind: "((", row: { kind: "ref", drill: true }, on: { tabDrill: true, refOutline: true } }, true);
+  // The drill panel's line (src/scopeview.js).
+  const drill = ["↵ insert", "⇥/> children", "⇧⇥ up", "esc results", "⌃O preview"];
+  for (const part of [...parts(alias), ...parts(ref), ...drill]) assert.ok(description.includes(part), `${part} in ${description}`);
+  assert.doesNotMatch(description, /⇥ drill|⇥\/> drill/);
 });

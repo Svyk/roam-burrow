@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { helpGroups } from "../src/help.js";
-import { DEFAULTS } from "../src/settings.js";
+import { helpGroups, helpKeyAction } from "../src/help.js";
+import { DEFAULTS, createSettingsPanel } from "../src/settings.js";
 
 const reader = (over = {}) => (id) => (id in over ? over[id] : DEFAULTS[id]);
 const flat = (groups) => groups.flatMap((g) => g.items.map(([k, what]) => `${g.title}: ${k} ${what}`));
@@ -45,4 +45,23 @@ test("Delete aliases on with Alias chips off: the key list says ⌥⌫ needs the
 test("the outline key is listed with Up and down the outline on, and gone with it off", () => {
   assert.ok(flat(helpGroups(reader(), true)).some((l) => l.startsWith("Drill: ⇧⇥ on a block row")));
   assert.ok(!flat(helpGroups(reader({ refOutline: false }), true)).some((l) => l.startsWith("Drill: ⇧⇥ on a block row")));
+});
+
+test("with the key list open, Enter and Tab only close it, whatever the modifiers", () => {
+  const key = (k, mods = {}) => ({ key: k, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...mods });
+  // The list covers the picker: no row under it may run (BRW-9).
+  for (const k of ["Enter", "Tab"]) {
+    for (const mods of [{}, { shiftKey: true }, { altKey: true }, { ctrlKey: true }, { metaKey: true }]) {
+      assert.equal(helpKeyAction(key(k, mods)), "close", `${k} ${JSON.stringify(mods)}`);
+    }
+  }
+  assert.equal(helpKeyAction(key("Escape")), "close");
+  assert.equal(helpKeyAction(key("F1")), "close");
+  assert.equal(helpKeyAction(key("÷", { altKey: true })), "close", "⌥/ on a Mac");
+  for (const k of ["Shift", "Alt", "Meta", "Control", "CapsLock"]) assert.equal(helpKeyAction(key(k)), "keep", k);
+  // Anything else closes the list and goes on: typing types, arrows move.
+  for (const k of ["x", "ArrowDown", "ArrowUp", "Backspace"]) assert.equal(helpKeyAction(key(k)), "pass", k);
+  assert.equal(helpKeyAction(key("Escape", { shiftKey: true })), "pass");
+  const setting = createSettingsPanel().settings.find((s) => s.id === "helpSheet").description;
+  assert.match(setting, /Enter or Tab only closes it/);
 });

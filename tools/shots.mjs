@@ -93,6 +93,10 @@ const SCENARIOS = [
   { id: "43-key-list-f1", query: `((${config.ref}`, keys: ["F1"] },
   { id: "44-smartblock-child", query: "((zebra smart", keys: ["preview-open", "wait:500"] },
   { id: "45-smartblock-tab", query: "((zebra smart", keys: ["preview-open", "Tab", "wait:400"] },
+  // 0.6.1: the key list over Roam's highlighted row; Enter only closes it.
+  { id: "46-roam-row-before-key-list", query: `((${config.ref}`, keys: ["preview-closed", "down-past-strip", "wait:300"] },
+  { id: "47-key-list-over-roam-row", query: `((${config.ref}`, keys: ["preview-closed", "down-past-strip", "alt+slash", "wait:300"] },
+  { id: "48-key-list-enter-closes", query: `((${config.ref}`, keys: ["preview-closed", "down-past-strip", "alt+slash", "Enter", "wait:400"] },
 ];
 
 const c = await connect(title);
@@ -197,7 +201,10 @@ async function runKeys(keys) {
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
     else if (k === "preview-closed") { if (await isExpanded()) await ctrlO(); }
     else if (k === "alt+slash") await altSlash();
-    else if (k.startsWith("hover:")) {
+    else if (k === "down-past-strip") {
+      const rows = await c.evaluate(() => document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row").length);
+      for (let i = 0; i < rows; i++) { await c.key("ArrowDown"); await sleep(60); }
+    } else if (k.startsWith("hover:")) {
       const p = await point(k.slice(6), null);
       // From a little to the left, as a hand would come: a jump onto a node
       // that just appeared under a still pointer may fire no mouseover.

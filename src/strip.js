@@ -2,7 +2,7 @@ import { aliasInsertion, groupAliasHits, matchAliases, roamAliasesWillList } fro
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
-import { createHelpSheet, helpGroups } from "./help.js";
+import { createHelpSheet, helpGroups, helpKeyAction } from "./help.js";
 import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints.js";
 import { createTreeSource, PAUSE } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
@@ -1035,17 +1035,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     sheet.node.classList.toggle("burrow-dark", strip.classList.contains("burrow-dark"));
   }
 
-  // While the list is open: Esc or ⌥/ closes it; any other key closes it and
-  // then does what it does (typing goes on as if it had not been open).
+  // While the list is open: Esc, ⌥/, F1, Enter or Tab closes it and does
+  // nothing else (Enter never picks a row hidden under it); any other key
+  // closes it and then does what it does (typing goes on as if it had not
+  // been open).
   function helpKey(event) {
-    if (isHelpKey(event) || (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey)) {
-      consume(event);
-      closeHelp();
-      return true;
-    }
-    if (["Shift", "Alt", "Meta", "Control", "CapsLock"].includes(event.key)) return true;
+    const action = helpKeyAction(event);
+    if (action === "keep") return true;
+    if (action === "close") consume(event);
     closeHelp();
-    return false;
+    return action === "close";
   }
 
   // The textarea keeps focus (mousedown), and the ? and ✕ act on click: the
@@ -1298,6 +1297,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (tips.visible) tips.hide();
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    // The key list covers every row: first, so its Enter only closes it.
+    if (st.help && event.target === st.ta && helpKey(event)) return;
     // The text before the caret is no longer what Burrow ranked (the caret
     // moved without an event Burrow saw yet): rank again before the key acts.
     // Enter or Tab then only redraws; the highlight the user saw was Burrow's,
@@ -1309,7 +1310,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       if (event.key === "Enter" || event.key === "Tab") { consume(event); return; }
       if (st.phase === "IDLE") return;
     }
-    if (st.help && event.target === st.ta && helpKey(event)) return;
     if (isHelpKey(event) && setting("helpSheet") && event.target === st.ta && !event.isComposing && !st.composing && !st.prompt?.compose) {
       if (openHelp()) { consume(event); return; }
     }

@@ -1,4 +1,4 @@
-/* Burrow v0.6.0 | MIT | generated; edit src/ */
+/* Burrow v0.6.1 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -1200,9 +1200,9 @@ var SWITCHES = [
   ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
   ["tabDrill", "Tab drills in", "Tab on the highlighted page lists the blocks on that page, and on a referenced block with children lists the children of that block, in place under a breadcrumb. Type to filter, ↑/↓ to move, Enter inserts the block's ((uid)), Tab goes one level deeper, Shift+Tab or Backspace on an empty filter goes back, Esc returns to the results. With nothing to drill into, Tab does what Roam does."],
   ["paneLayout", "Keep panes apart", "Roam's preview, roam-aliases' column and the result list each get their own space in the picker; nothing is drawn over anything else."],
-  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys that do something for the highlighted row, RefX style: on an alias row ↵ pick alias · ⌥↓ more aliases · ⇥ drill (only when the page has blocks) · ⌥A add alias; in a drill ⇥/> drill · ⇧⇥ back · ⌃O preview."],
+  ["keyHints", "Key hints", "A line at the bottom of the picker naming the keys that do something for the highlighted row, RefX style: on an alias row ↵ pick alias · ⌥↓ more aliases · ⇥ blocks on this page (only when the page has blocks) · ⌥A add alias; on a referenced block ↵ insert ref · ⇥ children of this block · ⇧⇥ parent; in the drill panel ↵ insert · ⇥/> children · ⇧⇥ up (back at the top) · esc results · ⌃O preview."],
   ["helpTips", "Hover tips", "Hovering a Burrow row, alias chip, preview or key hint shows what it is and which key does what with it, in Roam's colors."],
-  ["helpSheet", "Key list (⌥/, F1 or ?)", "⌥/ (Alt+/) or F1 (fn+F1 on a Mac keyboard, any layout) while the picker is open, or the ? at the end of the hint line, lists every key Burrow adds, grouped, for the switches that are on. Esc or ⌥/ closes it; any other key closes it and goes on as usual."],
+  ["helpSheet", "Key list (⌥/, F1 or ?)", "⌥/ (Alt+/) or F1 (fn+F1 on a Mac keyboard, any layout) while the picker is open, or the ? at the end of the hint line, lists every key Burrow adds, grouped, for the switches that are on. It covers the picker, so Esc, ⌥/, F1, Enter or Tab only closes it (Enter never picks a row hidden under it); any other key closes it and goes on as usual."],
   ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["refContext", "Where the block lives", "Under the highlighted referenced block in ((, a line with its page and parent (Page › … › Parent) and how many children Tab lists."],
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
@@ -1650,6 +1650,13 @@ function renderHints(doc, node, items) {
 
 // src/help.js
 var WIDE = 620;
+var MODIFIERS = /* @__PURE__ */ new Set(["Shift", "Alt", "Meta", "Control", "CapsLock"]);
+function helpKeyAction(event) {
+  if (event.key === "Enter" || event.key === "Tab" || isHelpKey(event)) return "close";
+  if (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) return "close";
+  if (MODIFIERS.has(event.key)) return "keep";
+  return "pass";
+}
 function helpGroups(setting, mac = IS_MAC) {
   const k = (name) => keyLabel(name, mac);
   const on = (id) => Boolean(setting(id));
@@ -3558,14 +3565,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     sheet.node.classList.toggle("burrow-dark", strip.classList.contains("burrow-dark"));
   }
   function helpKey(event) {
-    if (isHelpKey(event) || event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-      consume(event);
-      closeHelp();
-      return true;
-    }
-    if (["Shift", "Alt", "Meta", "Control", "CapsLock"].includes(event.key)) return true;
+    const action = helpKeyAction(event);
+    if (action === "keep") return true;
+    if (action === "close") consume(event);
     closeHelp();
-    return false;
+    return action === "close";
   }
   function onHintsMouseDown(event) {
     event.preventDefault();
@@ -3791,6 +3795,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     if (tips.visible) tips.hide();
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
+    if (st.help && event.target === st.ta && helpKey(event)) return;
     if (st.phase === "OWNED" && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
       trace({ ev: "stale-key", key: event.key });
       evaluate(st.ta);
@@ -3801,7 +3806,6 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       }
       if (st.phase === "IDLE") return;
     }
-    if (st.help && event.target === st.ta && helpKey(event)) return;
     if (isHelpKey(event) && setting("helpSheet") && event.target === st.ta && !event.isComposing && !st.composing && !st.prompt?.compose) {
       if (openHelp()) {
         consume(event);
@@ -4668,7 +4672,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.6.0";
+var VERSION = "0.6.1";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 function safeLocalStorage() {

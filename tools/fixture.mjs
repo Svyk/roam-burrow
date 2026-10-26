@@ -416,6 +416,10 @@ export const childStrings = (c, pageUid) => c.evaluate((pageUid) => {
 export const editedSince = (c, t0) => c.evaluate((t0) => window.roamAlphaAPI.q(
   "[:find [?u ...] :in $ ?t0 :where [?b :edit/time ?t] [(> ?t ?t0)] [?b :block/uid ?u]]", t0) || [], t0);
 
+// Blocks created since t0 anywhere in the graph, with their text.
+export const createdSince = (c, t0) => c.evaluate((t0) => window.roamAlphaAPI.q(
+  "[:find ?u ?s :in $ ?t0 :where [?b :create/time ?t] [(> ?t ?t0)] [?b :block/uid ?u] [?b :block/string ?s]]", t0).map(([u, s]) => `${u}: ${s}`), t0);
+
 export const deleteBlock = (c, uid) => c.evaluate(async (uid) => {
   if (window.roamAlphaAPI.q(`[:find ?e . :where [?e :block/uid "${uid}"]]`)) await window.roamAlphaAPI.data.block.delete({ block: { uid } });
 }, uid);
