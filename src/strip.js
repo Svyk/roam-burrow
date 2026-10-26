@@ -7,6 +7,7 @@ import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints
 import { createTreeSource, PAUSE } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { rankRefs } from "./refindex.js";
+import { createRichCache, renderParts, richParts, snippet } from "./rich.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { looksLikeCode, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
@@ -108,9 +109,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     avoid: () => (st.ta?.isConnected ? st.ta.getBoundingClientRect() : null),
     around: () => pickerArea(),
   });
-  const preview = createPreview({ doc, win, lifecycle });
-  const scopePreview = createPreview({ doc, win, lifecycle });
-  const scopePanel = createScopePanel({ doc, win, lifecycle, highlight: (text, query) => highlight(text, query) });
+  // Block text drawn as Roam draws it: parsed once per uid and text, and the
+  // cache is dropped with the ref index (a block ref's resolved text may have
+  // changed). A block neither referenced nor read stays ((uid)): no pull here.
+  const richCache = createRichCache();
+  let richRefs = null;
+  const resolveRef = (uid) => indexes.refs?.byUid.get(uid)?.string ?? tree.get(uid)?.string ?? null;
+  const richFor = (uid, string) => (setting("richRows") ? richCache.get(uid, string, () => richParts(string, { resolve: resolveRef })) : null);
+  const previewRich = (item) => (item.string != null ? richFor(item.uid, item.string) : null);
+  const preview = createPreview({ doc, win, lifecycle, rich: previewRich });
+  const scopePreview = createPreview({ doc, win, lifecycle, rich: previewRich });
+  const scopePanel = createScopePanel({
+    doc, win, lifecycle, highlight: (text, query) => highlight(text, query),
+    rich: (row) => (row.node && row.more == null ? richFor(row.node.uid, row.node.string) : null),
+    onSlice: (ms) => perf.push("scope.rich", ms),
+  });
   const fast = api.data?.fast?.q ? (query, ...args) => api.data.fast.q(query, ...args) : (query, ...args) => api.q(query, ...args);
   const tree = createTreeSource({
     pull: (pattern, eid) => api.pull(pattern, eid),
@@ -157,6 +170,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function rank(token) {
     st.drill = null;
+    if (indexes.refs !== richRefs) { richRefs = indexes.refs; richCache.clear(); }
     const recall = setting("betterMatch");
     if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
       const parsed = parseDrill(token.query, indexes.titles);
@@ -180,6 +194,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         .map((hit) => ({
           kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
           ...rowText(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
+          // A query that matched inside code shows the code line it matched.
+          rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(token.query) }) : richFor(hit.uid, hit.string),
         }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
@@ -212,6 +228,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return {
       kind: "drill", key: `drill:${result.insertion}`, uid: target?.uid ?? page.uid, level: 3, insertion: result.insertion,
       crumb: target ? crumb : null, text: target ? readableText(target.string) : page.title,
+      rich: target ? richFor(target.uid, target.string) : null,
     };
   }
 
@@ -294,10 +311,44 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     detectId = win.requestIdleCallback(() => {
       detectId = null;
       try { detectRoamAliases(); } catch { /* keep DOM fallback */ }
+      try { sampleColors(); } catch { /* the stylesheet's colors stay */ }
     }, { timeout: 5000 });
   };
   scheduleDetect();
   lifecycle.add(() => { if (detectId != null) win.cancelIdleCallback(detectId); });
+
+  // The colors Roam's theme paints refs, tags, block refs, highlights and
+  // code, read from the first such element in the document and set on
+  // Burrow's own nodes. Idle only (computed styles), never on a key; a color
+  // that is missing or transparent is removed, so the stylesheet's applies.
+  let sampledDark = null;
+  function sampleColors() {
+    const nodes = [strip, preview.node, scopePreview.node, scopePanel.node];
+    const set = (name, value) => {
+      for (const node of nodes) {
+        if (value && !/^(transparent|rgba\(.*,\s*0\))$/.test(value)) node.style.setProperty(name, value);
+        else node.style.removeProperty(name);
+      }
+    };
+    const style = (selector) => { const el = doc.querySelector(selector); return el ? win.getComputedStyle(el) : null; };
+    set("--burrow-ref", style(".rm-page-ref--link")?.color);
+    set("--burrow-tag", style(".rm-page-ref--tag")?.color);
+    const bref = style(".rm-block-ref");
+    set("--burrow-bref", bref ? (parseFloat(bref.borderBottomWidth) > 0 ? bref.borderBottomColor : bref.color) : null);
+    const hl = style(".rm-highlight");
+    set("--burrow-hl-bg", hl?.backgroundColor);
+    set("--burrow-hl-fg", hl?.color);
+    const code = style("code");
+    set("--burrow-code-bg", code?.backgroundColor);
+    set("--burrow-code-fg", code?.color);
+    set("--burrow-mono", code?.fontFamily);
+  }
+  // A dark/light switch changes what Roam paints: sample again, at idle.
+  function colorsStale(dark) {
+    if (dark === sampledDark) return;
+    sampledDark = dark;
+    scheduleDetect();
+  }
 
   function visibleRows() {
     if (!st.pop) return [];
@@ -413,8 +464,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         model.drillKey = st.drill.key;
       }
       // The lines now; their place (a layout read) in the frame.
-      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
-      else { preview.fill(model, st.pop); redock = true; requestPlace(); }
+      const budgetMs = richBudget(1);
+      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true, budgetMs });
+      else { preview.fill(model, st.pop, { budgetMs }); redock = true; requestPlace(); }
+      if (preview.unfinished) scheduleRest(preview, () => Boolean(st.drill) && model?.drillKey === st.drill.key, "row");
       return;
     }
     const row = previewTarget();
@@ -473,10 +526,17 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     model = next;
     // The lines around the highlighted block now, the rest in the next slice:
     // every line inserted costs about 0.04 ms in svy.
-    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => previewSample("scroll", ms), lines: PREVIEW_FIRST_LINES });
+    preview.show(model, st.pop, {
+      avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => previewSample("scroll", ms), lines: PREVIEW_FIRST_LINES,
+      budgetMs: richBudget(Math.max(0.5, PREVIEW_SLICE_MS - elapsed())),
+    });
     previewSample("draw", elapsed());
-    if (preview.pending) scheduleRowPreviewRest(row);
+    if (preview.pending) scheduleRest(preview, () => previewTarget()?.key === row.key, "row");
   }
+
+  // Rich lines cost more than plain text: with richRows on, a draw stops
+  // after its budget (past the highlighted line) and the rest follows at idle.
+  const richBudget = (ms) => (setting("richRows") ? ms : Infinity);
 
   // Every idle task of the row preview is a "preview" sample (held to the
   // budget by perf-gate), and also one of its kind, for the report.
@@ -485,17 +545,27 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     perf.push(`preview.${kind}`, ms);
   }
 
-  function scheduleRowPreviewRest(row) {
+  // The lines of a pane a draw left for later, PREVIEW_SLICE_MS at idle at a
+  // time; `current` says the pane still shows what this was scheduled for.
+  // "row" is the slot cancelRowPreview clears; the scope preview has its own.
+  let scopeRestId = null;
+  function scheduleRest(pane, current, slot) {
+    if ((slot === "row" ? rowPreviewId : scopeRestId) != null) return;
+    const set = (id) => { if (slot === "row") rowPreviewId = id; else scopeRestId = id; };
     const run = () => {
-      rowPreviewId = null;
-      if (previewTarget()?.key !== row.key) return;
-      const t0 = performance.now();
-      preview.more(PREVIEW_FIRST_LINES);
-      previewSample("rest", performance.now() - t0);
-      if (preview.pending) scheduleRowPreviewRest(row);
+      set(null);
+      if (!current() || !pane.unfinished) return;
+      if (pane.pending) {
+        const t0 = performance.now();
+        pane.more(PREVIEW_FIRST_LINES, richBudget(PREVIEW_SLICE_MS));
+        previewSample("rest", performance.now() - t0);
+      }
+      if (pane.unfinished) set(idle(run));
     };
-    rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60);
+    set(idle(run));
   }
+  lifecycle.add(() => { if (scopeRestId != null) (win.cancelIdleCallback || win.clearTimeout).call(win, scopeRestId); scopeRestId = null; });
+  const idle = (run) => (typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60));
 
   function rowModel(row, read) {
     let page;
@@ -524,10 +594,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       node.title = `${row.alias} → ${row.title}`;
     } else if (row.kind === "drill") {
       if (row.crumb) text.append(Object.assign(doc.createElement("span"), { className: "burrow-trail-inline", textContent: `${row.crumb} › ` }));
-      text.append(row.text);
+      if (row.rich) text.append(richContent(row));
+      else text.append(row.text);
       node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text));
+      if (row.rich) text.append(richContent(row));
+      else if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text));
       else text.append(highlight(row.text));
       node.title = row.text;
     }
@@ -551,14 +623,23 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // The query's words as one pattern, made once per query (rows render per key).
   let highlightFor = null;
   let highlightRe = null;
-  function highlight(text, query = st.token?.query) {
-    const fragment = doc.createDocumentFragment();
+  function highlightPattern(query) {
     if (query !== highlightFor) {
       highlightFor = query;
       const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
       highlightRe = words.length ? new RegExp(`(?<![\\p{L}\\p{N}])(${words.map(escapeRe).join("|")})`, "giu") : null;
     }
-    const re = highlightRe;
+    return highlightRe;
+  }
+
+  // A row's block as Roam draws it, cut around the match when long.
+  function richContent(row) {
+    return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
+  }
+
+  function highlight(text, query = st.token?.query) {
+    const fragment = doc.createDocumentFragment();
+    const re = highlightPattern(query);
     if (!re) { fragment.append(text); return fragment; }
     let at = 0;
     for (const m of text.matchAll(re)) {
@@ -755,6 +836,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     else if (!activeRow) strip.style.removeProperty("--burrow-active");
     const dark = isDarkHost(doc);
     strip.classList.toggle("burrow-dark", dark);
+    colorsStale(dark);
     sampleHints(pop, dark);
     for (const p of [preview, scopePreview]) {
       for (const name of ["--burrow-bg", "--burrow-fg"]) p.node.style.setProperty(name, strip.style.getPropertyValue(name));
@@ -1743,7 +1825,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
       scopeModel.drillKey = key;
     }
-    scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });
+    scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
+    if (scopePreview.unfinished) scheduleRest(scopePreview, () => st.phase === "SCOPE" && Boolean(st.scope?.preview), "scope");
   }
 
   function scopeMove(delta) {

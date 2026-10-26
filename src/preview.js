@@ -4,6 +4,7 @@
 // popover where Roam's preview would open. Text only: no Roam blocks are
 // rendered, so a click cannot open an editor. TODO/DONE show as Roam's
 // checkbox before the line's text.
+import { plainText, renderParts } from "./rich.js";
 import { hasTask, taskParts } from "./tasks.js";
 
 const SIBLING_WINDOW = 24;
@@ -23,7 +24,7 @@ const readerOf = (tree) => (tree.window ? tree : {
   indexOf: (parentUid, uid) => tree.children(parentUid).findIndex((k) => k.uid === uid),
 });
 
-// model: { key, trail: [text], items: [{ text, depth, heading, target }] }
+// model: { key, trail: [text], items: [{ text, string, depth, heading, target }] }
 // Reads only what it shows: 16 children per level, 24 siblings around the
 // target, so a page with thousands of blocks costs as much as a small one.
 export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
@@ -44,7 +45,7 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
     for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
-      items.push({ uid: kid.uid, text: text(kid.string || ""), task: task(kid.string), depth, heading: kid.heading, target: false });
+      items.push({ uid: kid.uid, text: text(kid.string || ""), string: kid.string ?? "", task: task(kid.string), depth, heading: kid.heading, target: false });
       if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
     if (total > CHILD_LIMIT) items.push({ more: total - CHILD_LIMIT, depth });
@@ -61,15 +62,17 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
+    items.push({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), task: task(target.string), depth: 0, heading: target.heading, target: true });
+  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
 
-export function createPreview({ doc, win, lifecycle }) {
+// rich(item) -> parts (src/rich.js) or null: a line is drawn as Roam draws the
+// block (spans only where the block has markup), else as plain text.
+export function createPreview({ doc, win, lifecycle, rich = null }) {
   const pane = doc.createElement("div");
   pane.className = "burrow-preview bp3-elevation-3";
   pane.hidden = true;
@@ -90,7 +93,9 @@ export function createPreview({ doc, win, lifecycle }) {
   // where they go.
   let rest = null;
   let restAt = 0;
-  function render(model, lines = Infinity) {
+  // deadline: a performance.now() time after which no further line is written
+  // (the line with the highlighted block always is); the rest stays in `rest`.
+  function render(model, lines = Infinity, deadline = Infinity) {
     // The pane says what it is (src/extension.css draws "Preview" before the trail).
     trailNode.replaceChildren();
     model.trail.forEach((part, i) => {
@@ -98,24 +103,30 @@ export function createPreview({ doc, win, lifecycle }) {
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
     const first = model.items.slice(0, lines);
-    writeLines(first, 0);
-    rest = model.items.length > lines ? model.items.slice(lines) : null;
-    restAt = first.length;
+    const wrote = writeLines(first, 0, deadline);
+    rest = model.items.length > wrote ? model.items.slice(wrote) : null;
+    restAt = wrote;
     // Lines of the last outline past this one's end go; those this one draws
     // later wait hidden.
     const kids = outline.children;
     while (kids.length > model.items.length) kids[kids.length - 1].remove();
-    for (let i = first.length; i < kids.length; i++) kids[i].hidden = true;
+    for (let i = wrote; i < kids.length; i++) kids[i].hidden = true;
   }
 
   // Lines are written into the outline's existing line nodes (in svy a new
   // node costs about 0.06 ms to insert, a rewrite next to nothing); only
   // lines past the last outline's count are made.
-  function writeLines(items, from) {
+  // Returns how many items were written; `min` of them whatever the deadline.
+  function writeLines(items, from, deadline = Infinity, min = 0) {
     const kids = outline.children;
     const made = [];
-    items.forEach((item, i) => {
-      const row = kids[from + i] || doc.createElement("div");
+    let lastTarget = -1;
+    if (deadline !== Infinity) for (let i = 0; i < items.length; i++) if (items[i].target) lastTarget = i;
+    let wrote = 0;
+    for (; wrote < items.length; wrote++) {
+      if (deadline !== Infinity && wrote >= min && wrote > lastTarget && performance.now() > deadline) break;
+      const item = items[wrote];
+      const row = kids[from + wrote] || doc.createElement("div");
       let cls = "burrow-node";
       if (item.more != null) cls += " burrow-more";
       else {
@@ -126,14 +137,36 @@ export function createPreview({ doc, win, lifecycle }) {
       if (row.className !== cls) row.className = cls;
       const depth = String(item.depth);
       if (row.style.getPropertyValue("--burrow-depth") !== depth) row.style.setProperty("--burrow-depth", depth);
-      const text = item.more != null ? `+${item.more} more` : item.text || " ";
-      if (row.childNodes.length === 1 && row.firstChild.nodeType === 3) {
-        if (row.firstChild.data !== text) row.firstChild.data = text;
-      } else row.textContent = text;
+      writeContent(row, item);
       if (row.hidden) row.hidden = false;
       if (!row.parentNode) made.push(row);
-    });
+    }
     if (made.length) outline.append(...made);
+    return wrote;
+  }
+
+  // A line's content. A rich line remembers what it holds, so a line that is
+  // still the same block is not rewritten (a rewrite replaces its nodes).
+  function writeContent(row, item) {
+    if (item.more == null && item.string != null && rich) {
+      const key = `${item.uid}\u0000${item.string}`;
+      if (row.__burrowLine === key) return;
+      const parts = rich(item)?.filter((part) => !part.task);
+      if (parts?.length) {
+        row.__burrowLine = key;
+        if (parts.every((part) => part.cls === "")) setText(row, plainText(parts) || " ");
+        else row.replaceChildren(renderParts(doc, parts));
+        return;
+      }
+    }
+    row.__burrowLine = null;
+    setText(row, item.more != null ? `+${item.more} more` : item.text || " ");
+  }
+
+  function setText(row, text) {
+    if (row.childNodes.length === 1 && row.firstChild.nodeType === 3) {
+      if (row.firstChild.data !== text) row.firstChild.data = text;
+    } else row.textContent = text;
   }
 
   // Docked over Roam's preview: the rect is read before the pane is written,
@@ -195,17 +228,18 @@ export function createPreview({ doc, win, lifecycle }) {
     // Does this pane lie over `popover`'s preview area (its class hides Roam's)?
     drills: (popover) => !pane.hidden && pop === popover && pane.classList.contains("burrow-preview-docked"),
     // The model's lines only, no layout read: show() places them (in a frame).
-    fill(model, popover) {
+    fill(model, popover, { budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       if (model.key === shownKey) return;
-      render(model);
+      render(model, Infinity, performance.now() + budgetMs);
       shownKey = model.key;
       filled = true;
     },
     // inFrame: called from a frame callback, so the scroll runs now, in this frame.
     // lines: draw only that many lines now; more() draws the rest later.
-    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false, lines = Infinity } = {}) {
+    // budgetMs: stop writing lines after that long (past the highlighted one).
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false, lines = Infinity, budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       // The class can grow the popover (min-height), so it goes on before the read.
@@ -213,7 +247,7 @@ export function createPreview({ doc, win, lifecycle }) {
       const docked = dockRect(beside);
       const changed = model.key !== shownKey || pane.hidden || filled;
       filled = false;
-      if (model.key !== shownKey) { render(model, lines); shownKey = model.key; }
+      if (model.key !== shownKey) { render(model, lines, performance.now() + budgetMs); shownKey = model.key; }
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);
@@ -231,12 +265,14 @@ export function createPreview({ doc, win, lifecycle }) {
     // Lines show() left for later, `lines` more of them drawn now (appended:
     // the scroll stays).
     get pending() { return Boolean(rest) && !pane.hidden; },
-    more(lines = Infinity) {
+    // Lines left for more(), shown or not yet (fill() leaves the pane hidden).
+    get unfinished() { return Boolean(rest); },
+    more(lines = Infinity, budgetMs = Infinity) {
       if (!rest || pane.hidden) return;
       const items = rest.slice(0, lines);
-      rest = rest.length > lines ? rest.slice(lines) : null;
-      writeLines(items, restAt);
-      restAt += items.length;
+      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1);
+      rest = wrote < rest.length ? rest.slice(wrote) : null;
+      restAt += wrote;
     },
     hide() {
       cancelScroll();

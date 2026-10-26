@@ -3,14 +3,20 @@
 // rebuilt when the level, query or row list changes; moving the highlight
 // touches classes only.
 import { hintsKey, keyLabel, renderHints as paintHints } from "./hints.js";
+import { renderParts } from "./rich.js";
 import { checkbox } from "./tasks.js";
 
 const MAX_LABEL = 40;
 // Crumbs above the last one are cut shorter, so the level the list shows
 // stays readable on a long trail (page › parent › block).
 const MAX_ANCESTOR = 22;
+// The list holds up to 50 rows and is rebuilt per filter key: only this many
+// are drawn as Roam draws them in that key's work, the rest at idle.
+const RICH_NOW = 12;
+const UPGRADE_SLICE_MS = 3;
 
-export function createScopePanel({ doc, win, lifecycle, highlight }) {
+// rich(row) -> parts (src/rich.js) or null; onSlice(ms) gets each idle upgrade's cost.
+export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice = null }) {
   const node = doc.createElement("div");
   node.className = "burrow-scope bp3-elevation-3";
   node.setAttribute("role", "listbox");
@@ -54,7 +60,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     filter.classList.toggle("burrow-placeholder", !level.query);
     crumb.replaceChildren(...parts, filter);
     const label = level.isPage ? "blocks on this page" : "children of this block";
-    what.replaceChildren(span("burrow-tag", "Drill"), level.isPage ? `${label}` : `${label}: ${ellipsize(level.label)}`);
+    what.replaceChildren(span("burrow-what", "Drill"), level.isPage ? `${label}` : `${label}: ${ellipsize(level.label)}`);
   }
 
   function renderList(scope) {
@@ -72,6 +78,8 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
       list.replaceChildren(self);
       return;
     }
+    cancelUpgrade();
+    const later = [];
     list.replaceChildren(...scope.rows.map((row, i) => {
       const item = doc.createElement("div");
       item.className = "burrow-row";
@@ -85,7 +93,9 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
+      const parts = rich && row.text ? (i < RICH_NOW ? rich(row) : (later.push([text, row]), null)) : null;
+      if (parts) text.append(renderParts(doc, parts, (t) => highlight(t, level.query)));
+      else if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
       else if (row.text) text.append(highlight(row.text, level.query));
       else if (row.drillable) {
         item.classList.add("burrow-empty-row");
@@ -95,7 +105,38 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.drillable && row.text) item.append(span("burrow-drill-mark", "›"));
       return item;
     }));
+    if (later.length) scheduleUpgrade(later, level.query, key);
   }
+
+  // Rows past the first RICH_NOW are redrawn rich at idle, a few ms at a
+  // time; a newer list or a hide drops what is left.
+  let upgradeId = null;
+  function cancelUpgrade() {
+    if (upgradeId == null) return;
+    (win.cancelIdleCallback || win.clearTimeout).call(win, upgradeId);
+    upgradeId = null;
+  }
+  function scheduleUpgrade(later, query, forKey) {
+    let at = 0;
+    const run = () => {
+      upgradeId = null;
+      if (listKey !== forKey) return;
+      const t0 = performance.now();
+      while (at < later.length && performance.now() - t0 < UPGRADE_SLICE_MS) {
+        const [text, row] = later[at++];
+        if (!text.isConnected) continue;
+        const parts = rich(row);
+        if (parts) text.replaceChildren(renderParts(doc, parts, (t) => highlight(t, query)));
+      }
+      onSlice?.(performance.now() - t0);
+      if (at < later.length) schedule();
+    };
+    const schedule = () => {
+      upgradeId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 200 }) : win.setTimeout(run, 30);
+    };
+    schedule();
+  }
+  lifecycle.add(cancelUpgrade);
 
   let hintsShown = null;
   let hintItems = [];
@@ -160,6 +201,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight }) {
     paintActive,
     place,
     hide() {
+      cancelUpgrade();
       node.hidden = true;
       listKey = null;
       hintsShown = null;
