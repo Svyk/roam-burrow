@@ -40,6 +40,13 @@ test("prose before a fence, then label and line; codeLine and needle pick the ma
   assert.deepEqual(richParts(SVY_CODE, { needle: /panel\.grid/gi }), [L("R"), P("theme(panel.grid = element_blank())", "burrow-code")]);
 });
 
+test("codeLine with a needle prefers a matching code line over a matching comment", () => {
+  const body = "# zebra plot helpers\nlibrary(ggplot2)\nzebra_plot <- function(d) ggplot(d, aes(x, y))";
+  const re = /(?<![\p{L}\p{N}])(zebra|plot)/giu;
+  assert.equal(codeLine(body, re), "zebra_plot <- function(d) ggplot(d, aes(x, y))");
+  assert.equal(codeLine("# zebra plot\nlibrary(ggplot2)\nx <- 1", re), "# zebra plot");
+});
+
 test("code block labels and edge cases", () => {
   assert.deepEqual(richParts("```\nx <- 1\n```"), [L("code"), P("x <- 1", "burrow-code")]);
   assert.deepEqual(richParts("```javascript\nlet a\n```")[0], L("JS"));
@@ -138,6 +145,17 @@ test("snippet cuts around a late match and leaves early ones", () => {
   assert.ok(at > 100);
   assert.equal(snippet(parts, /w01/gi), parts);
   assert.equal(snippet(parts, null), parts);
+});
+
+test("snippet anchors where the query's words occur together", () => {
+  const filler = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+  const long = P(`zebra long block with plenty of words ${filler} until the zebra snippet target near its end`);
+  const out = snippet([long], /(?<![\p{L}\p{N}])(zebra|snippet)/giu);
+  assert.equal(out[0].text, "…");
+  assert.ok(plainText(out).includes("zebra snippet"));
+  const black = [P(`Black Panther notes ${"x".repeat(200)} black panther again`)];
+  assert.equal(snippet(black, /black|panther/gi), black);
+  assert.equal(snippet([long], /zebra/gi)[0], long);
 });
 
 test("cache makes once per uid+string, evicts the oldest, clears", () => {

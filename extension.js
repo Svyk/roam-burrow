@@ -2134,6 +2134,7 @@ function codeLine(body, needle = null) {
   const text = String(body ?? "");
   let first = "";
   let firstCode = "";
+  let comment = "";
   let at = 0;
   while (at <= text.length) {
     let end = text.indexOf("\n", at);
@@ -2145,7 +2146,10 @@ function codeLine(body, needle = null) {
       needle.lastIndex = 0;
       const hit = needle.test(line);
       needle.lastIndex = 0;
-      if (hit) return line.trim().slice(0, 120);
+      if (hit) {
+        if (!COMMENT.test(line)) return line.trim().slice(0, 120);
+        if (!comment) comment = line;
+      }
     }
     if (!first) first = line;
     if (!firstCode && !COMMENT.test(line)) {
@@ -2153,7 +2157,7 @@ function codeLine(body, needle = null) {
       if (!needle) break;
     }
   }
-  return (firstCode || first).trim().slice(0, 120);
+  return (comment || firstCode || first).trim().slice(0, 120);
 }
 function closeAt(s, from, open, close, cap) {
   const end = Math.min(s.length, from + cap);
@@ -2408,10 +2412,30 @@ function snippet(parts, re, { lead = 30, keep = 24 } = {}) {
   if (!re) return parts;
   let full = "";
   for (const part of parts) if (!part.task && part.cls !== CHIP) full += part.text;
-  re.lastIndex = 0;
-  const hit = re.exec(full);
-  re.lastIndex = 0;
-  if (!hit || hit.index <= lead) return parts;
+  const scan = re.global ? re : new RegExp(re.source, `${re.flags}g`);
+  scan.lastIndex = 0;
+  const hits = [];
+  for (let m = scan.exec(full); m && hits.length < 64; m = scan.exec(full)) {
+    if (!m[0]) {
+      scan.lastIndex++;
+      continue;
+    }
+    hits.push({ index: m.index, word: m[0].toLowerCase() });
+  }
+  scan.lastIndex = 0;
+  if (re.lastIndex) re.lastIndex = 0;
+  if (!hits.length) return parts;
+  let hit = hits[0];
+  let best = 0;
+  for (let i = 0; i < hits.length; i++) {
+    const words = /* @__PURE__ */ new Set();
+    for (let j = i; j < hits.length && hits[j].index <= hits[i].index + 40; j++) words.add(hits[j].word);
+    if (words.size > best) {
+      best = words.size;
+      hit = hits[i];
+    }
+  }
+  if (hit.index <= lead) return parts;
   let cut = hit.index - keep;
   if (cut <= 0) return parts;
   const space = full.indexOf(" ", cut);
