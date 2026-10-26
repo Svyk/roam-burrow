@@ -55,7 +55,7 @@ Before matching, the key strips Roam markup (`[[ ]]`, `(( ))`, `{{ }}`, `**`, `^
 
 **Default selection.** The decision says the referenced original shows *first*. With the `((` ranking toggle on and Burrow's top row being a referenced original that native has not put first, that row is **pre-selected**, so Enter inserts it. Native's own active-row highlight is muted while Burrow owns selection. ↓ past Burrow's last row hands selection back to native's first row.
 
-**Acceptance:** svy: `((ant man` → first, pre-selected row is `((3XSu0IJ8f))`. notes: `((real time pcr` → `((6ZtlGN-Np))`.
+**Acceptance:** svy: `((ant man` → first, pre-selected row is `((3XSu0IJ8f))`. notes: `((real time pcr` → `((6ZtlGN-Np))`. svy (BRW-10, §17): `((black pan` → first, pre-selected row is `((cs1PFq5go))`, and no code block among the rows.
 
 ## 4. Popup hook
 
@@ -175,6 +175,8 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `helpNudge` | switch | on | BRW-7: the first picker names ⌥/ once (`helpNudgeSeen` stores that it was shown) |
 | `refContext` | switch | on | BRW-8: under the highlighted block row, `in Page › … › Parent` and its child count |
 | `refOutline` | switch | on | BRW-8: ⇧⇥ on a block row lists its parent's children (up the outline); Tab lists its children under its whole trail |
+| `refProse` | switch | on | BRW-10: `((` rows match a block's prose; code only for a code-looking query; long blocks after short; title matches first (§17) |
+| `richRows` | switch | on | BRW-10: rows, drill panel and previews drawn like Roam (§17) |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
 | `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
 | `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
@@ -355,6 +357,33 @@ Where this section differs from §14 or §15, it wins.
 **Leftovers.** The Key hints setting text names the shipped labels; a unit test builds the alias and block rows' hints with `pickerHints` and checks the text names every label. §15's rebuild delay reads 2.1–4.0 s. BRW-8's report had four ⇧⇥ screenshots (dark and light, once and twice) with the pre-review drill hint line (`⇥/> its children · ⇧⇥ up · ^O preview · ↵ insert · esc results`); they are retaken with `tools/shots.mjs` (`--only 38,39`) on the shipped line.
 
 **Final run (2026-10-24, the 0.6.1 build).** `gate-all --theme dark`: 8 of 8 PASS in 2,396 s. Live in light: svy PASS (one earlier run lost the Roam-alone arm of the eight Tab cases to "focus failed" for about a minute, nothing of Burrow's loaded then; the cases passed again alone and in a full rerun), notes PASS with the switch above. Every live run: 107 byte-for-byte case runs, the six key-list cases, text boxes in 26 states (svy 857 boxes, notes 873, light and dark, none intersecting). Per key p95: svy `((` 2.6–2.7 ms, with Roam's preview open 2.5–2.7 ms (preview slices p95 1.3–1.4 ms, max 3.4–3.5 ms), drill-down 0.7–1.1 ms; notes 1.5–1.6 ms, drill-down 0.6 ms. Input-to-paint median p50 delta −0.3 to +0.8 ms against Burrow absent. Cold preview of `[[plexus` slice p95 3.1 ms, max 3.2 ms; context line reads p95 0.3–1.0 ms; alias refresh tasks p95 at most 1.3 ms; the due rebuild ran 0 times while typing and 2.3–3.8 s after the popup closed.
+
+## 17. Prose before code; rows drawn like Roam (BRW-10)
+
+Where this section differs from §3, §6 or §15, it wins.
+
+**What happened.** Svy, svy dark, 2026-10-25: `((black pan` in a daily-page block. Burrow's two rows were R code blocks, `xkeryyXeP` (89,892 characters) and `dLpZ2t-lA` (61,933), 1 ref each; `{{[[TODO]]}} Watch [[Black Panther]]` (`cs1PFq5go`) was only in Roam's list. Read from svy's live index afterwards: the task had no inbound ref at the time (its one ref, `2Lrz37tov`, is the block Svy was typing in, written by the pick right after the screenshot), so it was not in Burrow's pool, which holds referenced blocks only (§3). The code blocks matched because a block's key was its whole text with punctuation dropped: ggplot's `element_text(size = 10, color = "black"),` followed by `panel.grid = element_blank()` keys as `… color black panel grid …`, a contiguous word match (level 2, 760 after the length penalty), the band of a phrase in prose. The read in the task (`black` and `panel` far apart in a huge block sharing a band with a phrase through `rankOf`'s cap) does not hold: scattered words are level 1, below every contiguous match whatever the refs; and `3JA4CuRnp` and `ejSXr-VKH` have no inbound refs, so they were never in the pool.
+
+**Ranking (`refProse`, on).**
+- A block is keyed on its prose. Fenced code (```` ``` ````, an unclosed fence runs to the end) and inline code go to a second key; macros (`{{…}}` from its `{{` to where the brace depth returns to 0, so `{{query: {and: [[A]]}}}` and nested macros go whole) are removed before block refs are resolved, so an embed's or render's `((uid))` is not pulled in. The code key is matched only when the query looks like code (`looksLikeCode`: a backtick, one of `( ) { } [ ] = < > $ ; \ |`, `::`, `->`, `<-`, words joined by `_` or `.`, or camelCase); `black pan`, `real time pcr`, `Black Panther: Wakanda` are prose. The prefilter cache keys on it too.
+- Bands as before: a contiguous phrase or word prefix in order (levels 2–3) always beats scattered words (level 1), whatever the refs; recall after.
+- Inside a band: pick memory, originals before quoters, then **long blocks after shorter ones** (more than 64 words, prose and code together: about 400 characters; svy has 140 such blocks among 5,314 referenced, notes 77 among 3,775), inbound refs in log2 steps, alias hit, on the page being edited, then **a match inside a page or tag the block links** (worked out once per hit, only when the sort gets that far), then the score, which already counts a match at the start of the block (980 against 840 for one inside it) and how close scattered words sit (in order: 640 less 8 per word between; any order: 500 down to 460 by spread), shorter text, uid.
+- A block's linked pages are read from its prose without macros: `[[…]]` or `#` inside code or inside a query no longer count (alias re-keying, title matches).
+- Off: the code key is matched for every query and length and titles do not count (the 0.6.1 order).
+- Checked on svy's data (the 59 referenced blocks that contain black or panther, ranked in node with both orders): `((black pan` → `cs1PFq5go` alone (0.6.1 order: `cs1PFq5go`, `dLpZ2t-lA`, `xkeryyXeP`); `((panel.grid` → the three R blocks that style a panel, in both orders.
+
+**Rows drawn like Roam (`richRows`, on).** `src/rich.js` turns a block string into a few parts in one hand-written pass (module constants only; a 90 KB code block parses in 0.004 ms because a fence body is skipped with `indexOf`, an 80-character block in 0.007 ms):
+- a code block → a label with its language (`R`, `JS`, `Clojure`…; `code` without one) and one line of code: the first that is not blank or a comment, or, for a code query, the first code line the query matches (a matching comment only when no code line does);
+- inline code and `$$math$$` monospace; `[[links]]` (brackets dropped), `#tags` and `#[[tags]]`, `((block refs))` resolved to their text (one level, from the ref index or the page tree; no read of its own) and `[alias]([[Page]])` as references; `Attr::` as `Attr:` in bold; bold, italic, highlight, strike, also around references;
+- `{{embed}}` → a label and the embedded block's text; `{{query}}`, `{{roam/render}}`, `{{pdf}}`, `{{video}}`… → a label with the macro's name; a SmartBlock button → a label with its caption; images and file links → `image`, `file`; TODO and DONE → Roam's checkbox (§15);
+- a long row is cut to `…` before the place where the most query words occur within 40 characters (so `((zebra snippet` shows the end of a block that starts with `zebra`), leading tasks kept.
+
+Text nodes in spans only, never `innerHTML`: a block `<img src=x onerror=…>` shows as that text (gate: no element made, the handler never ran). One span per styled part. Colors are the theme's, read at idle from the first `.rm-page-ref--link`, `.rm-page-ref--tag`, `.rm-block-ref`, `.rm-highlight` and `code` in the page (svy dark: links and tags `rgb(179, 217, 242)`, block refs `rgb(72, 175, 240)` underlined, highlight `rgb(51, 72, 92)` as svy-theme paints it) and again after a dark/light switch; without one, the stylesheet's (Blueprint's link blue). Labels are a 10 px outlined word, never filled. Where: Burrow's `((` rows, the drill row, the drill panel and both previews. Parses are cached by uid and text (a changed block is a new key; 400 entries) and dropped when the ref index is rebuilt. The drill panel draws its first 12 rows rich in the key's work and the rest at idle in slices of at most 3 ms; a preview draw stops after its budget (1 ms in a key's work, what is left of the 3 ms slice at idle) once the highlighted line is drawn, and the rest follows in idle slices; a preview line that still shows the same block is not rewritten. The drill panel's `Drill` label is now `.burrow-what` (`.burrow-tag` is a tag). Off: plain text, as in 0.6.1.
+
+**BRW-9 review leftovers.**
+1. BRW-8's report had one more ⇧⇥ screenshot with the pre-review drill hint line: notes, `⇧⇥` (BRW-9 had retaken the four svy ones). Retaken (below).
+2. `test/stripkeys.test.js` drives `createStrip` on a jsdom DOM (dev dependency, 26.1.0): with the key list open, Enter, Tab, Shift+Enter, ⌘Enter, Ctrl+Enter and Shift+Tab only close it (event consumed, text unchanged, no commit, the row still selected), Esc closes it, a typed key closes it and goes on, and a control case shows a commit is visible to the harness. Deleting `onKeyDown`'s key-list line, or `helpKey`'s consume, fails it.
+3. §16 said the six key-list cases fail on 0.6.0 "in svy"; BRW-9's report said svy and notes. (below)
 
 ## Also noticed
 
