@@ -18,7 +18,8 @@
     "node": ">=20"
   },
   "devDependencies": {
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "jsdom": "26.1.0"
   },
   "license": "MIT"
 }
