@@ -378,6 +378,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function render() {
     if (st.phase === "SCOPE") { placeScope(); return; }
     placeInFlow();
+    liftPop();
     if (st.prompt?.kind === "add") { renderPrompt(); return; }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
@@ -901,6 +902,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.remove();
     hints.remove();
     if (!st.pop) return;
+    if (lifted) st.pop.style.marginBottom = "";
+    lifted = 0;
     st.pop.classList.remove(...POP_CLASSES);
     for (const node of st.pop.querySelectorAll(`[${FOLDED}]`)) node.removeAttribute(FOLDED);
   }
@@ -1067,6 +1070,34 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     placeId = win.requestAnimationFrame(() => { placeId = null; inFrameDo(placePanes); });
   }
   lifecycle.add(() => { if (placeId != null) win.cancelAnimationFrame(placeId); placeId = null; });
+  // Popper puts a flipped popover's bottom on the caret's line, which covers
+  // the first lines of a wrapped block. Popper ignores margins, so a bottom
+  // margin lifts it clear without feeding back into its placement.
+  let lifted = 0;
+  let liftId = null;
+  function liftPop() {
+    if (!inFrame) {
+      if (liftId != null) return;
+      liftId = win.requestAnimationFrame(() => { liftId = null; inFrameDo(liftPop); });
+      return;
+    }
+    const pop = st.pop;
+    const ta = st.ta;
+    if (!pop?.isConnected || !ta) return;
+    let lift = 0;
+    if (pop.style.bottom === "0px") {
+      const p = pop.getBoundingClientRect();
+      const t = ta.getBoundingClientRect();
+      const textTop = t.top + (parseFloat(win.getComputedStyle(ta).paddingTop) || 0);
+      const top = p.top + lifted;
+      const over = p.bottom + lifted - textTop;
+      if (top < textTop && over > 0) lift = Math.max(0, Math.round(Math.min(over, top)));
+    }
+    if (lift === lifted) return;
+    pop.style.marginBottom = lift ? `${lift}px` : "";
+    lifted = lift;
+  }
+  lifecycle.add(() => { if (liftId != null) win.cancelAnimationFrame(liftId); liftId = null; });
   function placePanes() {
     const pop = st.pop;
     if (!pop?.isConnected) return;
@@ -1806,6 +1837,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const pop = st.pop;
     if (!scope || !pop) return;
     pop.classList.add(SCOPE_OPEN);
+    liftPop();
     const popRect = pop.getBoundingClientRect();
     const main = pop.classList.contains("rm-autocomplete__results--expanded") ? pop.querySelector(".rm-autocomplete__results-main") : null;
     scopePanel.place(main ? main.getBoundingClientRect() : popRect, popRect, st.ta.getBoundingClientRect());

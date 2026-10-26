@@ -101,7 +101,7 @@ npm run check   # build, secret scan, syntax check, tests, generated-artifact dr
 
 ```bash
 npm run gate:live                            # everything below, both graphs, about 40 minutes, PASS/FAIL summary (add -- --theme light|dark, -- --notes "Readwisenotes - Daily" when two notes windows are open)
-node tools/live-gate.mjs Svy svy             # about 12 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases and Svy's footnote case, alias rows, block navigation, pick memory, fast typing, text boxes in 26 picker states
+node tools/live-gate.mjs Svy svy             # about 12 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases and Svy's footnote case, alias rows, block navigation, pick memory, fast typing, rows drawn like Roam, text boxes in 32 picker states
 node tools/live-gate.mjs Readwisenotes notes # about 11 min
 node tools/live-gate.mjs Svy svy --only "alias chips: ⌥↓, ←, Enter"   # one case and its verdict, about 30 s
 node tools/live-gate.mjs Svy svy --only "text boxes: no text overlaps another in any picker state"   # no text over other text, about 3 min
