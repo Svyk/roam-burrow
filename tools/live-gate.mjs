@@ -1424,7 +1424,7 @@ async function runPickCase() {
     window.__burrowDev.values.pickMemory = true;
     return { key, value };
   });
-  const query = "((zebra burrow";
+  const query = "((zebra burrow pick";
   const typeAndRead = async () => {
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed" };

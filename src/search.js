@@ -26,15 +26,30 @@ export function stripRoamMarkup(value) {
     .replace(/(^|\s)#(?=\S)/g, "$1");
 }
 
-// Innermost-first, so repeat until none is left (bounded by nesting depth):
-// `{{embed: {{[[TODO]]}} x}}` must go whole.
+// A macro runs from its `{{` to where the brace depth returns to 0, so Roam's
+// query syntax (`{{query: {and: [[A]]}}}`) and nested macros
+// (`{{embed: {{[[TODO]]}} x}}`) go whole. An unclosed `{{` stays text.
+const MACRO_CAP = 4000;
 export function stripMacros(value) {
-  let out = value;
-  for (let prev = null; prev !== out;) {
-    prev = out;
-    out = out.replace(/\{\{[^{}]*\}\}/g, " ");
+  let at = value.indexOf("{{");
+  if (at === -1) return value;
+  let out = "";
+  let from = 0;
+  while (at !== -1) {
+    const stop = Math.min(value.length, at + MACRO_CAP);
+    let depth = 0;
+    let end = -1;
+    for (let j = at; j < stop; j++) {
+      const c = value.charCodeAt(j);
+      if (c === 123) depth++;
+      else if (c === 125 && --depth === 0) { end = j + 1; break; }
+    }
+    if (end === -1) { at = value.indexOf("{{", at + 2); continue; }
+    out += value.slice(from, at) + " ";
+    from = end;
+    at = value.indexOf("{{", end);
   }
-  return out;
+  return out + value.slice(from);
 }
 
 // A query that looks like code ("panel.grid", "library(gg", "zebra_plot")

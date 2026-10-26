@@ -23,13 +23,33 @@ for (const [key, vals] of Object.entries(ABBREV_FORWARD)) {
 function stripRoamMarkup(value) {
   return stripMacros(String(value == null ? "" : value).replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 ")).replace(/\(\(([^()]*)\)\)/g, " ").replace(/\[([^\]]*)\]\(\[\[([^\]]*)\]\]\)/g, "$1 $2").replace(/\[\[|\]\]|#\[\[|\*\*|\^\^|__|~~/g, " ").replace(/(^|\s)#(?=\S)/g, "$1");
 }
+var MACRO_CAP = 4e3;
 function stripMacros(value) {
-  let out = value;
-  for (let prev = null; prev !== out; ) {
-    prev = out;
-    out = out.replace(/\{\{[^{}]*\}\}/g, " ");
+  let at = value.indexOf("{{");
+  if (at === -1) return value;
+  let out = "";
+  let from = 0;
+  while (at !== -1) {
+    const stop = Math.min(value.length, at + MACRO_CAP);
+    let depth = 0;
+    let end = -1;
+    for (let j = at; j < stop; j++) {
+      const c = value.charCodeAt(j);
+      if (c === 123) depth++;
+      else if (c === 125 && --depth === 0) {
+        end = j + 1;
+        break;
+      }
+    }
+    if (end === -1) {
+      at = value.indexOf("{{", at + 2);
+      continue;
+    }
+    out += value.slice(from, at) + " ";
+    from = end;
+    at = value.indexOf("{{", end);
   }
-  return out;
+  return out + value.slice(from);
 }
 function looksLikeCode(query) {
   return /[`(){}[\]=<>$;\\|]|::|->|<-/.test(query) || /[\p{L}\p{N}][._][\p{L}\p{N}]/u.test(query) || /\p{Ll}{2,}\p{Lu}/u.test(query);
@@ -508,7 +528,8 @@ function keyEntry(entry, index, aliasesByPage) {
   const { byUid } = index;
   const quotes = [];
   const { prose, code } = splitCode(entry.string);
-  const resolved = stripMacros(prose).replace(BLOCK_REF, (_, uid) => {
+  const bare = stripMacros(prose);
+  const resolved = bare.replace(BLOCK_REF, (_, uid) => {
     const target = byUid.get(uid);
     return target ? ` ${target.string} ` : " ";
   });
@@ -519,7 +540,7 @@ function keyEntry(entry, index, aliasesByPage) {
   entry.words = entry.key.tokens.length + (entry.codeKey?.tokens.length || 0);
   entry.long = entry.words > LONG_TOKENS;
   entry.pureQuote = quotes.length === 1 && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, "")) ? quotes[0] : null;
-  const linked = [...prose.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  const linked = [...bare.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
   for (const title of new Set(linked)) {
     const list = index.byLinked.get(title);
@@ -2084,7 +2105,7 @@ var SMARTBLOCK = /:\d*SmartBlock:/i;
 var BREF_IN = /\(\(([\w-]{9})\)\)/;
 var FILE = /\.(?:pdf|docx|xlsx|pptx|zip|csv|mp4|mov|mp3|png|jpg|jpeg|gif)(?:[?#].*)?$/i;
 var COMMENT = /^\s*(#|\/\/|--|;|%|\/\*|\*|<!--)/;
-var MACRO_CAP = 4e3;
+var MACRO_CAP2 = 4e3;
 var SPAN_CAP = 500;
 var MACROS = /* @__PURE__ */ new Map([
   ["embed", "embed"],
@@ -2177,7 +2198,7 @@ function closeAt(s, from, open, close, cap) {
   return -1;
 }
 function macroEnd(s, from) {
-  const end = Math.min(s.length, from + MACRO_CAP);
+  const end = Math.min(s.length, from + MACRO_CAP2);
   let depth = 0;
   for (let j = from; j < end; j++) {
     const c = s.charCodeAt(j);

@@ -61,7 +61,8 @@ function keyEntry(entry, index, aliasesByPage) {
   const quotes = [];
   const { prose, code } = splitCode(entry.string);
   // Macros go before refs resolve, so an embed's or render's ((uid)) is not pulled in.
-  const resolved = stripMacros(prose).replace(BLOCK_REF, (_, uid) => {
+  const bare = stripMacros(prose);
+  const resolved = bare.replace(BLOCK_REF, (_, uid) => {
     const target = byUid.get(uid);
     return target ? ` ${target.string} ` : " ";
   });
@@ -76,7 +77,7 @@ function keyEntry(entry, index, aliasesByPage) {
     && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, ""))
     ? quotes[0] : null;
   // The pages it links, kept so an alias edit can re-key it (refreshAliasKeys).
-  const linked = [...prose.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  const linked = [...bare.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
   // Page title -> the blocks that link it, for aliasKeyTargets.
   for (const title of new Set(linked)) {

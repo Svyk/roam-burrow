@@ -190,3 +190,12 @@ test("a # or [[ inside code is not a linked page", () => {
   const index = buildRefIndex([["c00000001", "```js\nconst a = '#tag [[Page]]'\n```", 1]]);
   assert.equal(index.entries[0].linked, null);
 });
+
+test("links inside a macro are not what the block links", () => {
+  const index = buildRefIndex([
+    ["q00000001", "zebra {{query: {and: [[Some Page]]}}}", 1],
+    ["l00000001", "zebra [[Some Page]]", 1],
+  ]);
+  assert.equal(index.entries[0].linked, null);
+  assert.deepEqual(index.entries[1].linked, ["Some Page"]);
+});
