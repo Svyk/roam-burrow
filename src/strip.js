@@ -2077,6 +2077,20 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (row && !commit(row)) reset("click-refused");
   }
 
+  // ⇧+click (openInSidebar): Roam takes a shift+mousedown anywhere as its
+  // block-range selection and ends the edit before the strip's own listener
+  // runs, so on Burrow's rows and panel the shifted pointer events stop at
+  // the window, and the mousedown opens the sidebar from here.
+  function onShiftPointer(event) {
+    if (!event.shiftKey || st.phase === "IDLE" || !setting("openInSidebar")) return;
+    const inStrip = strip.contains(event.target);
+    if (!inStrip && !scopePanel.node.contains(event.target)) return;
+    // preventDefault on a pointerdown would cancel the mousedown that follows.
+    if (event.type.startsWith("pointer")) { event.stopPropagation(); event.stopImmediatePropagation(); return; }
+    consume(event);
+    if (event.type === "mousedown") (inStrip ? onStripMouseDown : onScopeMouseDown)(event);
+  }
+
   function onScopeMouseDown(event) {
     event.preventDefault();
     event.stopPropagation();
@@ -2333,6 +2347,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   });
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) lifecycle.event(win, type, guarded(type, onShiftPointer), true);
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 

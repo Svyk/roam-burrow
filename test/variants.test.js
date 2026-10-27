@@ -161,3 +161,22 @@ test("Roam's row highlighted (↓ past Burrow's): the keys stay Roam's", () => w
   assert.equal(ta.value, VALUE);
   assert.equal(windows.length, 0);
 }));
+
+test("⇧+click on a Burrow row opens the sidebar before Roam's own shift+mousedown sees it", () => withStrip({}, async ({ ta, windows, strip }) => {
+  const roamSaw = [];
+  const roam = (event) => { if (event.shiftKey) roamSaw.push(event.type); };
+  for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) doc.addEventListener(type, roam, true);
+  try {
+    const row = doc.querySelector(".burrow-strip .burrow-row");
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      row.dispatchEvent(new win.MouseEvent(type, { bubbles: true, cancelable: true, shiftKey: true }));
+    }
+    await settle();
+    assert.deepEqual(roamSaw, []);
+    assert.deepEqual(windows, [{ type: "block", "block-uid": "3XSu0IJ8f" }]);
+    assert.equal(ta.value, VALUE);
+    assert.equal(strip.state.phase, "OWNED");
+  } finally {
+    for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) doc.removeEventListener(type, roam, true);
+  }
+}));

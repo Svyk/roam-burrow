@@ -5249,6 +5249,18 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     if (row && !commit(row)) reset("click-refused");
   }
+  function onShiftPointer(event) {
+    if (!event.shiftKey || st.phase === "IDLE" || !setting("openInSidebar")) return;
+    const inStrip = strip.contains(event.target);
+    if (!inStrip && !scopePanel.node.contains(event.target)) return;
+    if (event.type.startsWith("pointer")) {
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return;
+    }
+    consume(event);
+    if (event.type === "mousedown") (inStrip ? onStripMouseDown : onScopeMouseDown)(event);
+  }
   function onScopeMouseDown(event) {
     event.preventDefault();
     event.stopPropagation();
@@ -5503,6 +5515,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   });
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) lifecycle.event(win, type, guarded(type, onShiftPointer), true);
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
   return { state: st, debug, reset, tree };

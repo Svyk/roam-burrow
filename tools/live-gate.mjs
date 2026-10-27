@@ -269,6 +269,14 @@ async function state() {
           }),
           chipsScroll: line?.scrollLeft ?? null,
           hints: document.querySelector(".burrow-hints:not([hidden]) .burrow-hints-list")?.textContent ?? null,
+          // Hint items wholly inside the line's box (the rest are cut by its ellipsis), strip and drill panel.
+          hintsVisible: (() => {
+            const list = document.querySelector(".burrow-scope:not([hidden]) .burrow-hints-list") || document.querySelector(".burrow-hints:not([hidden]) .burrow-hints-list");
+            if (!list) return null;
+            const box = list.getBoundingClientRect();
+            return [...list.querySelectorAll(".burrow-hint")].filter((n) => n.getBoundingClientRect().right <= box.right + 0.5).map((n) => n.textContent);
+          })(),
+          popWidth: Math.round(document.querySelector(".rm-autocomplete__results")?.getBoundingClientRect().width ?? 0),
           helpButton: (() => { const b = document.querySelector(".burrow-hints:not([hidden]) .burrow-help-button"); return b && !b.hidden ? b.textContent : null; })(),
           sheet: (() => {
             const sheet = document.querySelector(".burrow-help:not([hidden])");
@@ -402,7 +410,7 @@ const CASES = [
   { name: "⌥↵ on the alias row inserts [alias]([[Page]]) whatever the link format", query: config.preselect.query, settings: { aliasLinkFormat: "[[Page]]" },
     keys: ["alt+Enter"], on: `${SEED}${config.preselect.insert}` },
   { name: "⌘⇧↵ on the alias row opens the page in the sidebar, text as typed", query: config.preselect.query, keys: ["sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"],
-    on: `${SEED}${config.preselect.query}]]`,
+    // No fixed result: Esc then the blur make Roam create the typed page, as without Burrow.
     check: (r) => sidebarCheck("outline", r.before.activeUid, `${SEED}${config.preselect.query}]]`)(r) },
   // Roam's row highlighted: the keys are Roam's (⇧↵ its newline).
   { name: "↓ past the strip then ⇧↵ is Roam's newline", keys: ["down-past-strip", "shift+Enter", "Escape"],
@@ -727,7 +735,15 @@ async function runKeys(keys, snaps = []) {
 }
 
 // [[ alias cases, on arm only: Enter in Roam's own [[ could create a page.
+const variantsShown = ({ snaps: [a] }) => {
+  const want = ["⇧↵ embed", "⌥↵ label", "⌘⇧↵ sidebar"];
+  return want.every((w) => a?.hintsVisible?.includes(w)) ? null : `variant hints not all visible: ${JSON.stringify(a?.hintsVisible)} (popover ${a?.popWidth} px)`;
+};
 const ALIAS_CASES = [
+  { name: "hint line shows the variants: block row", query: config.ref.query, keys: ["snap", "Escape"], check: variantsShown },
+  { name: "hint line shows the variants: alias row", query: config.preselect.query, keys: ["snap", "Escape"], mayCreatePage: true, check: variantsShown },
+  { name: "hint line shows the variants: drill row", query: `[[${FIXTURE_PAGE}#alpha > never`, keys: ["snap", "Escape"], mayCreatePage: true, check: variantsShown },
+  { name: "hint line shows the variants: drill panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "snap", "Escape", "Escape"], mayCreatePage: true, check: variantsShown },
   { name: "alias row: ArrowUp into the strip, Enter", query: config.alias.query, keys: ["ArrowUp", "Enter"], on: `${SEED}${config.alias.insert}` },
   {
     name: "alias listed by roam-aliases: Burrow row, its column folded", query: config.listed.query, keys: ["snap", "Escape"],
@@ -1928,6 +1944,14 @@ async function runAbove() {
 
 const report = { window: c.page.title, config: configName, theme, themeSet, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
+// --grep <regex>: only the cases whose name matches it (all kinds), and none
+// of the fixed checks after them (overlap, above, pick, real drill, acceptance).
+const grep = flagValue("--grep");
+if (grep) {
+  for (const list of [CASES, DRILL_CASES, PASS_CASES, ALIAS_CASES, REFSEARCH_CASES, BLOCK_CASES, WRITE_CASES, TAB_CASES]) {
+    for (let i = list.length - 1; i >= 0; i--) if (!new RegExp(grep).test(list[i].name)) list.splice(i, 1);
+  }
+}
 const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
 const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
@@ -1996,7 +2020,7 @@ const byteVerdict = (kase, { on, off, gone, drilloff }) => {
   } else if (!sameResult(on, gone)) {
     failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
   }
-  const problem = kase.check?.(on);
+  const problem = on.error ? null : kase.check?.(on);
   if (problem) failures.push(`${kase.name}: ${problem}`);
   return failures;
 };
@@ -2024,7 +2048,7 @@ const tabVerdict = (kase, on, gone, refChild) => {
       failures.push(`${kase.name}: on ${JSON.stringify(on.string)}/${JSON.stringify(on.extraStrings)} != gone ${JSON.stringify(gone.string)}/${JSON.stringify(gone.extraStrings)}`);
     }
     for (const miss of on.misses ?? []) failures.push(`${kase.name}: ${miss}`);
-    const failure = kase.expect?.(on.snaps);
+    const failure = kase.expect?.(on.snaps ?? []);
     if (failure) failures.push(`${kase.name}: ${failure}`);
   }
   return failures;
@@ -2154,6 +2178,7 @@ try {
     note(kase.name, report.tab[kase.name].on, before);
   }
   await setArm("on");
+  if (!grep) {
   report.overlap = await runTextOverlap();
   for (const problem of report.overlap.problems) report.failures.push(`text overlap ${problem}`);
   {
@@ -2185,6 +2210,7 @@ try {
   report.open = open;
   report.retypes = retypes;
   report.qBody = qBody;
+  }
   }
 } finally {
   await cleanup();
