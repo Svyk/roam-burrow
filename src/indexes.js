@@ -20,7 +20,7 @@ const REKEY_SLICE_MS = 3;
 const REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
   :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
 // The blocks edited in the last RECENT_DAYS days with their pages (recent
-// rows, spec §18): about 180 ms on the main thread in a 114k-block graph, so
+// rows, spec §18): about 185 ms on the main thread in notes (105k blocks), so
 // it runs only inside the quiet build, with the long query above.
 const EDITED_SINCE = `[:find ?u ?t ?pu ?pt :in $ ?since
   :where [?b :edit/time ?t] [(> ?t ?since)] [?b :block/uid ?u] [?b :block/page ?p] [?p :block/uid ?pu] [?p :node/title ?pt]]`;

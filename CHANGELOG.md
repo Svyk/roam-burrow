@@ -15,7 +15,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 ### Changed
 
 - **Frequent first replaces Pick memory.** The exact-query rule is gone with its `pickMemory` switch; what you had picked under `burrow:picks:<graph>` is folded into the new store the first time 0.8.1 loads (each pick at its own time; the query text and alias are dropped) and the old key is removed.
-- Cost: the last-14-days query (about 180 ms in notes with 114k blocks) runs inside the quiet idle build, never with a popup open; a keystroke does a few array operations on lists made at idle, 0 queries and 0 pulls.
+- Cost: the last-14-days query (about 185 ms in notes, 274 ms the first time; 105k blocks, 4,006 edits) runs only inside the quiet idle build, the first one included, never with a popup open; a keystroke does a few array operations on lists made at idle, 0 queries and 0 pulls.
 - Live gates: recent pick first and not selected with the same Enter in the off and gone arms, three picks flip two equal rows, forget clears; the pick-memory case is gone.
 
 ## [0.7.0] - 2026-10-26
