@@ -215,6 +215,40 @@
   font-size: 12px;
 }
 
+/* A {{[[table]]}} in the preview: a read-only grid under its line. */
+.burrow-node.burrow-table-line {
+  display: block;
+  -webkit-line-clamp: unset;
+  padding-left: calc(20px + 18px);
+}
+.burrow-node.burrow-table-line::before { content: none; }
+.burrow-table {
+  display: grid;
+  grid-template-columns: repeat(var(--burrow-cols, 1), minmax(0, auto));
+  width: max-content;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 18px;
+  border-top: 1px solid rgba(16, 22, 26, 0.15);
+  border-left: 1px solid rgba(16, 22, 26, 0.15);
+}
+.burrow-cell {
+  padding: 1px 6px;
+  border-right: 1px solid rgba(16, 22, 26, 0.15);
+  border-bottom: 1px solid rgba(16, 22, 26, 0.15);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40ch;
+  min-height: 18px;
+}
+.burrow-preview.burrow-dark .burrow-table { border-top-color: rgba(255, 255, 255, 0.15); border-left-color: rgba(255, 255, 255, 0.15); }
+.burrow-preview.burrow-dark .burrow-cell { border-right-color: rgba(255, 255, 255, 0.15); border-bottom-color: rgba(255, 255, 255, 0.15); }
+.burrow-table-more {
+  opacity: 0.5;
+  font-size: 12px;
+}
+
 .burrow-row .burrow-trail-inline {
   opacity: 0.55;
 }

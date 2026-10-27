@@ -6,6 +6,7 @@
 // checkbox before the line's text.
 import { plainText, renderParts } from "./rich.js";
 import { hasTask, taskParts } from "./tasks.js";
+import { clipParts, CELL_CHARS, isTableBlock } from "./table.js";
 
 const SIBLING_WINDOW = 24;
 const CHILD_LIMIT = 16;
@@ -25,9 +26,11 @@ const readerOf = (tree) => (tree.window ? tree : {
 });
 
 // model: { key, trail: [text], items: [{ text, string, depth, heading, target }] }
+// With `tables`, a highlighted {{[[table]]}} block gets one item with its
+// table model (src/table.js) in place of its child outline.
 // Reads only what it shows: 16 children per level, 24 siblings around the
 // target, so a page with thousands of blocks costs as much as a small one.
-export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
+export function previewModel(result, tree, text, { hideEmpty = false, tables = false } = {}) {
   const read = readerOf(tree);
   const { page, target } = result;
   const trailNodes = target ? read.trail(target.uid) : [];
@@ -50,6 +53,11 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
     }
     if (total > CHILD_LIMIT) items.push({ more: total - CHILD_LIMIT, depth });
   };
+  const pushTable = (n) => {
+    if (!tables || !read.table || !isTableBlock(n.string)) return false;
+    items.push({ uid: n.uid, table: read.table(n.uid), depth: 1 });
+    return true;
+  };
   if (!target) {
     pushKids(page.uid, 0, 2);
     return { key: `page:${page.uid}`, trail, items };
@@ -63,11 +71,14 @@ export function previewModel(result, tree, text, { hideEmpty = false } = {}) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
     items.push({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
-    if (isTarget) pushKids(target.uid, 1, 2);
+    if (isTarget && !pushTable(sib)) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true });
-  return { key: `node:${target.uid}`, trail, items };
+  if (!siblings.length) {
+    items.push({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true });
+    pushTable(target);
+  }
+  return { key: `node:${target.uid}${tables ? ":t" : ""}`, trail, items };
 }
 
 // rich(item) -> parts (src/rich.js) or null: a line is drawn as Roam draws the
@@ -129,6 +140,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
       const row = kids[from + wrote] || doc.createElement("div");
       let cls = "burrow-node";
       if (item.more != null) cls += " burrow-more";
+      else if (item.table) cls += " burrow-table-line";
       else {
         if (item.heading) cls += ` burrow-h${item.heading}`;
         if (item.target) cls += " burrow-target";
@@ -148,6 +160,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
   // A line's content. A rich line remembers what it holds, so a line that is
   // still the same block is not rewritten (a rewrite replaces its nodes).
   function writeContent(row, item) {
+    if (item.table) { writeTable(row, item); return; }
     if (item.more == null && item.string != null && rich) {
       const key = `${item.uid}\u0000${item.string}`;
       if (row.__burrowLine === key) return;
@@ -161,6 +174,37 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
     }
     row.__burrowLine = null;
     setText(row, item.more != null ? `+${item.more} more` : item.text || " ");
+  }
+
+  // A table: rows x cols cells in a plain grid, text nodes only, no handlers.
+  // Remembered like a rich line, by the cells it holds.
+  function writeTable(row, item) {
+    const { uid, rows, cols, moreRows, moreCols } = item.table;
+    const key = `table\u0000${uid}\u0000${rich ? 1 : 0}\u0000${moreRows}\u0000${moreCols}\u0000${rows.map((r) => r.map((c) => `${c.uid}\u0001${c.string}`).join("\u0002")).join("\u0003")}`;
+    if (row.__burrowLine === key) return;
+    row.__burrowLine = key;
+    const grid = doc.createElement("div");
+    grid.className = "burrow-table";
+    grid.style.setProperty("--burrow-cols", String(Math.max(1, cols)));
+    for (const cells of rows) {
+      for (let c = 0; c < cols; c++) {
+        const cell = doc.createElement("div");
+        cell.className = "burrow-cell";
+        const own = cells[c];
+        if (own?.string) {
+          const parts = rich?.({ uid: own.uid, string: own.string })?.filter((part) => !part.task);
+          if (parts?.length) cell.append(renderParts(doc, clipParts(parts)));
+          else cell.textContent = own.string.length > CELL_CHARS ? `${own.string.slice(0, CELL_CHARS)}…` : own.string;
+        }
+        grid.append(cell);
+      }
+    }
+    const more = [moreRows ? `+${moreRows} rows` : "", moreCols ? `+${moreCols} cols` : ""].filter(Boolean).join(", ");
+    if (!more) { row.replaceChildren(grid); return; }
+    const footer = doc.createElement("div");
+    footer.className = "burrow-table-more";
+    footer.textContent = more;
+    row.replaceChildren(grid, footer);
   }
 
   function setText(row, text) {

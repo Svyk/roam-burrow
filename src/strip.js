@@ -140,7 +140,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     pull: (pattern, eid) => api.pull(pattern, eid),
     pullMany: api.data?.pull_many ? (pattern, eids) => api.data.pull_many(pattern, eids) : null,
     q: fast,
-    onFetch: (kind) => { perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1; },
+    onFetch: (kind) => {
+      const counter = kind === "query" ? "drillQueries" : kind === "chain" ? "tableChains" : "drillPulls";
+      perf.counters[counter] = (perf.counters[counter] || 0) + 1;
+    },
   });
 
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
@@ -563,7 +566,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
+        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
         model.drillKey = st.drill.key;
       }
       // The lines now; their place (a layout read) in the frame.
@@ -680,7 +683,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty") });
+    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
     next.drillKey = `row:${row.key}`;
     return next;
   }
@@ -1975,7 +1978,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (!page) { scopePreview.hide(); return; }
     const key = `${page.uid}:${target?.uid ?? ""}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
+      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
