@@ -804,7 +804,7 @@ const ALIAS_CASES = [
     keys: ["alt+slash", "snap", "Escape", "snap", "Escape"],
     check: ({ snaps: [a, b] }) => {
       if (!a?.sheet) return "no key list after ⌥/";
-      if (JSON.stringify(a.sheet.groups) !== JSON.stringify(["Pick", "Aliases", "Drill", "Preview"])) return `groups ${JSON.stringify(a.sheet.groups)}`;
+      if (JSON.stringify(a.sheet.groups) !== JSON.stringify(["Pick", "Aliases", "Drill", "Preview", "Filters"])) return `groups ${JSON.stringify(a.sheet.groups)}`;
       if (!["⌥A", "⌥⌫", "⌥↓", "⇥ or >", "⌃O"].every((k) => a.sheet.keys.includes(k))) return `keys ${JSON.stringify(a.sheet.keys)}`;
       if (!a.popoverCovered) return "Roam's popover still shows under the key list";
       if (!a.sheet.inWindow) return `key list outside the window ${JSON.stringify(a.sheet.box)}`;
