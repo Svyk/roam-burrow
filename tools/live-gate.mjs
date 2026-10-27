@@ -26,6 +26,7 @@ import {
 
 const CONFIGS = {
   svy: {
+    encrypted: true,
     ref: { query: "((ant man", uid: "3XSu0IJ8f" },
     // Svy's case (2026-10-25): two 60-90 KB R code blocks were Burrow's rows for `((black pan`.
     accept: [{ query: "((black pan", uid: "cs1PFq5go" }],
@@ -39,6 +40,7 @@ const CONFIGS = {
     refHasChildren: true,
   },
   notes: {
+    encrypted: false,
     ref: { query: "((real time pcr", uid: "6ZtlGN-Np" },
     alias: { query: "[[holy gost", insert: "[Holy Ghost]([[Concepts/Holy Spirit]])" },
     listed: { query: "[[mike khi" },
@@ -53,7 +55,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "previewImages"];
 const REF_COMMAND = "Burrow: block reference search";
 
 const [title, configName, ...flags] = process.argv.slice(2);
@@ -200,6 +202,42 @@ async function state() {
           nativeHidden: [...document.querySelectorAll(".rm-autocomplete__results.burrow-drill .rm-autocomplete__preview > *")].every((n) => getComputedStyle(n).visibility === "hidden"),
         };
       })(),
+      thumb: (() => {
+        for (const pane of document.querySelectorAll(".burrow-preview:not([hidden])")) {
+          const t = pane.querySelector(".burrow-thumb");
+          if (!t) continue;
+          const box = t.getBoundingClientRect();
+          const img = t.querySelector("img.burrow-thumb-img");
+          // Text lines in the pane (not the thumbnail's own label): the thumb's box may not cover any.
+          const range = document.createRange();
+          let overlaps = false;
+          const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node && !overlaps; node = walker.nextNode()) {
+            if (!node.textContent.trim() || !node.parentElement || t.contains(node)) continue;
+            range.selectNodeContents(node);
+            for (const r of range.getClientRects()) {
+              const w = Math.min(r.right, box.right) - Math.max(r.left, box.left);
+              const h = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
+              if (r.width > 1 && r.height > 1 && w > 2 && h > 2) { overlaps = true; break; }
+            }
+          }
+          return {
+            state: t.getAttribute("data-state"), w: Math.round(box.width), h: Math.round(box.height),
+            rect: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+            inTarget: t.closest(".burrow-target") != null,
+            img: img ? { src: (img.getAttribute("src") || "").split(":")[0], lazy: img.loading, natural: img.naturalWidth } : null,
+            more: t.querySelector(".burrow-thumb-more")?.textContent ?? null,
+            label: t.querySelector(".burrow-label")?.textContent ?? null,
+            text: t.textContent,
+            overlaps,
+          };
+        }
+        return null;
+      })(),
+      thumbAny: document.querySelectorAll(".burrow-thumb").length,
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null },
+      urlNet: window.__burrowUrlNet ?? null,
+      pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
       rowPreview: (() => {
         const pane = document.querySelector(".burrow-preview.burrow-preview-docked:not([hidden])");
         if (!pane) return null;
@@ -537,6 +575,15 @@ async function palette(label) {
   }
 }
 
+// Hooks the thumbnail keys install, removed when the case ends.
+const removeThumbHooks = () => c.evaluate(() => {
+  if (window.__burrowUrlWrap) { URL.createObjectURL = window.__burrowUrlWrap.create; URL.revokeObjectURL = window.__burrowUrlWrap.revoke; window.__burrowUrlWrap = null; }
+  window.__burrowUrlNet = undefined;
+  const h = window.__burrowGateErrorHooks;
+  if (h) { window.removeEventListener("error", h.onError, true); window.removeEventListener("unhandledrejection", h.onReject); window.__burrowGateErrorHooks = null; }
+  window.__burrowGateErrors = undefined;
+});
+
 const restoreFocus = () => c.evaluate(() => {
   if (window.__burrowGateFocus) { window.roamAlphaAPI.ui.getFocusedBlock = window.__burrowGateFocus; window.__burrowGateFocus = null; }
 });
@@ -556,6 +603,35 @@ async function runKeys(keys, snaps = []) {
     else if (k === "ctrl+o") await ctrlO();
     else if (k === "meta+p") await metaP();
     else if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
+    else if (k.startsWith("wait-thumb:")) {
+      // wait-thumb:<state>:<maxMs>: poll every 100 ms until the first visible thumbnail has that data-state.
+      const [, want, max] = k.split(":");
+      for (let t0 = Date.now(); Date.now() - t0 < Number(max);) {
+        if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
+        await sleep(100);
+      }
+    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; });
+    else if (k === "count-urls") {
+      await c.evaluate(() => {
+        if (window.__burrowUrlWrap) return;
+        window.__burrowUrlNet = 0;
+        const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+        window.__burrowUrlWrap = { create, revoke };
+        URL.createObjectURL = function (...a) { window.__burrowUrlNet += 1; return create.apply(this, a); };
+        URL.revokeObjectURL = function (u, ...a) { if (typeof u === "string" && u.startsWith("blob:")) window.__burrowUrlNet -= 1; return revoke.call(this, u, ...a); };
+      });
+    } else if (k === "count-errors") {
+      await c.evaluate(() => {
+        if (window.__burrowGateErrorHooks) return;
+        window.__burrowGateErrors = [];
+        // Window errors only: a failing <img> fires its own error event, which is expected.
+        const onError = (e) => { if (e.target === window) window.__burrowGateErrors.push(String(e.message)); };
+        const onReject = (e) => window.__burrowGateErrors.push(`rejection: ${e.reason?.message ?? e.reason}`);
+        window.__burrowGateErrorHooks = { onError, onReject };
+        window.addEventListener("error", onError, true);
+        window.addEventListener("unhandledrejection", onReject);
+      });
+    }
     else if (k.startsWith("down:")) {
       for (let i = 0; i < Number(k.slice(5)); i++) { await c.key("ArrowDown"); await sleep(40); }
     } else if (k.startsWith("scope-to:")) {
@@ -963,6 +1039,57 @@ const BLOCK_CASES = [
       const missing = ["burrow-b", "burrow-ref"].filter((x) => !classes.includes(x));
       return missing.length ? `preview target lacks ${missing.join(", ")}: ${JSON.stringify(a?.preview)}` : null;
     },
+  },
+  // Image thumbnails (previewImages) in Burrow's previews, on the fixture's image blocks.
+  {
+    name: "(( image thumbnail in the row preview, reserved before load", query: "((zebra photo one", restorePreview: true,
+    keys: ["reset-loads", "preview-open", "wait:60", "snap", "wait-thumb:ok:6000", "snap", "Escape", "wait:200", "snap"],
+    check: ({ snaps: [a, b, d] }) => {
+      const t = a?.thumb;
+      if (!t || !t.inTarget || !["wait", "loading"].includes(t.state) || !(t.w <= 240 && t.h <= 160 && t.h > 0)) return `first snap ${JSON.stringify(t)}`;
+      const u = b?.thumb;
+      if (!u || u.state !== "ok" || !(u.img?.natural > 0)) return `second snap ${JSON.stringify(u)}`;
+      const scheme = config.encrypted ? "blob" : "https";
+      if (u.img.src !== scheme) return `image src scheme ${u.img.src} != ${scheme}`;
+      if (!config.encrypted && u.img.lazy !== "lazy") return `loading ${u.img.lazy} != lazy`;
+      if (JSON.stringify(t.rect) !== JSON.stringify(u.rect)) return `layout shift ${JSON.stringify(t.rect)} -> ${JSON.stringify(u.rect)}`;
+      if (t.overlaps || u.overlaps) return `thumbnail overlaps text ${JSON.stringify([t.overlaps, u.overlaps])}`;
+      return d?.thumbCounters?.urls === 0 && d.thumbAny === 0 ? null : `after Escape ${JSON.stringify(d?.thumbCounters)} thumbs ${d?.thumbAny}`;
+    },
+  },
+  {
+    name: "(( image +N: a block with three images says +2", query: "((zebra photo many", restorePreview: true,
+    keys: ["preview-open", "wait-thumb:ok:6000", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.thumb?.state === "ok" && a.thumb.more === "+2" ? null : `thumb ${JSON.stringify(a?.thumb)}`),
+  },
+  {
+    name: "(( broken image keeps the label with its alt", query: "((zebra photo broken", restorePreview: true,
+    keys: ["count-errors", "preview-open", "wait:60", "snap", "wait-thumb:failed:6000", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      const t = b?.thumb;
+      if (t?.state !== "failed" || !t.label?.includes("image") || !t.text.includes("zebra broken alt")) return `failed state ${JSON.stringify(t)}`;
+      if (a?.thumb && JSON.stringify(a.thumb.rect) !== JSON.stringify(t.rect)) return `box changed ${JSON.stringify(a.thumb.rect)} -> ${JSON.stringify(t.rect)}`;
+      return b.pageErrors === 0 ? null : `page errors ${b.pageErrors}`;
+    },
+  },
+  {
+    name: "Tab through 10 image rows fast starts at most one download", query: "((zebra photos", restorePreview: true,
+    keys: ["preview-open", "wait:400", "Tab", "wait:300", "reset-loads", "count-urls", ...Array(9).fill("ArrowDown"), "wait-thumb:ok:6000", "snap", "Escape", "Escape", "wait:200", "snap"],
+    check: ({ snaps: [a, b] }) => {
+      if (!(a?.thumbCounters?.loads <= 1)) return `loads ${JSON.stringify(a?.thumbCounters)}`;
+      if (a.thumb?.state !== "ok" || !a.preview?.target?.includes("zebra photo 10")) return `last row ${JSON.stringify(a?.thumb)} ${JSON.stringify(a?.preview?.target)}`;
+      return b?.thumbCounters?.urls === 0 && b.urlNet === 0 ? null : `after close ${JSON.stringify(b?.thumbCounters)} urlNet ${b?.urlNet}`;
+    },
+  },
+  {
+    name: "[[ drill preview shows the target's thumbnail", query: `[[${FIXTURE_PAGE} > zebra photos > zebra photo 03`, restorePreview: true,
+    keys: ["wait-thumb:ok:6000", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.thumb?.inTarget && a.thumb.state === "ok" ? null : `thumb ${JSON.stringify(a?.thumb)} preview ${JSON.stringify(a?.preview?.target)}`),
+  },
+  {
+    name: "(( images off: no thumbnail anywhere, nothing loaded", query: "((zebra photo one", restorePreview: true, settings: { previewImages: false },
+    keys: ["reset-loads", "preview-open", "wait:1500", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a && a.thumbAny === 0 && !a.thumb && !a.thumbCounters.loads ? null : `thumbs ${a?.thumbAny} ${JSON.stringify(a?.thumbCounters)}`),
   },
   ...(config.accept || []).map(({ query, uid }) => ({
     // Real data, no fixture: the original block leads and no code block outranks it.
@@ -1503,6 +1630,7 @@ async function runAliasCase(kase) {
       await runKeys(kase.keys, snaps);
       after = await readBack();
     } finally {
+      await removeThumbHooks();
       if (kase.restorePreview) await restorePreviewState(initialPreview);
     }
     // Blocks created anywhere in the graph while the keys ran (a footnote, a
@@ -1710,6 +1838,8 @@ async function runTextOverlap() {
       await visit(`(( Roam's row highlighted, ${p}`, config.ref.query, ["down-past-strip"], { preview });
       await visit(`(( tasks, ${p}`, "((zebra task", [], { preview });
       await visit(`(( rich rows, ${p}`, "((zebra rich", [], { preview });
+      await visit(`(( image thumbnail, ${p}`, "((zebra photo one", preview ? ["wait-thumb:ok:6000"] : [], { preview });
+      await visit(`(( image thumbnail with +N, ${p}`, "((zebra photo many", preview ? ["wait-thumb:ok:6000"] : [], { preview });
       await visit(`(( code row, ${p}`, "((zebra_plot", [], { preview });
       await visit(`(( a cut long row, ${p}`, "((zebra snippet", [], { preview });
       // The preview scrolls to a line far down its siblings: its header stays on top.

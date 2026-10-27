@@ -37,6 +37,15 @@ export const DRILL_TREE = [
   { key: "richMedia", string: "zebra media ![zebra](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=) [zebra-report.pdf](https://firebasestorage.googleapis.com/v0/b/zebra/o/zebra-report.pdf) [docs](https://example.com/zebra)" },
   { key: "richLong", string: `zebra long block ${"with plenty of words that run on and on ".repeat(6)}until the zebra snippet target near its end` },
   { key: "richHtml", string: "zebra html <img src=x onerror=\"window.__burrowXss=1\"> <b>not bold</b>" },
+  // Image blocks (previewImages): `@{image}` / `@{image2}` are two image URLs already in the graph,
+  // `@{broken}` a URL that cannot load; all three are filled in at setup, read-only.
+  { key: "photoOne", string: "zebra photo one ![zebra photo alt](@{image})" },
+  { key: "photoMany", string: "zebra photo many ![first](@{image}) ![second](@{image2}) ![third](@{image})" },
+  { key: "photoBroken", string: "zebra photo broken ![zebra broken alt](@{broken})" },
+  { key: "photos", string: "zebra photos", children: Array.from({ length: 10 }, (_, i) => {
+    const n = String(i + 1).padStart(2, "0");
+    return { key: `photo${i + 1}`, string: `zebra photo ${n} ![p${n}](@{${i % 2 ? "image2" : "image"}})` };
+  }) },
   { key: "steps", string: "Steps section", children: [
     { key: "intro", string: "B-side" },
     { key: "one", string: "1. mix" }, { key: "two", string: "2. bake" },
@@ -154,7 +163,25 @@ export async function setupFixture(c, { drillTree = false } = {}) {
       // The drill tree goes in before the typing block and before keepAll, so
       // the gates never count it as a block Roam created.
       if (drillTree) {
-        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : drill[k]));
+        // Two distinct image URLs from the graph (read-only query). Encrypted graph: a Roam upload (`.enc`).
+        const enc = Boolean(api.graph?.isEncrypted);
+        const found = new Set();
+        const tiers = enc ? [".enc"] : ["firebasestorage.googleapis.com", "https://"];
+        for (const needle of tiers) {
+          const strings = api.q(`[:find [?s ...] :where [?b :block/string ?s] [(clojure.string/includes? ?s "![")] [(clojure.string/includes? ?s ${JSON.stringify(needle)})]]`) || [];
+          for (const str of strings.slice(0, 600)) {
+            for (const m of str.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)) {
+              const url = m[1];
+              if (enc ? url.includes(".enc") : /^https:\/\//.test(url)) found.add(url);
+            }
+            if (found.size >= 2) break;
+          }
+          if (found.size) break;
+        }
+        if (!found.size) throw new Error(`fixture: no ${enc ? ".enc upload" : "https"} image block found in this graph for the image cases`);
+        const [image, image2 = image] = [...found];
+        const urls = { image, image2, broken: `https://firebasestorage.googleapis.com/v0/b/zebra-missing/o/burrow-missing.png${enc ? ".enc" : ""}?alt=media` };
+        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : k in urls ? urls[k] : drill[k]));
         const make = async (nodes, parent) => {
           for (const n of nodes) {
             await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: fill(n.string), uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}) } });
@@ -165,7 +192,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         await make(tree, pageUid);
         // The referenced blocks the (( cases find: the pick-memory pair, the
         // tasks, and a nested block (outline and context cases).
-        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50})) ${richKeys.map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
+        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50})) ${[...richKeys, "photoOne", "photoMany", "photoBroken", "photos"].map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
         created.drill.push(refsUid);
       }
       await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: "", uid: blockUid } });
