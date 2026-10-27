@@ -239,7 +239,8 @@ async function state() {
         return null;
       })(),
       thumbAny: document.querySelectorAll(".burrow-thumb").length,
-      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null },
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.input || []).slice(window.__burrowKeyMark ?? -14).map((x) => Math.round(x * 100) / 100) },
+      thumbLog: window.__burrowThumbLog ?? null,
       urlNet: window.__burrowUrlNet ?? null,
       pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
       rowPreview: (() => {
@@ -582,6 +583,7 @@ async function palette(label) {
 // Hooks the thumbnail keys install, removed when the case ends.
 const removeThumbHooks = () => c.evaluate(() => {
   if (window.__burrowUrlWrap) { URL.createObjectURL = window.__burrowUrlWrap.create; URL.revokeObjectURL = window.__burrowUrlWrap.revoke; window.__burrowUrlWrap = null; }
+  if (window.__burrowThumbWatch) { window.__burrowThumbWatch.disconnect(); window.__burrowThumbWatch = null; }
   window.__burrowUrlNet = undefined;
   const h = window.__burrowGateErrorHooks;
   if (h) { window.removeEventListener("error", h.onError, true); window.removeEventListener("unhandledrejection", h.onReject); window.__burrowGateErrorHooks = null; }
@@ -614,7 +616,7 @@ async function runKeys(keys, snaps = []) {
         if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
         await sleep(100);
       }
-    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; });
+    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; window.__burrowKeyMark = window.__BURROW_PERF?.samples?.input?.length ?? 0; });
     else if (k === "count-urls") {
       await c.evaluate(() => {
         if (window.__burrowUrlWrap) return;
@@ -623,6 +625,26 @@ async function runKeys(keys, snaps = []) {
         window.__burrowUrlWrap = { create, revoke };
         URL.createObjectURL = function (...a) { window.__burrowUrlNet += 1; return create.apply(this, a); };
         URL.revokeObjectURL = function (u, ...a) { if (typeof u === "string" && u.startsWith("blob:")) window.__burrowUrlNet -= 1; return revoke.call(this, u, ...a); };
+      });
+    } else if (k === "watch-thumbs") {
+      // Every state a preview thumbnail goes through, with its size and its place in the pane's content,
+      // recorded as it happens (a snap may come after the image has already arrived).
+      await c.evaluate(() => {
+        if (window.__burrowThumbWatch) return;
+        window.__burrowThumbLog = [];
+        const record = () => {
+          for (const t of document.querySelectorAll(".burrow-preview:not([hidden]) .burrow-thumb")) {
+            const pane = t.closest(".burrow-preview");
+            const b = t.getBoundingClientRect();
+            const p = pane.getBoundingClientRect();
+            const entry = { state: t.getAttribute("data-state"), w: Math.round(b.width), h: Math.round(b.height),
+              left: Math.round(b.left - p.left), top: Math.round(b.top - p.top + pane.scrollTop), img: Boolean(t.querySelector("img")) };
+            const last = window.__burrowThumbLog[window.__burrowThumbLog.length - 1];
+            if (!last || JSON.stringify(last) !== JSON.stringify(entry)) window.__burrowThumbLog.push(entry);
+          }
+        };
+        window.__burrowThumbWatch = new MutationObserver(record);
+        window.__burrowThumbWatch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-state", "src"] });
       });
     } else if (k === "count-errors") {
       await c.evaluate(() => {
@@ -1047,10 +1069,17 @@ const BLOCK_CASES = [
   // Image thumbnails (previewImages) in Burrow's previews, on the fixture's image blocks.
   {
     name: "(( image thumbnail in the row preview, reserved before load", query: "((zebra photo one", restorePreview: true,
-    keys: ["reset-loads", "preview-open", "wait:60", "snap", "wait-thumb:ok:6000", "snap", "Escape", "wait:200", "snap"],
+    keys: ["reset-loads", "watch-thumbs", "preview-open", "wait:60", "snap", "wait-thumb:ok:6000", "snap", "Escape", "wait:200", "snap"],
     check: ({ snaps: [a, b, d] }) => {
       const t = a?.thumb;
-      if (!t || !t.inTarget || !["wait", "loading"].includes(t.state) || !(t.w <= 240 && t.h <= 160 && t.h > 0)) return `first snap ${JSON.stringify(t)}`;
+      if (!t || !t.inTarget || !(t.w <= 240 && t.h <= 160 && t.h > 0)) return `first snap ${JSON.stringify(t)}`;
+      // The box is there, empty and full size, before the image: its first recorded state is "wait", without an img,
+      // and every later state up to "ok" keeps its size and place.
+      const log = b?.thumbLog || [];
+      const first = log[0];
+      if (!first || first.state !== "wait" || first.img || first.w !== t.w || first.h !== t.h) return `not reserved before load: ${JSON.stringify(log)}`;
+      if (!log.some((e) => e.state === "ok")) return `never ok: ${JSON.stringify(log)}`;
+      if (log.some((e) => e.w !== first.w || e.h !== first.h || e.left !== first.left || e.top !== first.top)) return `layout shift while loading: ${JSON.stringify(log)}`;
       const u = b?.thumb;
       if (!u || u.state !== "ok" || !(u.img?.natural > 0)) return `second snap ${JSON.stringify(u)}`;
       const scheme = config.encrypted ? "blob" : "https";
@@ -1083,9 +1112,21 @@ const BLOCK_CASES = [
     check: ({ snaps: [a, b] }) => {
       if (!(a?.thumbCounters?.loads <= 1)) return `loads ${JSON.stringify(a?.thumbCounters)}`;
       // Each ↓ redraws the preview beside the list, with its box, in the key's own work: held to the 4 ms budget.
-      if (!(a.thumbCounters.keyP95 <= 4)) return `per-key p95 ${a.thumbCounters.keyP95} ms over 4`;
+      const downs = [...a.thumbCounters.keys].sort((x, y) => x - y);
+      const p95 = downs[Math.min(downs.length - 1, Math.floor(0.95 * downs.length))];
+      if (!(downs.length >= 9 && p95 <= 4)) return `↓ keys p95 ${p95} ms (budget 4): ${JSON.stringify(a.thumbCounters.keys)}`;
       if (a.thumb?.state !== "ok" || !a.preview?.target?.includes("zebra photo 10")) return `last row ${JSON.stringify(a?.thumb)} ${JSON.stringify(a?.preview?.target)}`;
       return b?.thumbCounters?.urls === 0 && b.urlNet === 0 ? null : `after close ${JSON.stringify(b?.thumbCounters)} urlNet ${b?.urlNet}`;
+    },
+  },
+  {
+    name: "Tab through 10 image rows, images off: the ↓ keys' cost without thumbnails", query: "((zebra photos", restorePreview: true, settings: { previewImages: false },
+    keys: ["preview-open", "wait:400", "Tab", "wait:300", "reset-loads", ...Array(9).fill("ArrowDown"), "wait:600", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const downs = [...(a?.thumbCounters?.keys || [])].sort((x, y) => x - y);
+      const p95 = downs[Math.min(downs.length - 1, Math.floor(0.95 * downs.length))];
+      if (a?.thumbAny || a?.thumbCounters?.loads) return `thumbnails with the switch off ${a.thumbAny} ${JSON.stringify(a.thumbCounters)}`;
+      return downs.length >= 9 && p95 <= 4 ? null : `↓ keys p95 ${p95} ms (budget 4): ${JSON.stringify(a?.thumbCounters?.keys)}`;
     },
   },
   {
