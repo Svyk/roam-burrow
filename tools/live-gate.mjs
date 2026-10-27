@@ -1073,16 +1073,16 @@ const BLOCK_CASES = [
   // Image thumbnails (previewImages) in Burrow's previews, on the fixture's image blocks.
   {
     name: "(( image thumbnail in the row preview, reserved before load", query: "((zebra photo one", restorePreview: true,
-    keys: ["reset-loads", "watch-thumbs", "preview-open", "wait:60", "snap", "wait-thumb:ok:6000", "snap", "Escape", "wait:200", "snap"],
+    beforeQuery: ["watch-thumbs"],
+    keys: ["reset-loads", "preview-open", "wait:60", "snap", "wait-thumb:ok:10000", "snap", "Escape", "wait:200", "snap"],
     check: ({ snaps: [a, b, d] }) => {
       const t = a?.thumb;
       if (!t || !t.inTarget || !(t.w <= 240 && t.h <= 160 && t.h > 0)) return `first snap ${JSON.stringify(t)}`;
       // The box is there, empty and full size, before the image: its first recorded state is "wait", without an img,
       // and every later state up to "ok" keeps its size and place.
       const log = b?.thumbLog || [];
-      // (With Roam's preview already open the box can be drawn before the watch starts: then its first
-      // recorded state is "loading", still without an image.)
-      if (!log[0] || !["wait", "loading"].includes(log[0].state) || log[0].img) return `not reserved before load: ${JSON.stringify(log)}`;
+      // The watch starts before the query is typed, so it sees the box from its first draw.
+      if (!log[0] || log[0].state !== "wait" || log[0].img) return `not reserved before load: ${JSON.stringify(log)}`;
       const seen = log.filter((e) => e.shown);
       const box = seen.find((e) => !e.img) || seen[0];
       if (!box || box.w !== t.w || box.h !== t.h) return `no full-size box shown before the image: ${JSON.stringify(log)}`;
@@ -1665,6 +1665,8 @@ async function runAliasCase(kase) {
     wheelSteps = 0;
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed", primed };
+    // Keys that must run before the query is typed (with Roam's preview already open, a thumbnail is drawn while typing).
+    if (kase.beforeQuery) await runKeys(kase.beforeQuery, []);
     if (kase.query) {
       await c.type(kase.query, TYPE_MS);
       // A "noRows" case expects no Burrow row; give roam-aliases time to draw.
