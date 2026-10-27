@@ -19,7 +19,7 @@ A Roam Research extension that adds to Roam's own `[[` page search and `((` bloc
 - **Alias expansion in `((`.** An alias also finds referenced blocks that link to its page.
 - **Forgiving matching.** `ant man` finds `[[Ant-Man]]`, `EMP 26` finds `EMP26-002-BHP`, `mcu` finds `Marvel Cinematic Universe`, small typos are forgiven. Numbers never fuzz.
 - **Drill-down in `[[`.** Type a page, then `#` for a heading on it and `>` for a child one level down: `[[Systems/Executor Lanes and LaunchAgents#grok lane > never`. A preview shows the page outline around that block, highlighted, with the trail of its parents. Enter inserts the block's `((uid))`. If nothing below the page matches, Enter inserts `[[Page]]`, so a drill-down never creates a page.
-- **Pick memory** (off by default). A row you picked ranks first among equal matches the next time you type the same query.
+- **Recent rows and frequent first.** With up to two characters after `((` or `[[`, up to three rows: what you picked most recently, then what was edited most recently, nothing selected so Enter stays Roam's. Among equal matches, the rows you pick often and lately come first. Kept in this browser only, as uids and times.
 - **Current page first.** Among equal referenced blocks in `((`, blocks on the page you are editing come first.
 
 The look follows Roam's popup: its colors, font and ref counts, light and dark. No badges.
@@ -81,7 +81,7 @@ Burrow writes only the `((…))` or `[[…]]` you are typing, and only if the te
 
 ## Settings
 
-Every feature has its own switch under **Settings → Burrow**: alias rows, alias rows with their page, alias pre-select, alias chips, alias expansion, referenced-first ranking, pre-select, prose before code, query filters, rows drawn like Roam, forgiving matching, drill-down, drill-down preview, Tab drill, keep panes apart, key hints, hover tips, key list (⌥/, F1 or ?), first-run tip, where the block lives, up and down the outline, preview follows Burrow's rows, ordinal matching, hide empty blocks, long levels in slices, the block reference search command and its Alt+Shift+9 key (off by default), create aliases and delete aliases (both off by default: they write to your graph), pick memory (off by default, kept in this browser only), current page first, and a performance readout. **Alias attribute** should match roam-aliases' Keyword (default `Aliases`). **Alias link format** picks `[alias]([[Page]])` or `[[Page]]`. The command palette has **Burrow: Disable all features**.
+Every feature has its own switch under **Settings → Burrow**: alias rows, alias rows with their page, alias pre-select, alias chips, alias expansion, referenced-first ranking, pre-select, prose before code, query filters, rows drawn like Roam, forgiving matching, drill-down, drill-down preview, Tab drill, keep panes apart, key hints, hover tips, key list (⌥/, F1 or ?), first-run tip, where the block lives, up and down the outline, preview follows Burrow's rows, ordinal matching, hide empty blocks, long levels in slices, the block reference search command and its Alt+Shift+9 key (off by default), create aliases and delete aliases (both off by default: they write to your graph), recent rows and frequent first (kept in this browser only), current page first, and a performance readout. **Alias attribute** should match roam-aliases' Keyword (default `Aliases`). **Alias link format** picks `[alias]([[Page]])` or `[[Page]]`. The command palette has **Burrow: Disable all features** and **Burrow: forget recent picks**.
 
 ## Working with roam-aliases
 
@@ -102,7 +102,7 @@ npm run check   # build, secret scan, syntax check, tests, generated-artifact dr
 
 ```bash
 npm run gate:live                            # everything below, both graphs, about 40 minutes, PASS/FAIL summary (add -- --theme light|dark, -- --notes "Readwisenotes - Daily" when two notes windows are open)
-node tools/live-gate.mjs Svy svy             # about 12 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases and Svy's footnote case, alias rows, block navigation, pick memory, fast typing, rows drawn like Roam, text boxes in 32 picker states
+node tools/live-gate.mjs Svy svy             # about 12 min: acceptance, byte-for-byte (on/off/gone/drill off) incl. drill cases and Svy's footnote case, alias rows, block navigation, recent rows and frequent first, fast typing, rows drawn like Roam, text boxes in 32 picker states
 node tools/live-gate.mjs Readwisenotes notes # about 11 min
 node tools/live-gate.mjs Svy svy --only "alias chips: ⌥↓, ←, Enter"   # one case and its verdict, about 30 s
 node tools/live-gate.mjs Svy svy --only "text boxes: no text overlaps another in any picker state"   # no text over other text, about 3 min
