@@ -614,7 +614,7 @@ function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => fa
   if (changed) index.prefilter = null;
   return { next: at, changed };
 }
-function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false } = {}) {
+function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false, accept = null } = {}) {
   if (!index || !plan) return [];
   const hits = /* @__PURE__ */ new Map();
   const withCode = !prose || code;
@@ -640,6 +640,7 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
     if (!isPrecise(match)) return false;
     let target = entry;
     if (entry.pureQuote && index.byUid.has(entry.pureQuote)) target = index.byUid.get(entry.pureQuote);
+    if (accept && !accept(target)) return false;
     const previous = hits.get(target.uid);
     if (previous && rankOf(previous.match) >= rankOf(match)) return true;
     hits.set(target.uid, { entry: target, match, viaAlias, inCode });
@@ -1250,6 +1251,7 @@ var DEFAULTS = Object.freeze({
   refRanking: true,
   refPreselect: true,
   refProse: true,
+  queryFilters: true,
   richRows: true,
   betterMatch: true,
   drill: true,
@@ -1287,6 +1289,7 @@ var SWITCHES = [
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["refProse", "Prose before code in ((", "Burrow's (( rows match a block's own words: code blocks, inline code and the insides of {{embed}}, {{roam/render}} and other macros count only when what you type looks like code (it has ( ) . _ = or the like). A block of more than 64 words ranks after shorter blocks that match as well, and a match inside a [[page]] or #tag the block links comes first among equals. Off: code counts like any text and length does not count (0.6.1)."],
+  ["queryFilters", "Query filters", `In (( and [[, "quoted words" must stand together, -word leaves out blocks with that word, in:here keeps blocks on this page, in:Page Title (to the next filter or the end; an alias works) keeps that page's blocks, ns:Systems/ keeps pages under Systems/, is:todo and is:done keep open or done tasks. Only a word with its colon, quotes or leading - is a filter; Roam's own list gets the text as typed. Off: every word is search text, as in 0.7.0.`],
   ["richRows", "Rows drawn like Roam", "Burrow's (( rows, the drill panel and the previews draw a block as Roam does: a code block as its language and first line of code, inline code in a monospace face, [[links]], #tags and ((block refs)) as references, bold, italic, highlight and strike, embeds, queries, roam/render and SmartBlock buttons as small labels, images and files as labels. A long block shows the part around what you typed. Off: plain text, as in 0.6.1."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
   ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
@@ -1661,9 +1664,205 @@ function resolveDrill(parsed, source, { strict = false, ordinals = false, hideEm
   };
 }
 
+// src/tasks.js
+var TASK_SOURCE = String.raw`\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}`;
+var TASK = new RegExp(TASK_SOURCE, "g");
+var ANY_TASK = new RegExp(TASK_SOURCE);
+function taskParts(string) {
+  const parts = [];
+  const value = String(string ?? "");
+  let at = 0;
+  for (const m of value.matchAll(TASK)) {
+    if (m.index > at) parts.push({ text: value.slice(at, m.index) });
+    parts.push({ task: m[1] === "DONE" ? "done" : "todo" });
+    at = m.index + m[0].length;
+  }
+  if (at < value.length) parts.push({ text: value.slice(at) });
+  return parts;
+}
+var hasTask = (string) => ANY_TASK.test(String(string ?? ""));
+function checkbox(doc, state) {
+  const box = doc.createElement("span");
+  box.className = `burrow-check burrow-${state}`;
+  box.setAttribute("role", "img");
+  box.setAttribute("aria-label", state === "done" ? "done" : "to do");
+  return box;
+}
+
+// src/filters.js
+var NAMED = /^(in|ns|is):/i;
+var startsFilter = (s, at) => NAMED.test(s.slice(at, at + 3)) || s[at] === '"' || s[at] === "-" && /[\p{L}"]/u.test(s[at + 1] ?? "");
+var TASK_STATES = ["todo", "done"];
+function parseFilters(query) {
+  const s = String(query ?? "");
+  if (!/["]|(?:^|\s)(?:-[\p{L}"]|(?:in|ns|is):)/iu.test(s)) return null;
+  const words = [];
+  const phrases = [];
+  const excludes = [];
+  const pages = [];
+  const ns = [];
+  const is = [];
+  const labels = [];
+  let here = false;
+  let consumed = false;
+  let at = 0;
+  const quoted = (from) => {
+    const close = s.indexOf('"', from + 1);
+    const end = close < 0 ? s.length : close;
+    return { value: s.slice(from + 1, end), open: close < 0, next: close < 0 ? s.length : close + 1 };
+  };
+  const longValue = (from) => {
+    if (s[from] === '"') return quoted(from);
+    let end = from;
+    while (end < s.length) {
+      const space = s.slice(end).search(/\s/);
+      if (space < 0) {
+        end = s.length;
+        break;
+      }
+      let next = end + space;
+      while (next < s.length && /\s/.test(s[next])) next++;
+      if (next >= s.length || startsFilter(s, next)) {
+        end += space;
+        break;
+      }
+      end = next;
+    }
+    return { value: s.slice(from, end), next: end };
+  };
+  const word = (from) => {
+    const m = /\S*/.exec(s.slice(from));
+    return { value: m[0], next: from + m[0].length };
+  };
+  while (at < s.length) {
+    if (/\s/.test(s[at])) {
+      at++;
+      continue;
+    }
+    if (startsFilter(s, at)) consumed = true;
+    const head = s.slice(at, at + 3).toLowerCase();
+    if (s[at] === '"') {
+      const q = quoted(at);
+      const key = searchKey(q.value);
+      if (key.tokens.length) {
+        phrases.push({ key, open: q.open });
+        labels.push(`"${q.value.trim()}${q.open ? "" : '"'}`);
+      }
+      at = q.next;
+    } else if (s[at] === "-" && /[\p{L}"]/u.test(s[at + 1] ?? "")) {
+      const q = s[at + 1] === '"' ? quoted(at + 1) : word(at + 1);
+      const key = searchKey(q.value);
+      if (key.tokens.length) {
+        excludes.push(key);
+        labels.push(`-${s[at + 1] === '"' ? `"${q.value.trim()}"` : q.value}`);
+      }
+      at = q.next;
+    } else if (head === "is:") {
+      const q = word(at + 3);
+      const value = q.value.toLowerCase();
+      if (value) {
+        is.push(TASK_STATES.find((state) => state.startsWith(value)) ?? null);
+        labels.push(`is:${q.value}`);
+      }
+      at = q.next;
+    } else if (head === "in:" || head === "ns:") {
+      const q = longValue(at + 3);
+      const value = q.value.trim();
+      if (value) {
+        if (head === "ns:") ns.push(value.replace(/\/+$/, ""));
+        else if (value.toLowerCase() === "here") here = true;
+        else pages.push(value);
+        labels.push(`${head}${value}`);
+      }
+      at = q.next;
+    } else {
+      const q = word(at);
+      words.push(q.value);
+      at = q.next;
+    }
+  }
+  if (!consumed) return null;
+  const text = words.join(" ");
+  const planText = [text, ...phrases.map((p) => p.key.spaced)].filter(Boolean).join(" ");
+  return { text, planText, phrases, excludes, here, pages, ns, is, labels };
+}
+function hasRun(key, needle, open = false) {
+  const words = needle?.tokens;
+  const tokens = key?.tokens;
+  if (!words?.length || !tokens?.length) return false;
+  const last = words.length - 1;
+  for (let i = 0; i + last < tokens.length; i++) {
+    if (tokens[i] !== words[0] && !(last === 0 && open && tokens[i].startsWith(words[0]))) continue;
+    let ok = true;
+    for (let k = 1; k <= last && ok; k++) {
+      const t = tokens[i + k];
+      ok = k === last && open ? t.startsWith(words[k]) : t === words[k];
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+function taskState(string) {
+  for (const part of taskParts(string)) if (part.task) return part.task;
+  return null;
+}
+function pageScope(filters, { currentPage = null, resolve = null } = {}) {
+  if (!filters || !filters.here && !filters.pages.length && !filters.ns.length) return null;
+  const titles = /* @__PURE__ */ new Set();
+  if (filters.here && currentPage != null) titles.add(String(currentPage).toLowerCase());
+  for (const value of filters.pages) titles.add(String(resolve?.(value)?.title ?? value).toLowerCase());
+  const spaces = filters.ns.map((n) => n.toLowerCase());
+  return (title) => {
+    if (title == null) return false;
+    const t = String(title).toLowerCase();
+    return titles.has(t) || spaces.some((n) => t === n || t.startsWith(`${n}/`));
+  };
+}
+function refFilter(filters, { currentPage = null, resolve = null, withCode = false } = {}) {
+  if (!filters) return null;
+  const inScope = pageScope(filters, { currentPage, resolve });
+  const keys = (entry) => withCode && entry.codeKey ? [entry.key, entry.codeKey] : [entry.key];
+  return (entry) => {
+    if (inScope && !inScope(entry.page)) return false;
+    if (filters.is.length) {
+      const state = taskState(entry.string);
+      if (!filters.is.every((want) => want != null && want === state)) return false;
+    }
+    for (const phrase of filters.phrases) {
+      if (!keys(entry).some((key) => hasRun(key, phrase.key, phrase.open))) return false;
+    }
+    for (const word of filters.excludes) {
+      if (keys(entry).some((key) => hasRun(key, word))) return false;
+    }
+    return true;
+  };
+}
+function pageFilter(filters, { currentPage = null, resolve = null } = {}) {
+  if (!filters) return null;
+  const inScope = pageScope(filters, { currentPage, resolve });
+  const titleKeys = /* @__PURE__ */ new Map();
+  const titleKey = (title) => {
+    let key = titleKeys.get(title);
+    if (!key) titleKeys.set(title, key = searchKey(title));
+    return key;
+  };
+  return (entry) => {
+    if (filters.is.length) return false;
+    if (inScope && !inScope(entry.title)) return false;
+    const keys = [entry.key ?? searchKey(entry.alias), titleKey(entry.title)];
+    for (const phrase of filters.phrases) {
+      if (!keys.some((key) => hasRun(key, phrase.key, phrase.open))) return false;
+    }
+    for (const word of filters.excludes) {
+      if (keys.some((key) => hasRun(key, word))) return false;
+    }
+    return true;
+  };
+}
+
 // src/hints.js
 var IS_MAC = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? "");
-var NAMED = {
+var NAMED2 = {
   altA: ["⌥A", "Alt+A"],
   altDown: ["⌥↓", "Alt+↓"],
   altBackspace: ["⌥⌫", "Alt+⌫"],
@@ -1672,7 +1871,7 @@ var NAMED = {
   altShift9: ["⌥⇧9", "Alt+Shift+9"]
 };
 function keyLabel(name, mac = IS_MAC) {
-  const pair = NAMED[name];
+  const pair = NAMED2[name];
   return pair ? pair[mac ? 0 : 1] : name;
 }
 var ALT_SLASH = /* @__PURE__ */ new Set(["/", "÷", "?", "¿"]);
@@ -1786,6 +1985,20 @@ function helpGroups(setting, mac = IS_MAC) {
   preview.items.push([k("ctrlO"), on("rowPreview") ? "Roam's preview, for Burrow's rows too" : "Roam's preview"]);
   if (on("tabDrill") && on("drillPreview")) preview.items.push([k("ctrlO"), "in a drill: its own preview"]);
   groups.push(preview);
+  if (on("queryFilters")) {
+    groups.push({
+      title: "Filters",
+      items: [
+        ['"…"', "words that stand together"],
+        ["-word", "leave out blocks with the word"],
+        ["in:here", "blocks on this page"],
+        ["in:Page", "blocks on that page (to the next filter)"],
+        ["ns:A/", "pages under A/"],
+        ["is:todo", "open tasks; is:done for done"]
+      ],
+      notes: []
+    });
+  }
   return groups;
 }
 function createHelpSheet({ doc, win, lifecycle }) {
@@ -2067,31 +2280,6 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       return nodes.size;
     }
   };
-}
-
-// src/tasks.js
-var TASK_SOURCE = String.raw`\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}`;
-var TASK = new RegExp(TASK_SOURCE, "g");
-var ANY_TASK = new RegExp(TASK_SOURCE);
-function taskParts(string) {
-  const parts = [];
-  const value = String(string ?? "");
-  let at = 0;
-  for (const m of value.matchAll(TASK)) {
-    if (m.index > at) parts.push({ text: value.slice(at, m.index) });
-    parts.push({ task: m[1] === "DONE" ? "done" : "todo" });
-    at = m.index + m[0].length;
-  }
-  if (at < value.length) parts.push({ text: value.slice(at) });
-  return parts;
-}
-var hasTask = (string) => ANY_TASK.test(String(string ?? ""));
-function checkbox(doc, state) {
-  const box = doc.createElement("span");
-  box.className = `burrow-check burrow-${state}`;
-  box.setAttribute("role", "img");
-  box.setAttribute("aria-label", state === "done" ? "done" : "to do");
-  return box;
 }
 
 // src/rich.js
@@ -3225,6 +3413,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     active: -1,
     drill: null,
     pageTitle: null,
+    filters: null,
     pop: null,
     composing: false,
     ignoreNextInput: false,
@@ -3251,6 +3440,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   chipsNode.className = "burrow-chips";
   const contextNode = doc.createElement("div");
   contextNode.className = "burrow-context";
+  const filtersNode = doc.createElement("div");
+  filtersNode.className = "burrow-filters";
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -3330,6 +3521,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   }
   function rank(token) {
     st.drill = null;
+    st.filters = null;
     if (indexes.refs !== richRefs) {
       richRefs = indexes.refs;
       richCache.clear();
@@ -3343,7 +3535,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         return [drillRow(result)];
       }
     }
-    const plan = searchPlan(token.query);
+    const filters = setting("queryFilters") ? parseFilters(token.query) : null;
+    st.filters = filters;
+    const searchText = filters ? filters.text : token.query;
+    const planText = filters ? filters.planText : token.query;
+    const plan = searchPlan(planText);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     const memory = setting("pickMemory") ? picks : null;
@@ -3353,10 +3549,15 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         limit: ROW_LIMIT,
         recall,
         aliasExpand: setting("aliasExpand"),
-        picked: memory?.lookup("ref", token.query),
+        picked: memory?.lookup("ref", searchText),
         currentPage: setting("pageBoost") ? st.pageTitle : null,
         prose: setting("refProse"),
-        code: looksLikeCode(token.query)
+        code: looksLikeCode(searchText),
+        accept: refFilter(filters, {
+          currentPage: st.pageTitle,
+          resolve: (v) => indexes.titles?.resolve(v) ?? null,
+          withCode: !setting("refProse") || looksLikeCode(searchText)
+        })
       }).map((hit) => ({
         kind: "ref",
         key: `ref:${hit.uid}`,
@@ -3369,13 +3570,19 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         insertion: `((${hit.uid}))`,
         pick: hit.uid,
         // A query that matched inside code shows the code line it matched.
-        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(token.query) }) : richFor(hit.uid, hit.string)
+        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string)
       }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
     const format = setting("aliasLinkFormat");
-    const hits = matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: memory?.lookup("alias", token.query) });
+    const accepted = pageFilter(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
+    const hits = matchAliases(indexes.aliases, plan, {
+      strict: !recall,
+      limit: Infinity,
+      picked: memory?.lookup("alias", searchText),
+      skip: accepted ? (entry) => !accepted(entry) : void 0
+    });
     if (setting("aliasInline")) {
       return groupAliasHits(hits, indexes.aliases).map((hit) => ({
         kind: "alias",
@@ -3438,10 +3645,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   const ROW_HEIGHT = 33;
   const CHIPS_HEIGHT = 28;
   const CONTEXT_HEIGHT = 18;
+  const FILTERS_HEIGHT = 18;
   const STRIP_FRAME = 8;
   let stripHeight = null;
   function sizeStrip(count = shown.length) {
-    const lines = (chipsNode.isConnected && chipsNode.parentNode === strip ? CHIPS_HEIGHT : 0) + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0);
+    const lines = (chipsNode.isConnected && chipsNode.parentNode === strip ? CHIPS_HEIGHT : 0) + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0) + (filtersNode.isConnected && filtersNode.parentNode === strip ? FILTERS_HEIGHT : 0);
     const promptRow = strip.firstChild === promptNode ? 1 : 0;
     const height = count || promptRow ? (count || promptRow) * ROW_HEIGHT + lines + STRIP_FRAME : 0;
     if (height === stripHeight) return;
@@ -3538,6 +3746,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   }
   let shown = [];
   let shownQuery = null;
+  let shownFilters = "";
+  function filtersText() {
+    const labels = st.filters?.labels;
+    if (!labels?.length) return "";
+    return labels.map((label) => label.toLowerCase() === "in:here" && st.pageTitle ? `in:here (${st.pageTitle})` : label).join(" · ");
+  }
   function render() {
     if (st.phase === "SCOPE") {
       placeScope();
@@ -3551,9 +3765,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
-    const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
+    const searchText = st.filters ? st.filters.planText : query;
+    const filterText = rows.length ? filtersText() : "";
+    const same = query === shownQuery && filterText === shownFilters && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
-      strip.replaceChildren(...rows.map((row, i) => rowNode(row, i)));
+      strip.replaceChildren(...filterText ? [filtersNode] : [], ...rows.map((row, i) => rowNode(row, i)));
+      shownFilters = filterText;
+      if (filterText) {
+        filtersNode.textContent = filterText;
+        filtersNode.title = `Query filters: ${filterText}`;
+      }
       sizeStrip(rows.length);
       shown = rows;
       shownQuery = query;
@@ -3573,7 +3794,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, query) && !exactTitle(query);
+    const wanted = rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText);
     if (st.phase === "OWNED" && st.auto && !wanted) {
       st.phase = "ARMED";
       st.active = -1;
@@ -3780,6 +4001,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     return node;
   }
+  const searchWords = () => st.filters ? st.filters.planText : st.token?.query;
   let highlightFor = null;
   let highlightRe = null;
   function highlightPattern(query) {
@@ -3791,9 +4013,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     return highlightRe;
   }
   function richContent(row) {
-    return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
+    return renderParts(doc, snippet(row.rich, highlightPattern(searchWords())), (t) => highlight(t));
   }
-  function highlight(text, query = st.token?.query) {
+  function highlight(text, query = searchWords()) {
     const fragment = doc.createDocumentFragment();
     const re = highlightPattern(query);
     if (!re) {
@@ -4009,6 +4231,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     chipsNode.remove();
     chipsFor = null;
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelContext();
     cancelRowPreview();
@@ -4032,6 +4256,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     chipsNode.remove();
     chipsFor = null;
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelContext();
     hints.hidden = true;
@@ -4401,6 +4627,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     st.rows = [];
     st.active = -1;
     st.token = null;
+    st.filters = null;
     st.released = null;
     st.drill = null;
     st.auto = false;
@@ -4415,6 +4642,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     tree.clear();
     shown = [];
     shownQuery = null;
+    shownFilters = "";
     chipsFor = null;
     hintsFor = null;
     strip.replaceChildren();
@@ -4675,6 +4903,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     sizeStrip(0);
     shown = [];
     shownQuery = null;
+    shownFilters = "";
     chipsFor = null;
     chipsNode.remove();
     strip.hidden = false;
@@ -4893,6 +5122,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     strip.classList.remove(OWNING);
     chipsNode.remove();
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelRowPreview();
     hidePreview();
@@ -5097,7 +5328,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     valueSetter.call(ta, next);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     st.ignoreNextInput = false;
-    if (row.pick && setting("pickMemory")) picks?.record(row.kind, token.query, row.pick);
+    if (row.pick && setting("pickMemory")) picks?.record(row.kind, st.filters ? st.filters.text : token.query, row.pick);
     reset("committed");
     debug.commits += 1;
     trace({ ev: "commit", row: row.key });
