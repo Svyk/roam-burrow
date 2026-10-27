@@ -7,6 +7,9 @@ const NAMED = {
   ctrlO: ["⌃O", "Ctrl+O"],
   altSlash: ["⌥/", "Alt+/"],
   altShift9: ["⌥⇧9", "Alt+Shift+9"],
+  shiftEnter: ["⇧↵", "Shift+↵"],
+  altEnter: ["⌥↵", "Alt+↵"],
+  sidebarEnter: ["⌘⇧↵", "Ctrl+Shift+↵"],
 };
 
 export function keyLabel(name, mac = IS_MAC) {
@@ -35,7 +38,8 @@ export function hintsKey(items) {
 //     chips: more aliases to pick, drill: Tab drills into it, aliasNew: ⌥A applies };
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
 //   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them;
-//   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline }.
+//   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline,
+//     insertVariants, openInSidebar }.
 // The drill key names what Tab lists: a page's blocks or a block's children.
 export function pickerHints(s, mac = IS_MAC) {
   const on = s.on || {};
@@ -49,39 +53,56 @@ export function pickerHints(s, mac = IS_MAC) {
   if (s.prompt === "delete") return [["↵", "delete", "Remove only this alias from the page's alias block"], ["esc", "keep", "Keep the alias"]];
   const items = [];
   const row = s.row;
+  const variants = variantHints(row, on, mac);
   if (row && s.chips) {
     items.push(["←→", "alias", "Choose another alias of this page"]);
     if (on.aliasDelete) items.push([k("altBackspace"), "delete", "Delete the selected alias from the page (asks first)"]);
     items.push(["↵", "insert", "Insert the page shown as the selected alias"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     items.push(["esc", "rows", "Back to the rows"]);
-    return items;
+    return [...items, ...variants];
   }
   if (row?.kind === "alias") {
     items.push(["↵", "pick alias", on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
     if (row.chips) items.push([k("altDown"), "more aliases", "Move into the page's other aliases: ←→ choose, ↵ inserts the page shown as that alias"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (row.aliasNew) items.push(addAlias);
-    return items;
+    return [...items, ...variants];
   }
   if (row?.kind === "ref") {
     items.push(["↵", "insert ref", "Insert this block's ((uid)): the original other blocks already reference"]);
     if (row.drill && on.tabDrill) items.push(drillHint(BLOCK));
     if (on.refOutline) items.push(upHint);
-    return items;
+    return [...items, ...variants];
   }
   if (row?.kind === "drill") {
     items.push(["↵", "insert block", "Insert the ((uid)) of the block the drill-down reaches"]);
     if (row.drill && on.tabDrill) items.push(["⇥/>", BLOCK, "Tab lists the children of this block; typing > goes one level down"]);
     else if (row.drill && on.drill) items.push([">", "next level", "Type > and a few words to reach one of its child blocks"]);
     if (on.refOutline && row.block) items.push(upHint);
-    return items;
+    return [...items, ...variants];
   }
   if (s.rowsAbove) items.push(["↑", s.kind === "((" ? "referenced" : "alias rows", "From Roam's first row, ↑ moves into Burrow's rows above it"]);
   if (s.kind === "[[" && s.native) {
     if (s.native.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (s.native.aliasNew) items.push(addAlias);
   }
+  return items;
+}
+
+// ⇧↵ ⌥↵ ⌘⇧↵ on a highlighted Burrow row (insertVariants, openInSidebar):
+// last on the line, as the less needed keys; the tips and key list name them too.
+// row.page: it is a page (alias row, a drill-down that reached only its page).
+export function variantHints(row, on, mac = IS_MAC) {
+  if (!row) return [];
+  const items = [];
+  const page = row.kind === "alias" || row.page;
+  if (on.insertVariants) {
+    items.push([keyLabel("shiftEnter", mac), "embed", page ? "Insert {{[[embed]]: [[Page]]}}" : "Insert {{[[embed]]: ((uid))}}"]);
+    items.push([keyLabel("altEnter", mac), "label", row.kind === "alias" ? "Insert [alias]([[Page]]), whatever the Alias link format says"
+      : page ? "Insert [what you typed]([[Page]])" : "Insert [what you typed](((uid))), or the block's first 40 characters when you typed nothing"]);
+  }
+  if (on.openInSidebar) items.push([keyLabel("sidebarEnter", mac), "sidebar", "Open it in Roam's right sidebar (or ⇧+click); the text stays as you typed it"]);
   return items;
 }
 

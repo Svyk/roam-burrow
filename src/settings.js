@@ -31,6 +31,8 @@ export const DEFAULTS = Object.freeze({
   helpNudge: true,
   refContext: true,
   refOutline: true,
+  insertVariants: true,
+  openInSidebar: true,
   // Not a switch: set once the first-run line has been shown.
   helpNudgeSeen: false,
   aliasKeyword: "Aliases",
@@ -59,6 +61,8 @@ const SWITCHES = [
   ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["refContext", "Where the block lives", "Under the highlighted referenced block in ((, a line with its page and parent (Page › … › Parent) and how many children Tab lists."],
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
+  ["insertVariants", "Insert variants (⇧↵ embed, ⌥↵ label)", "On a highlighted Burrow row, drill row or drill panel row: Shift+Enter inserts an embed ({{[[embed]]: ((uid))}} for a block, {{[[embed]]: [[Page]]}} for a page); Alt+Enter inserts a labelled link: [label](((uid))) for a block, where the label is what you typed (or the block's first 40 characters when you typed nothing), and [alias]([[Page]]) for an alias row whatever the Alias link format says. On Roam's own rows these keys stay Roam's."],
+  ["openInSidebar", "Open in sidebar (⌘⇧↵ or ⇧+click)", "On a highlighted Burrow row, drill row or drill panel row, Cmd+Shift+Enter (Ctrl+Shift+Enter off a Mac) or Shift+click opens that page or block in Roam's right sidebar. The block you are typing in keeps its text and the picker stays open."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],
   ["aliasDelete", "Delete aliases from the chips (writes to your graph)", "Alt+Backspace on the selected alias chip asks to confirm; Enter removes only that alias from the page's alias block, Esc keeps it. Off by default."],

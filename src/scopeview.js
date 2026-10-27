@@ -2,7 +2,7 @@
 // a scope is open (the popover itself is only made invisible). Rows are
 // rebuilt when the level, query or row list changes; moving the highlight
 // touches classes only.
-import { hintsKey, keyLabel, renderHints as paintHints } from "./hints.js";
+import { hintsKey, keyLabel, renderHints as paintHints, variantHints } from "./hints.js";
 import { renderParts } from "./rich.js";
 import { checkbox } from "./tasks.js";
 
@@ -140,7 +140,8 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
 
   let hintsShown = null;
   let hintItems = [];
-  function renderHints(scope, on, help) {
+  // variants: { insertVariants, openInSidebar } (src/hints.js variantHints).
+  function renderHints(scope, on, help, variants = {}) {
     hintsLine.hidden = !on;
     helpButton.hidden = !help;
     if (!on) return;
@@ -155,6 +156,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
       ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
       [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
     );
+    if (active?.more == null && !(active?.empty && active.drillable)) items.push(...variantHints({ kind: "scope", page: !active && level.isPage }, variants));
     const key = hintsKey(items);
     if (key === hintsShown) return;
     hintsShown = key;
@@ -163,7 +165,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
   }
 
   // scroll: bring the active row into view (keys); a hover never scrolls.
-  function paintActive(scope, hintsOn, helpOn = false, scroll = true) {
+  function paintActive(scope, hintsOn, helpOn = false, scroll = true, variants = {}) {
     const level = scope.levels[scope.levels.length - 1];
     list.querySelectorAll(".burrow-row").forEach((item, i) => {
       const on = i === level.active;
@@ -171,7 +173,7 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
       item.setAttribute("aria-selected", String(on));
       if (on && scroll) item.scrollIntoView?.({ block: "nearest" });
     });
-    renderHints(scope, hintsOn, helpOn);
+    renderHints(scope, hintsOn, helpOn, variants);
   }
 
   // anchor: the rect the panel takes over; below: the popover opens under the
@@ -191,11 +193,11 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
 
   return {
     node,
-    show(scope, hintsOn, helpOn = false) {
+    show(scope, hintsOn, helpOn = false, variants = {}) {
       renderCrumb(scope);
       renderList(scope);
       node.hidden = false;
-      paintActive(scope, hintsOn, helpOn);
+      paintActive(scope, hintsOn, helpOn, true, variants);
     },
     get hintItems() { return hintItems; },
     paintActive,
