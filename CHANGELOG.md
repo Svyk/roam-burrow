@@ -6,6 +6,10 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [0.8.0] - 2026-10-27
 
+### Fixed
+
+- **A phrase in `((` cost 6 ms a key** (notes, `how to stay focused`, 0.7.0 too, with the band on or off). With fewer than three exact rows, the recall pass fuzzy-matched every referenced block that holds any query word, and `to` or `how` are in hundreds of them. A word that common now seeds recall candidates only when every word of the query is that common (more than 200 blocks); a block whose only exact word is such a word is no longer a recall row. notes, the Related typing: 1.3–1.5 ms p95 per key.
+
 ### Added
 
 - **Related rows from Roam's semantic search** (`semanticRows`, on; active only while `roamAlphaAPI.data.semanticSearchEnabled()` is true). After a 400 ms pause in `((` or `[[` on a query of two or more words and 8 or more characters, Burrow asks Roam's `data.async.semanticSearch` once (k = 10; `((` blocks only, `[[` pages and blocks) and shows up to three rows under a quiet `Related` label, below Roam's results and above the hint line. A chunk hit shows its first block; a block inserts `((uid))`, a page `[[Title]]`. Rows Burrow's strip shows, the block being edited and rows Roam's list shows are left out. Rows are drawn like Roam (`richRows`) from the block's start. Replies are cached per graph, token kind and query (50 entries, 5 minutes); one request is in flight at a time and a newer pause supersedes it; a reply for text that is no longer before the caret is dropped. Unavailable, failed or empty: no band; a failure stops further queries until the popup reopens, with one `console.debug` line. `((how to stay focused` in notes lists `One Hour Of No-Screen Deep Work` (`755V-VCRJ`).
@@ -13,7 +17,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 - **Keys**: ⌥R moves into the band (Roam binds nothing to Alt+R; without Burrow it types `®`), ↑/↓ move inside it, Esc or ⌥R go back to Roam's row and keep the popup. The hint line says `⌥R related` while the band has rows and `↵ insert · ↑↓ move · esc back` inside it; the key list has a Related group.
 - **Privacy**: the setting's description says that what you type after `((` or `[[` goes to the embedding provider set in Settings > Graph, in an encrypted graph too (svy is encrypted; Svy's decision: used there as well, and it stays the user's choice per graph). Roam keeps extension settings per graph, so the switch can be off in one graph and on in another.
 - Cost: a key only restarts the pause timer (and removes a stale band). Pulls of the hits and the band's draw run in idle slices; `related.request`, `related.pull` and `related.draw` are in `window.__BURROW_PERF`, and the performance readout shows the request p50 and draw p95.
-- Gates: `tools/related-gate.mjs` (acceptance in both graphs, dedupe, switch off, keys, a late band with the popover below and flipped, hidden-row Enter, byte-for-byte with the band on / off / unavailable, ⌥R free in Roam, a failing search, console noise); `perf-gate --related`; `tools/shots.mjs` scenarios 58–60. 36 new unit tests.
+- Gates: `perf-gate --related [--band off]` (the `--band off` arm types the same and is the control for the band's own cost). `tools/related-gate.mjs` (acceptance in both graphs, dedupe, switch off, keys, a late band with the popover below and flipped, hidden-row Enter, byte-for-byte with the band on / off / unavailable, ⌥R free in Roam, a failing search, console noise); `perf-gate --related`; `tools/shots.mjs` scenarios 58–60. 36 new unit tests.
 
 ## [0.7.0] - 2026-10-26
 
