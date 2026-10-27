@@ -10,6 +10,20 @@ import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// A Roam Grid table: each child of the table block is a row, and a row's cells are the row block
+// (cell 0) then its first-child chain. Keys are `t${r}c${c}` (small table) and `b${r}c${c}` (big table).
+const tableRows = (prefix, rows) => rows.map((cells, r) => {
+  const chain = (c) => ({ key: `${prefix}${r}c${c}`, string: cells[c], ...(c + 1 < cells.length ? { children: [chain(c + 1)] } : {}) });
+  return chain(0);
+});
+const SMALL_TABLE_ROWS = [
+  ["Item", "Qty", "Price", "Total", "Note", "Extra F", "Extra G"],
+  ["zebra flour", "2", "3.5", "=B2*C2", "**bold** note", "f1", "g1"],
+  ["zebra " + "long cell text ".repeat(4) + "end", " ", "1", "=B3*C3", "[[@{page}]]", "f2", "g2"],
+  ...[3, 4, 5, 6, 7].map((r) => ["a", "b", "c", "d", "e", "f", "g"].map((l) => `r${r} ${l}`)),
+];
+const BIG_TABLE_ROWS = Array.from({ length: 200 }, (_, n) => [`big row ${n}`, `big ${n} b`]);
+
 // A small heading tree for the drill gates, created on the fixture page:
 //   Alpha section (h2) > first child note, never grok for writing > grandchild one, third item
 //   Beta section (h2) > beta child
@@ -51,6 +65,9 @@ export const DRILL_TREE = [
     { key: "afterHollow", string: "after hollow" },
   ] },
   { key: "many", string: "Many section", children: Array.from({ length: 55 }, (_, i) => ({ key: `many${i + 1}`, string: `many ${String(i + 1).padStart(2, "0")}` })) },
+  // Native Roam Grid tables for the table preview (BRW-20): a 8x7 table and a 200-row one.
+  { key: "tables", string: "Tables section", children: [{ key: "tableSmall", string: "{{[[table]]}}", children: tableRows("t", SMALL_TABLE_ROWS) }] },
+  { key: "bigTables", string: "Big table section", children: [{ key: "tableBig", string: "{{[[table]]}}", children: tableRows("b", BIG_TABLE_ROWS) }] },
 ];
 
 export const RICH_KEYS = ["richCode", "richMarks", "richMacros", "richMedia", "richLong", "richHtml"];

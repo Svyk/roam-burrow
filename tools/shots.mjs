@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewTables"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -117,6 +117,9 @@ const SCENARIOS = [
   { id: "63-filter-is-todo", query: "((zebra task is:todo", keys: ["preview-closed"] },
   { id: "64-filter-quoted-phrase", query: "((zebra \"quilt pattern\"", keys: ["preview-closed"] },
   { id: "65-filter-real-data", query: `((${config.filtered}`, keys: ["preview-closed"] },
+  // BRW-20: the highlighted {{[[table]]}} block draws its first 6x5 cells in Burrow's drill preview.
+  { id: "66-table-preview", query: `[[${FIXTURE_PAGE} > tables section > `, keys: ["wait:600"], loose: true },
+  { id: "67-table-preview-big", query: `[[${FIXTURE_PAGE} > big table section > `, keys: ["wait:600"], loose: true },
 ];
 
 const c = await connect(title);
