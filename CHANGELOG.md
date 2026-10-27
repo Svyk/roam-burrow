@@ -14,7 +14,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 ### Changed
 
 - **Shared aliases, checked and tested.** When two pages carry the same alias, Burrow shows one row per page, never merged and never guessed, each with its own reference count and, on its chips, its own use count. That was already so (with `aliasInline` on and off); 0.9.0 adds the unit cases.
-- Cost: the chip order costs one more idle query in the build, next to the reference counts (`[:find ?u ?r ?s … includes? ?s "]([["]`, 56 ms async for 8 alias pages in notes, read-only), counted in `__BURROW_PERF` as `aliasUses`. An alias edit carries the counts over to the refreshed index; a keystroke reads a ready list: 0 queries, 0 pulls. Turning the switch on without counts read schedules a build.
+- Cost: the chip order costs one more idle query in the build, next to the reference counts (`[:find ?u ?r ?s … includes? ?s "]([["]`, 56 ms async for 8 alias pages in notes and 73–76 ms for 24 alias pages in svy, read-only; the existing count query returns only a number per page, so it cannot carry the alias text), counted in `__BURROW_PERF` as `aliasUses`. An alias edit carries the counts over to the refreshed index; a keystroke reads a ready list: 0 queries, 0 pulls. Turning the switch on without counts read schedules a build.
 - Live gates: chips in use order with `×N` tips on a scratch fixture page (notes has 8 alias pages, none with three aliases, and no `[alias]([[Page]])` links), `[[alias:` rows only, shared-alias fixture with two rows.
 
 ## [0.8.1] - 2026-10-27
