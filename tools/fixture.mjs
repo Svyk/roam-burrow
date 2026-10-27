@@ -91,8 +91,19 @@ async function cleanFromLedger(c, ledger) {
     if (ledger.sidebar && ledger.pageUid) {
       try { await api.ui.rightSidebar.removeWindow({ window: { type: "outline", "block-uid": ledger.pageUid } }); } catch { /* window already gone */ }
     }
+    // A block whose page was deleted under it (another run's cleanup) has no parent, and Roam's
+    // block.delete throws on it; it goes onto the fixture page first.
+    const parentless = (uid) => !api.q(`[:find ?p . :where [?e :block/uid "${uid}"] [?p :block/children ?e]]`);
+    const homeUid = () => api.q(`[:find ?u . :where [?p :node/title ${JSON.stringify(prefix)}] [?p :block/uid ?u]]`);
     for (const uid of [ledger.blockUid, ...(ledger.drillUids || [])].filter(Boolean)) {
-      if (exists(uid)) { await api.data.block.delete({ block: { uid } }); done.blocks += 1; }
+      if (!exists(uid)) continue;
+      if (parentless(uid)) {
+        let home = homeUid();
+        if (!home) { home = ledger.pageUid; await api.data.page.create({ page: { title: prefix, uid: home } }); ledger.createdPage = true; }
+        await api.data.block.move({ location: { "parent-uid": home, order: 0 }, block: { uid } });
+      }
+      await api.data.block.delete({ block: { uid } });
+      done.blocks += 1;
     }
     const pages = [[ledger.chipsUid, ledger.createdChips], [ledger.emptyUid, ledger.createdEmpty], [ledger.pageUid, ledger.createdPage]];
     for (const [uid, created] of pages) {

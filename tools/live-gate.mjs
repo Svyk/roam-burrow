@@ -239,7 +239,7 @@ async function state() {
         return null;
       })(),
       thumbAny: document.querySelectorAll(".burrow-thumb").length,
-      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.input || []).slice(window.__burrowKeyMark ?? -14).map((x) => Math.round(x * 100) / 100) },
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.input || []).slice(-40).map((x) => Math.round(x * 100) / 100) },
       thumbLog: window.__burrowThumbLog ?? null,
       urlNet: window.__burrowUrlNet ?? null,
       pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
@@ -616,7 +616,7 @@ async function runKeys(keys, snaps = []) {
         if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
         await sleep(100);
       }
-    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; window.__burrowKeyMark = window.__BURROW_PERF?.samples?.input?.length ?? 0; });
+    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; if (window.__BURROW_PERF?.samples) window.__BURROW_PERF.samples.input = []; });
     else if (k === "count-urls") {
       await c.evaluate(() => {
         if (window.__burrowUrlWrap) return;
@@ -644,7 +644,7 @@ async function runKeys(keys, snaps = []) {
           }
         };
         window.__burrowThumbWatch = new MutationObserver(record);
-        window.__burrowThumbWatch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-state", "src"] });
+        window.__burrowThumbWatch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-state", "src", "hidden"] });
       });
     } else if (k === "count-errors") {
       await c.evaluate(() => {
