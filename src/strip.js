@@ -656,8 +656,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return highlightRe;
   }
 
-  // A row's block as Roam draws it, cut around the match when long.
+  // A row's block as Roam draws it, cut around the match when long. A
+  // Related row matched by meaning, not by the typed words: it starts at the
+  // block's start (a semantic hit's typed words are often deep inside it).
   function richContent(row) {
+    if (row.kind === "related") return renderParts(doc, row.rich, (t) => highlight(t));
     return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
   }
 

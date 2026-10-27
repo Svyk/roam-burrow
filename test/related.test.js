@@ -41,6 +41,7 @@ const DB = {
   rich00002: "zebra target text",
   fixtureU1: "the block being edited, about Wakanda",
   nat1: "Already listed by Roam: Wakanda trailer",
+  long1: "**One Hour Of No-Screen Deep Work** Work for one hour on your calendar with a pen, paper and no screens, so you can stay focused",
 };
 const PAGES = { pg1: "Wakanda Forever", pg2: "Black Panther" };
 const ENTRIES = [["rich00002", "zebra target text", 1]];
@@ -336,4 +337,10 @@ test("the hint line names ⌥R while the band has rows, and the Related keys ins
   assert.equal(hints(), "↵ insert · ↑↓ move · esc back");
   h.key({ key: "Escape" });
   assert.match(hints(), /related/);
+}));
+
+test("a Related row starts at the block's start, not cut around the typed words", () => withRelated({ query: "((stay focused", hits: [block("long1")] }, async (h) => {
+  assert.ok(await until(h.shownBand), "the band arrives");
+  const text = h.bandRows()[0].querySelector(".burrow-text").textContent;
+  assert.ok(text.startsWith("One Hour Of No-Screen Deep Work"), text);
 }));

@@ -3990,6 +3990,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     return highlightRe;
   }
   function richContent(row) {
+    if (row.kind === "related") return renderParts(doc, row.rich, (t) => highlight(t));
     return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
   }
   function highlight(text, query = st.token?.query) {
