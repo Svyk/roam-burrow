@@ -4,16 +4,50 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-10-27
+## [0.10.0] - 2026-10-27
 
 ### Added
 
 - **Insert as embed or as a labelled link** (`insertVariants`, on). With a Burrow row, the drill row or a drill panel row highlighted, ⇧↵ inserts `{{[[embed]]: ((uid))}}` for a block or `{{[[embed]]: [[Page]]}}` for a page; ⌥↵ inserts `[label](((uid)))`, the label being what you typed (the `((` query, a drill-down's last step, the drill panel's filter) or, with nothing typed, the block's first 40 characters as a reader sees them; on an alias row (or a chip) ⌥↵ inserts `[alias]([[Page]])` whatever the Alias link format says. Same checks as Enter: with the text before the caret changed, nothing is written and the rows are ranked again.
 - **Open in the sidebar** (`openInSidebar`, on). ⌘⇧↵ (Ctrl+Shift+↵ off a Mac) or ⇧+click opens the highlighted page or block in Roam's right sidebar (`rightSidebar.addWindow`): the block keeps its text and caret, and the picker (or the drill panel) stays open. Roam takes a shift+mousedown as its block-range selection and ended the edit first, so on Burrow's rows the shifted pointer events now stop at the window, before Roam.
+- Recent rows (0.8.1) take the keys too: a recent page row embeds or opens its page. A ⇧↵ or ⌥↵ pick counts for Frequent first like Enter (the block, or the page of an alias, page or drill-to-page row); opening in the sidebar is not a pick.
 - On Roam's own rows these keys stay Roam's (⇧↵ its newline). Holding ⇧, ⌥ or ⌘ for 300 ms on a Burrow row or in the drill panel turns the hint line into `⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar` (the line was already full: in svy only its first three items fit), and any other key, the release or leaving the window puts it back, so typing a capital never flickers it. The tips say exactly what ⇧↵ and ⌥↵ would insert, and the key list's Pick group names all three; each goes with its switch.
 - Unit tests (`test/variants.test.js`): the keys, what each inserts, labels, the hint line and key list, and on jsdom the strip writing only the token, the sidebar call leaving text and caret, the switches off, a refused key, and Roam's row keeping the keys.
 - Live gates: each key on Burrow's block row, the alias row, the drill row and the drill panel, ⇧+click on a row and in the panel, Roam's row (⇧↵ still Roam's newline), the switches off, a refused ⇧↵ and ⌥↵; every case byte-for-byte against Roam alone. Where Burrow does not take ⌥↵ or ⌘⇧↵ (Roam's row, the off and gone arms), the gate records that the key got past Burrow and stops it there: in svy another extension acts on those keys (it moved the fixture block and rearranged the sidebar). The gates' off arm now turns the new switches off too; `--grep <regex>` runs a subset; a case whose arm errored no longer crashes the verdict.
 - Final gate run (2026-10-27, this build): `live-gate` svy dark PASS and notes light PASS, 164 byte-for-byte case runs each (on / off / gone / drilloff), text boxes 32 states, 1,179 boxes in svy and 1,169 in notes, none intersecting. Per key p95: svy `((` 3.0–3.2 ms, drill-down 1.7–1.9 ms; notes `((` 1.7–1.8 ms; input-to-paint p50 +2.4 ms in svy, +0.4 ms in notes, against Burrow absent; 0 queries per key. Unit suite: 243 tests. `tools/shots.mjs` scenarios 58–63.
+
+## [0.9.0] - 2026-10-27
+
+### Added
+
+- **Query filters** (`queryFilters`, on) in Burrow's `((` and `[[` rows (BRW-18; precedents RefX R5 filters, Omnisearch, Search+, Logseq's search in page):
+  - `"quoted words"` must stand together, whole words in order (`(("black panther"` leaves out `the black cat and the panther`); while the closing quote is not typed yet, the last word may be a prefix.
+  - `-word` (or `-"two words"`) leaves out blocks that have it.
+  - `in:here` keeps blocks on the page being edited; `in:Page Title` keeps that page's blocks, the title running to the next filter or the end (`((pcr in:PhD/Cronobacter & Spore Control in PIF`), matched like a drill title (case and separators ignored) or by an alias; `in:"Title"` ends at its quote.
+  - `ns:Systems/` keeps pages under that namespace (and the page `Systems` itself). `in:here` and `ns:` are one word (`ns:"Media Captures/"` for one with a space), so search words may follow them: `((in:here pcr`, `((ns:Systems/ grok`.
+  - `is:todo` and `is:done` keep blocks whose first task macro is a TODO or a DONE (Better Tasks' `{{[[DONE]]:((uid))}}` counts), read as Burrow draws checkboxes; `is:t` already means todo while you type.
+  - Several page filters add up (a block passes when any names its page); every other filter must hold.
+  - A word is a filter only with its colon (`in:`, `ns:`, `is:`), its quotes, or a leading `-` before a letter or quote: `in here`, `ant-man`, `a - b` and `-20` stay search text. `in:`, `ns:` and `is:` need their value right after the colon, so `what it is: foo` is text. Search words go before `in:Page Title`.
+  - Burrow never rewrites the token: Roam's own list searches the text as typed, and a Burrow pick replaces the whole token, filters included, with `((uid))` as before. A filter that matches nothing leaves no Burrow rows; Roam's list is untouched. `[[` rows are pages, so `is:` leaves none there, and `in:`/`ns:` keep the pages they name.
+  - Burrow's rows show the filters in force as one quiet plain-text line above them (`is:todo · -closed`, `in:here (October 27th, 2026)`), no pills. The key list has a Filters group while the switch is on.
+  - The pool is unchanged: Burrow's `((` rows are referenced blocks; filters narrow it, they do not read a page's other blocks.
+  - Off: every word is search text, as in 0.8.1.
+- Live gates: fixture cases for `is:todo`, `is:done`, `-word`, `"quilt pattern"` against `quilt pattern`, `in:`, `in:here`, `ns:`, a filter with no match, the switch off and two `[[` cases; svy `((watch is:todo` and `(("black panther"` against `((black panther` and notes `((pcr in:PhD/Cronobacter & Spore Control in PIF` on real data; Escape and Enter on a filtered query byte-for-byte against Burrow off and gone. `tools/shots.mjs` scenarios 63–65.
+- Gate run (2026-10-27, this build): svy 18 of 18 filter cases PASS, notes 9 of 9 PASS (including the byte-for-byte Escape and Enter cases in the on, off and gone arms). Per key p95 with three filters: svy `((ant man is:todo -wakanda in:MCU Watch Order` 2.0–2.1 ms (1.8–1.9 ms without filters), notes `(("pcr screen" -wgs in:PhD/Cronobacter & Spore Control in PIF` 1.6–1.7 ms; input-to-paint p95 delta at most +1.75 ms; 0 queries per key. After merging 0.8.1: svy 7/7 and notes 3/3 key cases PASS again, three-filter p95 svy 2.1–2.3 ms, notes 1.6–1.8 ms.
+
+## [0.8.1] - 2026-10-27
+
+### Added
+
+- **Recent rows** (`recentRows`, on; BRW-14). With up to two characters after `((` or `[[`, Burrow shows up to three rows: the blocks or pages you picked most recently, then the ones edited most recently (the last 14 days). Nothing is selected, so Enter does what Roam does; ↑ from Roam's first row moves onto them. A character narrows them to those with a word that starts with it. In `[[`, alias rows come first and recent pages fill what is left; a page Roam already lists is not shown twice. The block or page you are editing is never offered. Hover says `Recent pick` or `Edited recently`.
+- **Frequent first** (`frecency`, on). Every pick feeds a score that halves every two weeks. Among rows that match equally well and have as many references, the ones you pick more often and more lately come first, for any query and also for alias rows. Picks of Roam's own rows count too: Burrow reads back what Roam inserted. Kept in this browser only: uids, a score and a time (never block text), at most 500 per graph.
+- **Burrow: forget recent picks** in the command palette clears this graph's history. **Disable all features** also turns off the two new switches.
+
+### Changed
+
+- **Frequent first replaces Pick memory.** The exact-query rule is gone with its `pickMemory` switch; what you had picked under `burrow:picks:<graph>` is folded into the new store the first time 0.8.1 loads (each pick at its own time; the query text and alias are dropped) and the old key is removed.
+- Cost: the last-14-days query (about 185 ms in notes, 274 ms the first time; 105k blocks, 4,006 edits) runs only inside the quiet idle build, the first one included, never with a popup open; a keystroke does a few array operations on lists made at idle, 0 queries and 0 pulls.
+- Live gates: recent pick first and not selected with the same Enter in the off and gone arms, three picks flip two equal rows, forget clears; the pick-memory case is gone.
 
 ## [0.7.0] - 2026-10-26
 

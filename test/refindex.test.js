@@ -199,3 +199,34 @@ test("links inside a macro are not what the block links", () => {
   assert.equal(index.entries[0].linked, null);
   assert.deepEqual(index.entries[1].linked, ["Some Page"]);
 });
+
+test("frequent first breaks ties only after the band and the ref step", () => {
+  const rows = [
+    [uid(1), "Ant-Man notes", 3],
+    [uid(2), "Ant-Man notes", 3],
+    [uid(3), "Ant-Man notes", 9],
+    [uid(4), "Ant-Man was seen: notes", 3],
+  ];
+  const plan = searchPlan("ant man notes");
+  const plain = rankRefs(buildRefIndex(rows), plan);
+  assert.equal(plain[0].uid, uid(3));
+  const frequent = new Map([[uid(2), 4], [uid(1), 1], [uid(4), 99]]);
+  const ranked = rankRefs(buildRefIndex(rows), plan, { frequent });
+  assert.equal(ranked[0].uid, uid(3), "a frequent row never jumps a higher ref step");
+  assert.deepEqual(ranked.slice(1, 3).map((r) => r.uid), [uid(2), uid(1)], "equal rows: the more frequent first");
+  assert.equal(ranked[1].frequent, true);
+  assert.equal(ranked[0].frequent, false);
+  const lower = ranked.findIndex((r) => r.uid === uid(4));
+  assert.ok(lower === -1 || lower > 2, "nor a better match band");
+});
+
+test("current-page boost breaks ties only after refs and alias", () => {
+  const rows = [
+    [uid(1), "Ant-Man notes", 3, "Other"],
+    [uid(2), "Ant-Man notes", 3, "Here"],
+    [uid(3), "Ant-Man notes", 9, "Other"],
+  ];
+  const ranked = rankRefs(buildRefIndex(rows), searchPlan("ant man"), { currentPage: "Here" });
+  assert.deepEqual(ranked.map((r) => r.uid), [uid(3), uid(2), uid(1)]);
+  assert.equal(ranked[1].onPage, true);
+});

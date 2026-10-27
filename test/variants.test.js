@@ -202,3 +202,23 @@ test("holding ⌥ on a Burrow row shows the variants on the hint line; a key or 
   await new Promise((r) => setTimeout(r, 350));
   assert.equal(line(), plain);
 }));
+
+test("⌥↵ with query filters labels with the search words only", async () => {
+  doc.body.innerHTML = `<textarea class="rm-block-input" id="block-input-uuid-x-fixtureU1"></textarea>${POPOVER}`;
+  const ta = doc.querySelector("textarea");
+  ta.value = "((ant man is:todo))";
+  ta.focus();
+  ta.setSelectionRange(17, 17);
+  const indexes = { refs: buildRefIndex([["3XSu0IJ8f", "{{[[TODO]]}} Watch [[Ant-Man]]", 1, "MCU Watch Order"]]), aliases: null, titles: null, refreshIfStale() {} };
+  const api = { ui: { getFocusedBlock: () => ({ "block-uid": "fixtureU1" }) }, pull: () => null, q: () => [] };
+  const lifecycle = createLifecycle();
+  createStrip({ setting: (id) => DEFAULTS[id], indexes, perf: createPerf(), lifecycle, api, doc, win });
+  ta.dispatchEvent(new win.Event("input", { bubbles: true }));
+  await settle();
+  try {
+    ta.dispatchEvent(new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", altKey: true }));
+    assert.equal(ta.value, "[ant man](((3XSu0IJ8f)))");
+  } finally {
+    await lifecycle.dispose();
+  }
+});

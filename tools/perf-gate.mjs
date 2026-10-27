@@ -6,6 +6,7 @@
 // Per key: keydown timeStamp -> end of the next frame (a MessageChannel task
 // posted from requestAnimationFrame). Burrow's own handler time comes from
 // window.__BURROW_PERF. Datalog queries and pulls per key must be zero.
+// --filters types the three-filter query of the graph (by window title).
 // --drill types into a drill expression on the fixture's heading tree instead
 // (`[[Burrow/Fixtures#alpha > ` then the query), with the preview open; data
 // fetched by the drill (one pull per node it visits) is reported separately.
@@ -37,7 +38,15 @@ const drill = args.includes("--drill");
 // draw their own preview; Roam's choice is put back afterwards.
 const withPreview = args.includes("--preview");
 const cold = flag("--cold", null);
-const query = flag("--query", drill ? "never > grand" : "ant man");
+// --filters: three query filters on real data, rows still shown (BRW-18):
+// svy's ant man TODO on MCU Watch Order, notes' PCR screen on the PhD page.
+const FILTERED = {
+  svy: "ant man is:todo -wakanda in:MCU Watch Order",
+  notes: "\"pcr screen\" -wgs in:PhD/Cronobacter & Spore Control in PIF",
+};
+const filtered = args.includes("--filters") ? FILTERED[/^svy/i.test(title) ? "svy" : "notes"] : null;
+const query = flag("--query", filtered ?? (drill ? "never > grand" : "ant man"));
+// The (( opener and the first two characters of the query are the recent rows' keys (BRW-14).
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
@@ -56,7 +65,7 @@ async function setArm(arm) {
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
     for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "insertVariants", "openInSidebar"]) dev.values[f] = true;
+      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "insertVariants", "openInSidebar"]) dev.values[f] = true;
     dev.values.helpNudgeSeen = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";

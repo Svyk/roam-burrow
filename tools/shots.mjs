@@ -18,8 +18,8 @@ import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
 const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "insertVariants", "openInSidebar"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "insertVariants", "openInSidebar"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -107,16 +107,27 @@ const SCENARIOS = [
   { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
-  // 0.8.0: insert variants and the sidebar.
-  { id: "58-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "59-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "60-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
-  { id: "61-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
-  { id: "62-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
-  { id: "63-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
+  // 0.8.1 recent rows: a pick seeded first (uids only), nothing selected; ↑ moves onto them.
+  { id: "58-recent-empty-block", query: "((", keys: ["preview-closed"], seedPicks: true },
+  { id: "59-recent-moved-onto", query: "((", keys: ["preview-closed", "ArrowUp"], seedPicks: true },
+  { id: "60-recent-two-chars", query: "((ze", keys: ["preview-closed"], seedPicks: true },
+  { id: "61-recent-empty-page", query: "[[", keys: ["preview-closed"], seedPicks: true },
+  { id: "62-tip-recent-row", query: "((", keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"], seedPicks: true },
+  // 0.9.0: query filters. The filter line sits above the rows.
+  { id: "63-filter-is-todo", query: "((zebra task is:todo", keys: ["preview-closed"] },
+  { id: "64-filter-quoted-phrase", query: "((zebra \"quilt pattern\"", keys: ["preview-closed"] },
+  { id: "65-filter-real-data", query: `((${config.filtered}`, keys: ["preview-closed"] },
+  // 0.10.0: insert variants and the sidebar.
+  { id: "66-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "67-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "68-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "69-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
+  { id: "70-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
+  { id: "71-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
 ];
 
 const c = await connect(title);
+let fixture = null;
 
 async function setArm(arm) {
   const code = await readFile(codePath, "utf8");
@@ -289,6 +300,13 @@ let cleaning = null;
 const cleanup = () => (cleaning ||= (async () => {
   try {
     await placeNormal(c).catch(() => {});
+    await c.evaluate(() => {
+      for (const { key, value } of window.__burrowShotsPicks || []) {
+        if (value == null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      }
+      window.__burrowShotsPicks = null;
+    }).catch(() => {});
     await setArm("gone");
     await cleanupFixture(c);
   } catch (error) {
@@ -316,7 +334,7 @@ if (installed.error) { await cleanup(); throw new Error(installed.error); }
 try {
   await mkdir(outDir, { recursive: true });
   await setArm("gone");
-  await setupFixture(c, { drillTree: true });
+  fixture = await setupFixture(c, { drillTree: true });
   const loaded = await setArm("on");
   if (!loaded.refs) throw new Error("index not built");
   const stamp = `${label}-${theme || "default"}`;
@@ -327,6 +345,16 @@ try {
       values.helpNudgeSeen = true;
       Object.assign(values, settings || {});
     }, scenario.settings);
+    // The browser's own pick store is put back after the run (restorePicks).
+    if (scenario.seedPicks) {
+      await c.evaluate(({ uids, page }) => {
+        const f = window.__BURROW.frecency;
+        window.__burrowShotsPicks ??= [`burrow:frecency:${window.roamAlphaAPI.graph?.name ?? "graph"}`].map((key) => ({ key, value: localStorage.getItem(key) }));
+        f.clear();
+        for (const uid of uids) f.record("block", uid);
+        if (page) f.record("page", page);
+      }, { uids: [fixture.drill.pickB, fixture.drill.pickA], page: fixture.chipsUid });
+    }
     await snapshotTitles(c);
     let primed = await primeFixture(c, SEED);
     if (!primed.ok) { await sleep(800); primed = await primeFixture(c, SEED); }
