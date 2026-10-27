@@ -124,6 +124,12 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     console.error(`fixture ledger ${path}: cleaned ${done.blocks} block(s) and ${done.pages} page(s) a crashed run left`);
     await rm(path, { force: true });
   }
+  // A previous run's cleanup may still be deleting in the page: wait for it (and for its tree to go), up to 90 s.
+  await c.evaluate(async (title) => {
+    const api = window.roamAlphaAPI;
+    const tree = () => api.q(`[:find ?b . :where [?p :node/title ${JSON.stringify(title)}] [?p :block/children ?b] [?b :block/string "Alpha section"]]`);
+    for (let i = 0; i < 450 && (window.__burrowCleaning > 0 || tree()); i++) await new Promise((r) => setTimeout(r, 200));
+  }, FIXTURE_PAGE);
   // What exists now (read-only); the stale-tree check runs after the ledger cleanup.
   const found = await c.evaluate(({ title, drillTree }) => {
     const api = window.roamAlphaAPI;
@@ -328,6 +334,9 @@ async function cleanupFixtureInPage(c, { keep }) {
     const api = window.roamAlphaAPI;
     const g = window.__burrowFixture;
     if (!g) return null;
+    // The deletes below can outlive this process (svy applies them slowly): the next run's setup waits for them.
+    window.__burrowCleaning = (window.__burrowCleaning || 0) + 1;
+    try {
     g.guard.armed = false;
     window.removeEventListener("keydown", g.guard.onKeyDown, true);
     window.__burrowGuards = (window.__burrowGuards || []).filter((h) => h !== g.guard.onKeyDown);
@@ -357,8 +366,9 @@ async function cleanupFixtureInPage(c, { keep }) {
         await api.data.page.delete({ page: { uid: g.chipsUid } });
       }
     }
-    window.__burrowFixture = null;
+    if (window.__burrowFixture === g) window.__burrowFixture = null;
     return { blockExists: Boolean(exists) };
+    } finally { window.__burrowCleaning -= 1; }
   }, { keep });
 }
 
