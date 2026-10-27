@@ -428,6 +428,8 @@ Precedents: RefX R5 filters, Omnisearch (phrases, `-` exclusions, `path:`), Sear
 
 **Cost.** One regex decides that a query holds no filter; with filters, the parse is a single pass over the token and the tests run only on blocks that already matched (the prefilter cache is keyed on the plan's words, unchanged).
 
+**Gates (0.9.0).** svy: 18 `filters:` cases (fixture: `is:todo`, `is:done`, `-closed`, `"quilt pattern"` vs `quilt pattern`, `in:`, `in:here`, `ns:`, no-match `ns:` and `in:`, the switch off, two `[[` cases; real data: `((watch is:todo` only open TODOs, `(("black panther"` only rows where the words stand together, `((black panther`; Escape and Enter on `((zebra task is:todo` byte-for-byte in the on, off and gone arms) all PASS. notes: 9 cases including `((pcr in:PhD/Cronobacter & Spore Control in PIF` (every row on that page) PASS. `perf-gate --filters`: svy p95 2.0–2.1 ms per key, notes 1.6–1.7 ms (budget 4). Screenshots: `tools/shots.mjs` 58–60, both graphs, light and dark.
+
 ## Also noticed
 
 - `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
