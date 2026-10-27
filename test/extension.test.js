@@ -68,11 +68,11 @@ test("every feature has its own switch in the settings panel", () => {
   assert.equal(DEFAULTS.pickMemory, false);
 });
 
-test("0.7.0 defaults: writes and the hotkey are off, the help and block navigation switches on, the tip not yet seen", () => {
-  assert.equal(VERSION, "0.7.0");
+test("0.8.3 defaults: writes and the hotkey are off, the help, block navigation and preview image switches on, the tip not yet seen", () => {
+  assert.equal(VERSION, "0.8.3");
   assert.equal(DEFAULTS.refProse, true);
   assert.equal(DEFAULTS.richRows, true);
-  for (const id of ["rowPreview", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"]) assert.equal(DEFAULTS[id], true, id);
+  for (const id of ["rowPreview", "previewImages", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"]) assert.equal(DEFAULTS[id], true, id);
   for (const id of ["aliasCreate", "aliasDelete", "refSearchHotkey", "helpNudgeSeen"]) assert.equal(DEFAULTS[id], false, id);
   // The seen flag is stored, not shown as a switch.
   assert.equal(createSettingsPanel().settings.some((s) => s.id === "helpNudgeSeen"), false);

@@ -6,7 +6,7 @@ import { createRefSearch } from "./refsearch.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.7.0";
+export const VERSION = "0.8.3";
 
 let activeLifecycle = null;
 

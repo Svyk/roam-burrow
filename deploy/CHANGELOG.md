@@ -4,6 +4,13 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-27
+
+### Added
+
+- **Images in the preview** (`previewImages`, on). In Burrow's previews (the row preview over Roam's, the `[[` drill-down preview and the preview beside the Tab list), the highlighted block's first `![](url)` shows as a thumbnail under its line in a box reserved when the line is drawn (at most 240×160, `object-fit: contain`), with `+N` when the block has more images. It loads after the row has stayed highlighted for 150 ms, only for that row: a newer highlight cancels the wait, and a result that arrives after the highlight moved is not shown. A plain graph's image is an `<img loading="lazy">`; in an encrypted graph, or for a `.enc` URL, Roam's `file.get` decrypts it into an object URL. Up to 8 object URLs are kept, revoked on eviction, when the popup closes and on unload. A decrypted file over 5 MB, a failed download or a failed decode keeps the `image` label with the alt text, in the same box; nothing throws. No Roam component is mounted in the popup. Burrow's rows keep the `image` label.
+- Live gates: thumbnails in svy (encrypted) and notes, the box reserved before load and unmoved after, `+N`, a broken image's label, ↓ through 10 image blocks in the Tab list starting at most one download, no object URL left after the popup closes, the `[[` drill preview, the switch off; thumbnails in the text-box overlap pass. `tools/shots.mjs` scenarios 58–61.
+
 ## [0.7.0] - 2026-10-26
 
 ### Fixed

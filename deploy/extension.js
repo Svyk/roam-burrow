@@ -1,4 +1,4 @@
-/* Burrow v0.7.0 | MIT | generated; edit src/ */
+/* Burrow v0.8.3 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -5619,7 +5619,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.7.0";
+var VERSION = "0.8.3";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 function safeLocalStorage() {
