@@ -903,7 +903,7 @@ const usageTitle = (alias, uses) => (uses > 0 ? `${alias} ×${uses}` : alias);
 const ALIAS_USAGE_RUN_CASES = [
   {
     // Chips under the selected alias row, most used first; ties keep the alias block's order.
-    name: "alias usage: chips most used first", query: "[[zq used", keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
+    name: "alias usage: chips most used first", query: "[[zq used", mayCreatePage: true, keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
     check: ({ snaps: [a], string }) => {
       const chips = a?.chips || [];
       if (JSON.stringify(chips.map((chip) => chip.text)) !== JSON.stringify(USED_ORDER)) return `chips ${JSON.stringify(chips.map((chip) => chip.text))} != ${JSON.stringify(USED_ORDER)}`;
@@ -914,7 +914,7 @@ const ALIAS_USAGE_RUN_CASES = [
     },
   },
   {
-    name: "alias usage off: chips in the alias block's order", query: "[[zq used", settings: { aliasUsage: false }, keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
+    name: "alias usage off: chips in the alias block's order", query: "[[zq used", settings: { aliasUsage: false }, mayCreatePage: true, keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
     check: ({ snaps: [a], string }) => {
       const chips = a?.chips || [];
       if (JSON.stringify(chips.map((chip) => chip.text)) !== JSON.stringify(USED_ALIASES)) return `chips ${JSON.stringify(chips.map((chip) => chip.text))} != ${JSON.stringify(USED_ALIASES)}`;
