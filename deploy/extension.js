@@ -2900,7 +2900,10 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
     info.lastMs = ms;
     if (error) {
       trace({ ev: "related", step: "fail", query });
-      if (entry.gen !== generation) return;
+      if (entry.gen !== generation) {
+        servePending();
+        return;
+      }
       failed = true;
       pending = null;
       if (!logged) {
@@ -2912,21 +2915,23 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
     perf?.push("related.request", ms);
     store(entry.key, list);
     trace({ ev: "related", step: "reply", query, n: list.length, ms: Math.round(ms) });
-    if (pending && pending.gen === generation) {
-      const next = pending;
-      pending = null;
-      const hit = cached(next.key);
-      if (hit) {
-        trace({ ev: "related", step: "cache", query: next.token.query.trim(), n: hit.length });
-        onReply(next.token, hit);
-      } else void request(next);
-      return;
-    }
+    if (servePending()) return;
     if (entry.gen !== generation || latest !== entry) {
       trace({ ev: "related", step: "drop", query, why: entry.gen !== generation ? "closed" : "superseded" });
       return;
     }
     onReply(token, list);
+  }
+  function servePending() {
+    if (!pending || pending.gen !== generation) return false;
+    const next = pending;
+    pending = null;
+    const hit = cached(next.key);
+    if (hit) {
+      trace({ ev: "related", step: "cache", query: next.token.query.trim(), n: hit.length });
+      onReply(next.token, hit);
+    } else void request(next);
+    return true;
   }
   function reset() {
     cancel();

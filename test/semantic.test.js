@@ -240,3 +240,21 @@ test("a reply that outlives its popup is cached and never drawn", async () => {
   h.semantic.clear();
   assert.equal(h.semantic.cacheSize, 0);
 });
+
+test("a closed popup's request that fails still lets the new popup's queued query through", async () => {
+  const h = harness();
+  h.semantic.schedule(h.token("first popup query"));
+  h.tick(DEBOUNCE_MS);
+  h.semantic.reset();
+  h.semantic.schedule(h.token("second popup query"));
+  h.tick(DEBOUNCE_MS);
+  assert.equal(h.calls.length, 1, "queued behind the request in flight");
+  h.calls[0].reject(new Error("provider down"));
+  await h.flush();
+  assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].args["search-str"], "second popup query");
+  assert.equal(h.semantic.failed, false);
+  h.calls[1].resolve([chunk("c2")]);
+  await h.flush();
+  assert.deepEqual(h.replies.map((r) => r.query), ["second popup query"]);
+});

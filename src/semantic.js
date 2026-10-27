@@ -120,8 +120,9 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
     info.lastMs = ms;
     if (error) {
       trace({ ev: "related", step: "fail", query });
-      // A failure after the popup closed says nothing about the next one.
-      if (entry.gen !== generation) return;
+      // A failure after the popup closed says nothing about the next one:
+      // a query the new popup queued behind it is asked now.
+      if (entry.gen !== generation) { servePending(); return; }
       failed = true;
       pending = null;
       if (!logged) {
@@ -134,18 +135,22 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
     store(entry.key, list);
     trace({ ev: "related", step: "reply", query, n: list.length, ms: Math.round(ms) });
     // A newer pause is waiting: this reply is cached and not drawn.
-    if (pending && pending.gen === generation) {
-      const next = pending;
-      pending = null;
-      const hit = cached(next.key);
-      if (hit) { trace({ ev: "related", step: "cache", query: next.token.query.trim(), n: hit.length }); onReply(next.token, hit); } else void request(next);
-      return;
-    }
+    if (servePending()) return;
     if (entry.gen !== generation || latest !== entry) {
       trace({ ev: "related", step: "drop", query, why: entry.gen !== generation ? "closed" : "superseded" });
       return;
     }
     onReply(token, list);
+  }
+
+  // The query a newer pause queued behind the request that just settled.
+  function servePending() {
+    if (!pending || pending.gen !== generation) return false;
+    const next = pending;
+    pending = null;
+    const hit = cached(next.key);
+    if (hit) { trace({ ev: "related", step: "cache", query: next.token.query.trim(), n: hit.length }); onReply(next.token, hit); } else void request(next);
+    return true;
   }
 
   // The popup closed: forget the pause and the failure, and never draw a
