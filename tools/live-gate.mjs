@@ -29,6 +29,8 @@ const CONFIGS = {
     ref: { query: "((ant man", uid: "3XSu0IJ8f" },
     // Svy's case (2026-10-25): two 60-90 KB R code blocks were Burrow's rows for `((black pan`.
     accept: [{ query: "((black pan", uid: "cs1PFq5go" }],
+    // BRW-18 on real data: is:todo over the watch list, and a phrase that is a run of words.
+    filterAccept: { todo: "((watch is:todo", phrase: "((black panther", quoted: "((\"black panther\"" },
     alias: { query: "[[lorinatr", insert: "[lorinator]([[Lori Boyd]])" },
     listed: { query: "[[lorinator" },
     drill: { query: "[[MCU Watch Order > watch order > ant man", uid: "3XSu0IJ8f" },
@@ -40,6 +42,7 @@ const CONFIGS = {
   },
   notes: {
     ref: { query: "((real time pcr", uid: "6ZtlGN-Np" },
+    filterAccept: { page: "((pcr in:PhD/Cronobacter & Spore Control in PIF", pageTitle: "PhD/Cronobacter & Spore Control in PIF" },
     alias: { query: "[[holy gost", insert: "[Holy Ghost]([[Concepts/Holy Spirit]])" },
     listed: { query: "[[mike khi" },
     drill: { query: "[[Systems/Executor Lanes and LaunchAgents#grok lane > never", uid: "-EeRGLF5U" },
@@ -53,7 +56,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters"];
 const REF_COMMAND = "Burrow: block reference search";
 
 const [title, configName, ...flags] = process.argv.slice(2);
@@ -176,6 +179,14 @@ async function state() {
       firstUid: b?.state.rows?.[0]?.uid ?? null,
       activeUid: b && b.state.phase === "OWNED" ? b.state.rows?.[b.state.active]?.uid ?? null : null,
       context: document.querySelector(".burrow-strip:not([hidden]) .burrow-context")?.textContent ?? null,
+      filters: document.querySelector(".burrow-strip:not([hidden]) .burrow-filters")?.textContent ?? null,
+      uids: b?.state.rows?.map((r) => r.uid) ?? [],
+      rowFacts: (b?.state.rows ?? []).map((r) => {
+        const p = window.roamAlphaAPI.pull("[:block/string {:block/page [:node/title]}]", [":block/uid", r.uid]);
+        return { uid: r.uid, string: p?.[":block/string"] ?? null, page: p?.[":block/page"]?.[":node/title"] ?? null };
+      }),
+      stripHidden: (() => { const el = document.querySelector(".burrow-strip"); return !el || el.hidden || !shown(el); })(),
+      nativeRows: document.querySelectorAll(".rm-autocomplete__results-scroll > div").length,
       nativeActiveVisible: (() => {
         const row = [...document.querySelectorAll(".rm-autocomplete__results-scroll > div")].find((n) => n.style.backgroundColor);
         return row ? getComputedStyle(row).backgroundColor : null;
@@ -411,6 +422,14 @@ const DRILL_CASES = [
   { name: "drill: typed > 2 takes the numbered block", query: `[[${DRILL_PAGE} > steps > 2`, keys: ["Enter"], on: (d) => `${SEED}((${d.two}))`, line: true },
   // Burrow's preview shows 16 of the section's 55 children and says so.
   { name: "drill: preview caps children with +N more", query: `[[${DRILL_PAGE} > many`, keys: ["Enter"], on: (d) => `${SEED}((${d.many}))`, previewMore: "+39 more", line: true },
+];
+
+// Query filters (0.9.0): Escape leaves the text alone, Enter on a filtered
+// row replaces the whole token, filters included. Not in the drilloff arm.
+const FILTER_Q = "((zebra task is:todo";
+const FILTER_CASES = [
+  { name: "filters: Escape on a filtered (( query", query: FILTER_Q, keys: ["Escape"] },
+  { name: "filters: Enter inserts the filtered row, the whole token replaced", query: FILTER_Q, keys: ["Enter"], on: (d) => `${SEED}((${d.taskTodo}))` },
 ];
 
 // After typing the query: wait until Roam's popup is up and, with Burrow on,
@@ -964,6 +983,132 @@ const BLOCK_CASES = [
       return missing.length ? `preview target lacks ${missing.join(", ")}: ${JSON.stringify(a?.preview)}` : null;
     },
   },
+  // 0.9.0: query filters (BRW-18), on the fixture's zebra blocks.
+  ...(() => {
+    const uidsOf = (a) => JSON.stringify(a?.uids);
+    const noRowsCheck = ({ snaps: [a] }) => {
+      if (a?.uids.length || !a?.stripHidden) return `Burrow rows ${uidsOf(a)} strip hidden ${a?.stripHidden}: ${JSON.stringify(a?.rows)}`;
+      return a.popup ? null : "Roam's popup closed";
+    };
+    return [
+      {
+        name: "filters: is:todo lists only the open task", query: "((zebra task is:todo", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (JSON.stringify(a?.uids) !== JSON.stringify([fx.drill.taskTodo])) return `rows ${uidsOf(a)} != [${fx.drill.taskTodo}]`;
+          if (a.filters !== "is:todo") return `filters line ${JSON.stringify(a.filters)}`;
+          return a.rows.some((row) => row.checks.some((x) => x.startsWith("done:"))) ? `a done checkbox ${JSON.stringify(a.rows)}` : null;
+        },
+      },
+      {
+        name: "filters: is:done lists only the closed task", query: "((zebra task is:done", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (JSON.stringify(a?.uids) !== JSON.stringify([fx.drill.taskDone])) return `rows ${uidsOf(a)} != [${fx.drill.taskDone}]`;
+          return a.filters === "is:done" ? null : `filters line ${JSON.stringify(a.filters)}`;
+        },
+      },
+      {
+        name: "filters: -closed drops the block with that word", query: "((zebra task -closed", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (!a?.uids.includes(fx.drill.taskTodo)) return `open task missing ${uidsOf(a)}`;
+          if (a.uids.includes(fx.drill.taskDone)) return `closed task still listed ${uidsOf(a)}`;
+          return a.filters === "-closed" ? null : `filters line ${JSON.stringify(a.filters)}`;
+        },
+      },
+      {
+        name: "filters: quilt pattern lists both, \"quilt pattern\" only the run", query: "((zebra quilt pattern", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (!a?.uids.includes(fx.drill.quiltRun) || !a.uids.includes(fx.drill.quiltScatter)) return `unquoted rows ${uidsOf(a)} lack the run or the scattered block`;
+          return a.filters === null ? null : `filters line without a filter ${JSON.stringify(a.filters)}`;
+        },
+      },
+      {
+        name: "filters: \"quilt pattern\" vs quilt pattern", query: "((zebra \"quilt pattern\"", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (JSON.stringify(a?.uids) !== JSON.stringify([fx.drill.quiltRun])) return `quoted rows ${uidsOf(a)} != [${fx.drill.quiltRun}] (the run only)`;
+          return a.filters === "\"quilt pattern\"" ? null : `filters line ${JSON.stringify(a.filters)}`;
+        },
+      },
+      {
+        name: `filters: in:${FIXTURE_PAGE} keeps blocks of that page`, query: `((zebra task in:${FIXTURE_PAGE}`, keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (!a?.uids.length) return `no rows ${JSON.stringify(a?.rows)}`;
+          const off = a.rowFacts.filter((r) => r.page !== FIXTURE_PAGE);
+          return off.length ? `rows on other pages ${JSON.stringify(off)}` : null;
+        },
+      },
+      {
+        name: "filters: in:here keeps blocks of the page being edited", query: "((zebra task in:here", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (!a?.uids.length) return `no rows ${JSON.stringify(a?.rows)} filters ${JSON.stringify(a?.filters)}`;
+          const off = a.rowFacts.filter((r) => r.page !== FIXTURE_PAGE);
+          if (off.length) return `rows on other pages ${JSON.stringify(off)} filters ${JSON.stringify(a.filters)}`;
+          if (!a.filters?.startsWith("in:here")) return `filters line ${JSON.stringify(a.filters)}`;
+          return /\(.+\)/.test(a.filters) ? null : `in:here label shows no page: ${JSON.stringify(a.filters)}`;
+        },
+      },
+      {
+        name: "filters: ns:Burrow/ keeps the namespace", query: "((zebra task ns:Burrow/", keys: ["snap", "Escape"],
+        check: ({ snaps: [a] }) => {
+          if (!a?.uids.length) return `no rows ${JSON.stringify(a?.rows)}`;
+          const off = a.rowFacts.filter((r) => !String(r.page).startsWith("Burrow/"));
+          return off.length ? `rows outside Burrow/ ${JSON.stringify(off)}` : null;
+        },
+      },
+      {
+        name: "filters: ns: of a namespace with no page leaves no Burrow rows", query: "((zebra task ns:Nope Burrow Gate/", keys: ["snap", "Escape"], noRows: true,
+        check: noRowsCheck,
+      },
+      {
+        name: "filters: in: of a page that does not exist leaves no Burrow rows", query: "((zebra task in:Nowhere Burrow Gate", keys: ["snap", "Escape"], noRows: true,
+        check: noRowsCheck,
+      },
+      {
+        name: "filters: queryFilters off, is:todo is search text and no filter line", query: "((zebra task is:todo", settings: { queryFilters: false }, keys: ["snap", "Escape"], noRows: true,
+        check: ({ snaps: [a] }) => (a?.filters === null ? null : `filter line with queryFilters off ${JSON.stringify(a.filters)}`),
+      },
+      {
+        name: "filters: [[ ns: of a namespace with no page leaves no Burrow alias rows", query: "[[zq chip alpha ns:Nope Burrow Gate/", keys: ["snap", "Escape"], mayCreatePage: true, noRows: true,
+        check: ({ snaps: [a] }) => (a?.rows.length || !a?.stripHidden ? `Burrow rows ${JSON.stringify(a?.rows)}` : null),
+      },
+      {
+        name: `filters: [[ in:${FIXTURE_PAGE} Chips keeps the chips page's alias row`, query: `[[zq chip alpha in:${FIXTURE_PAGE} Chips`, keys: ["snap", "Escape"], mayCreatePage: true,
+        check: ({ snaps: [a] }) => {
+          if (!a?.rows.some((row) => row.text.includes("zq chip alpha"))) return `no alias row for the chips page ${JSON.stringify(a?.rows)}`;
+          return a.filters?.startsWith(`in:${FIXTURE_PAGE}`) ? null : `filters line ${JSON.stringify(a.filters)}`;
+        },
+      },
+    ];
+  })(),
+  // Real data (BRW-18): only the page-scoped, task and phrase filters, read from the graph itself.
+  ...(config.filterAccept?.page ? [{
+    name: `filters: ${config.filterAccept.page}`, query: config.filterAccept.page, keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      if (!a?.uids.length) return `no rows ${JSON.stringify(a?.rows)} filters ${JSON.stringify(a?.filters)}`;
+      const off = a.rowFacts.filter((r) => r.page !== config.filterAccept.pageTitle);
+      return off.length ? `rows on other pages ${JSON.stringify(off)}` : null;
+    },
+  }] : []),
+  ...(config.filterAccept?.todo ? [{
+    name: `filters: ${config.filterAccept.todo}`, query: config.filterAccept.todo, keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      if (!a?.uids.length) return `no rows ${JSON.stringify(a?.rows)} filters ${JSON.stringify(a?.filters)}`;
+      const firstMacro = (string) => /\{\{(?:\[\[)?(TODO|DONE)(?:\]\])?[:}]/.exec(string ?? "")?.[1] ?? null;
+      const bad = a.rowFacts.filter((r) => firstMacro(r.string) !== "TODO");
+      return bad.length ? `rows whose first task macro is not TODO ${JSON.stringify(bad)}` : null;
+    },
+  }, {
+    name: `filters: ${config.filterAccept.quoted} vs ${config.filterAccept.phrase.slice(2)}`, query: config.filterAccept.quoted, keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const strings = (a?.rowFacts || []).map((r) => r.string);
+      const lines = `quoted rows ${JSON.stringify(strings)}`;
+      if (!a?.uids.length) return `no rows; ${lines}`;
+      const bad = strings.filter((x) => !/black[^\p{L}\p{N}]+panther/iu.test(x ?? ""));
+      return bad.length ? `rows without the run "black panther": ${JSON.stringify(bad)}; ${lines}` : null;
+    },
+  }, {
+    name: `filters: ${config.filterAccept.phrase} (unquoted, rows reported)`, query: config.filterAccept.phrase, keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.uids.length ? null : `no rows for the unquoted words; filters ${JSON.stringify(a?.filters)}`),
+  }] : []),
   ...(config.accept || []).map(({ query, uid }) => ({
     // Real data, no fixture: the original block leads and no code block outranks it.
     name: `acceptance: ${query} → ((${uid})) first and pre-selected, no code rows`, query,
@@ -1886,7 +2031,7 @@ async function runAbove() {
 const report = { window: c.page.title, config: configName, theme, themeSet, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
 const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
-const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE];
+const BYTE_CASES = [...CASES, ...DRILL_CASES, ...FILTER_CASES, ...PASS_CASES, RECENT_CASE];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
 const PICKS = "recent and frequent picks: pick then empty ((, 3 picks reorder, forget";
 const TEXT = "text boxes: no text overlaps another in any picker state";
@@ -2073,7 +2218,7 @@ try {
   } else {
   for (const arm of arms) {
     report.arms[arm] = {};
-    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE] : [...cases, ...DRILL_CASES]) {
+    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...FILTER_CASES, ...PASS_CASES, RECENT_CASE] : [...cases, ...DRILL_CASES]) {
       // Unload and break both damage the runtime: reload the module per case.
       const loaded = await setArm(arm);
       if (arm !== "gone" && !loaded.refs) throw new Error(`arm ${arm}: index not built`);

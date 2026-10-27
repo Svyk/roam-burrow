@@ -86,3 +86,48 @@ test("a long block whose match is far in shows … and the matched word", () => 
   assert.ok(text.textContent.startsWith("…"));
   assert.equal(text.querySelector(".rm-search-match").textContent, "quokka");
 }));
+
+const TASKS = [
+  ["task00001", "{{[[TODO]]}} watch the zebra crossing", 1],
+  ["task00002", "{{[[DONE]]}} watch the zebra herd", 1],
+  ["task00003", "watch the zebra stripes", 1],
+];
+
+async function withTasks(query, overrides, fn) {
+  doc.body.innerHTML = `<textarea class="rm-block-input" id="block-input-uuid-x-fixtureU1"></textarea>${POPOVER}`;
+  const ta = doc.querySelector("textarea");
+  ta.value = query;
+  ta.focus();
+  ta.setSelectionRange(query.length, query.length);
+  const indexes = { refs: buildRefIndex(TASKS), aliases: null, titles: null, refreshIfStale() {} };
+  const api = { ui: { getFocusedBlock: () => ({ "block-uid": "fixtureU1" }) }, pull: () => null, q: () => [] };
+  const lifecycle = createLifecycle();
+  createStrip({ setting: (id) => (id in overrides ? overrides[id] : DEFAULTS[id]), indexes, perf: createPerf(), lifecycle, api, doc, win });
+  ta.dispatchEvent(new win.Event("input", { bubbles: true }));
+  await settle();
+  try { await fn(); } finally { await lifecycle.dispose(); }
+}
+
+test("(( with is:todo: only the open task, one label line reading is:todo, not a row", () => withTasks("((watch is:todo", {}, async () => {
+  const rows = doc.querySelectorAll(".burrow-strip .burrow-row");
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].textContent.includes("zebra crossing"));
+  const label = strip().querySelector(".burrow-filters");
+  assert.equal(label.textContent, "is:todo");
+  assert.equal(strip().firstChild, label);
+  assert.equal(label.title, "Query filters: is:todo");
+  assert.equal(label.classList.contains("burrow-row"), false);
+  assert.equal(strip().querySelector(".rm-search-match + .rm-search-match, .burrow-row .rm-search-match")?.textContent.toLowerCase(), "watch", "the filter value is not highlighted");
+}));
+
+test("with queryFilters off, is:todo is plain search text and no label line is drawn", () => withTasks("((watch is:todo", { queryFilters: false }, async () => {
+  assert.equal(doc.querySelectorAll(".burrow-strip .burrow-row").length, 0, "no block contains the words is:todo");
+  assert.equal(strip().querySelector(".burrow-filters"), null);
+}));
+
+test("(( with a -word and a phrase leave out and require, and the label lists both", () => withTasks('((watch "zebra stripes" -herd', {}, async () => {
+  const rows = doc.querySelectorAll(".burrow-strip .burrow-row");
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].textContent.includes("zebra stripes"));
+  assert.equal(strip().querySelector(".burrow-filters").textContent, '"zebra stripes" · -herd');
+}));

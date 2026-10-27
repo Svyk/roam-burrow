@@ -18,8 +18,8 @@ import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
 const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -113,6 +113,10 @@ const SCENARIOS = [
   { id: "60-recent-two-chars", query: "((ze", keys: ["preview-closed"], seedPicks: true },
   { id: "61-recent-empty-page", query: "[[", keys: ["preview-closed"], seedPicks: true },
   { id: "62-tip-recent-row", query: "((", keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"], seedPicks: true },
+  // 0.9.0: query filters. The filter line sits above the rows.
+  { id: "63-filter-is-todo", query: "((zebra task is:todo", keys: ["preview-closed"] },
+  { id: "64-filter-quoted-phrase", query: "((zebra \"quilt pattern\"", keys: ["preview-closed"] },
+  { id: "65-filter-real-data", query: `((${config.filtered}`, keys: ["preview-closed"] },
 ];
 
 const c = await connect(title);
