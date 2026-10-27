@@ -21,8 +21,13 @@
 // --cold "[[plexus": first draws only. Opens that popup --runs x 4 times with
 // Roam's preview open (each popup starts with nothing read), selects the alias
 // row and times every slice of its preview draw and the time until it shows.
+// --related: the Related band (Roam's semantic search). Each cycle types the query
+// (default "how to stay focused"), pauses 1.6 s so the request, the reply, the pulls
+// and the draw happen, then Backspaces it away key by key. The pauses are not keys.
+// Also reported: related.request p50/p95, related.pull and related.draw p95/max, and
+// how many bands were drawn; related.pull and related.draw max are held to 3 ms.
 // An installed Burrow is parked for the run and put back afterwards.
-//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--preview] [--cold "[[plexus"] [--theme light|dark] [--json]
+//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--preview] [--related] [--cold "[[plexus"] [--theme light|dark] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
@@ -37,7 +42,8 @@ const drill = args.includes("--drill");
 // draw their own preview; Roam's choice is put back afterwards.
 const withPreview = args.includes("--preview");
 const cold = flag("--cold", null);
-const query = flag("--query", drill ? "never > grand" : "ant man");
+const related = args.includes("--related");
+const query = flag("--query", drill ? "never > grand" : related ? "how to stay focused" : "ant man");
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
@@ -56,7 +62,7 @@ async function setArm(arm) {
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
     for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows"]) dev.values[f] = true;
+      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "semanticRows"]) dev.values[f] = true;
     dev.values.helpNudgeSeen = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
@@ -120,6 +126,9 @@ async function endRun() {
       builds: perf ? perf.counters.builds : null,
       // Burrow's deferred (idle) preview draw: one sample per idle slice.
       preview: perf?.summary ? perf.summary("preview") : null,
+      relatedRequest: perf?.summary ? perf.summary("related.request") : null,
+      relatedPull: perf?.summary ? perf.summary("related.pull") : null,
+      relatedDraw: perf?.summary ? perf.summary("related.draw") : null,
       previewKinds: perf?.summary ? Object.fromEntries(["read", "draw", "rest", "scroll"].map((k) => [k, perf.summary(`preview.${k}`)])) : null,
       // The context line's idle read (page, parent, child count) per block highlighted.
       context: perf?.summary ? perf.summary("context") : null,
@@ -313,7 +322,8 @@ try {
       }
       for (let i = 0; i < cycles; i++) {
         await c.type(query, 60);
-        await sleep(120);
+        // --related: long enough for the 400 ms pause, the request, the reply, the pulls and the draw.
+        await sleep(related ? 1600 : 120);
         for (let j = 0; j < query.length; j++) { await c.key("Backspace"); await sleep(60); }
       }
       // The preview is checked before the last Backspaces close it.
@@ -359,6 +369,10 @@ try {
         aliasRefreshMax: pct([...(r.aliasRefresh?.read || []), ...(r.aliasRefresh?.swap || []), ...(r.aliasRefresh?.rekey || [])], 1),
         queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
         quietRebuild: r.quiet ?? null,
+        relatedRequestP50: r.relatedRequest?.n ? r.relatedRequest.p50 : null, relatedRequestP95: r.relatedRequest?.n ? r.relatedRequest.p95 : null,
+        relatedPullP95: r.relatedPull?.n ? r.relatedPull.p95 : null, relatedPullMax: r.relatedPull?.n ? r.relatedPull.max : null,
+        relatedDrawP95: r.relatedDraw?.n ? r.relatedDraw.p95 : null, relatedDrawMax: r.relatedDraw?.n ? r.relatedDraw.max : null,
+        bandsDrawn: r.relatedDraw?.n ?? 0, requests: r.relatedRequest?.n ?? 0,
         pagesDeleted: r.pages?.deleted,
       });
     }
@@ -394,6 +408,14 @@ report.summary = {
   contextMax: by("on", "contextMax"),
   contextSamples: by("on", "contextSamples"),
   quietRebuild: by("on", "quietRebuild"),
+  relatedRequestP50: by("on", "relatedRequestP50"),
+  relatedRequestP95: by("on", "relatedRequestP95"),
+  relatedPullP95: by("on", "relatedPullP95"),
+  relatedPullMax: by("on", "relatedPullMax"),
+  relatedDrawP95: by("on", "relatedDrawP95"),
+  relatedDrawMax: by("on", "relatedDrawMax"),
+  bandsDrawn: by("on", "bandsDrawn"),
+  requests: by("on", "requests"),
 };
 // Budget (spec §6): Burrow JS <= 4 ms p95 per input, input-to-paint p95
 // within +5 ms of Burrow absent, 0 queries per key. Each run pairs its two
@@ -426,20 +448,27 @@ const verdict = {
   rebuildsWhileTyping: Math.max(0, ...report.summary.rebuildsWhileTyping),
   // The context line's idle reads: the same 4 ms budget.
   contextP95Max: Math.max(0, ...report.summary.contextP95.filter((v) => v != null)),
+  // The Related band's idle pulls and draw: a slice never takes more than 3 ms.
+  relatedPullMax: Math.max(0, ...report.summary.relatedPullMax.filter((v) => v != null)),
+  relatedDrawMax: Math.max(0, ...report.summary.relatedDrawMax.filter((v) => v != null)),
+  bandsDrawn: report.summary.bandsDrawn,
 };
 // A run that recorded no keys (or no Burrow samples with Burrow on) measured
 // nothing, so it can never count as a pass.
 verdict.emptyRuns = report.results.filter((r) => !r.keys || (r.arm === "on" && !r.burrowSamples)).length
-  + Math.max(0, runs * 2 - report.results.length);
+  + Math.max(0, runs * 2 - report.results.length)
+  // --related: a run in which no band was drawn did not measure the band.
+  + (related ? report.results.filter((r) => r.arm === "on" && !r.bandsDrawn).length : 0);
 verdict.pass = !report.error && verdict.emptyRuns === 0 && verdict.burrowP95Max <= 4 && verdict.paintP95Delta <= 5 && verdict.queries === 0 && verdict.strayKeys === 0
   && verdict.rebuildsWhileTyping === 0 && verdict.contextP95Max <= 4
   && verdict.aliasRefreshP95Max <= 4
-  && (!withPreview || (verdict.previewP95Max != null && verdict.previewP95Max <= 4));
+  && (!withPreview || (verdict.previewP95Max != null && verdict.previewP95Max <= 4))
+  && (!related || (verdict.relatedPullMax <= 3 && verdict.relatedDrawMax <= 3));
 report.verdict = verdict;
 if (args.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else {
-  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
+  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${related ? " (related)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
   if (withPreview) console.log(`  preview slices by kind: ${report.results.filter((r) => r.arm === "on").map((r) => Object.entries(r.previewKinds || {}).map(([k, v]) => `${k} ${v}`).join(", ")).join(" / ")}`);
@@ -452,6 +481,16 @@ if (args.includes("--json")) {
   console.log(`  queries per key: ${verdict.queries}; stray keys: ${verdict.strayKeys}${verdict.emptyRuns ? `; runs that measured nothing: ${verdict.emptyRuns}` : ""}`);
   console.log(`  due index rebuild: ${report.summary.rebuildsWhileTyping.join(" / ")} while typing (must be 0); ran ${report.summary.quietRebuild.map((q) => (q?.built ? `${(q.after / 1000).toFixed(1)} s after the popup closed (long task ${q.longest} ms)` : "not yet")).join(" / ")}`);
   console.log(`  ${notRestored ? `installed Burrow ${report.installed.version} not restored` : report.installed.parked ? `installed Burrow: parked ${report.installed.version} for the run, restored` : "installed Burrow: none in this window"}`);
+  if (related) {
+    const f = (list) => list.map((v) => v ?? "none").join(" / ");
+    console.log(`  related: bands drawn ${f(report.summary.bandsDrawn)} per run (${f(report.summary.requests)} requests); request p50 ${f(report.summary.relatedRequestP50)} ms, p95 ${f(report.summary.relatedRequestP95)} ms`);
+    console.log(`  related pulls p95 ${f(report.summary.relatedPullP95)} ms, max ${f(report.summary.relatedPullMax)} ms; draw p95 ${f(report.summary.relatedDrawP95)} ms, max ${f(report.summary.relatedDrawMax)} ms (max budget <= 3); per-key p95 above (budget <= 4)`);
+    if (!verdict.pass) {
+      if (verdict.relatedPullMax > 3) console.log(`  FAIL related.pull max ${verdict.relatedPullMax} ms > 3`);
+      if (verdict.relatedDrawMax > 3) console.log(`  FAIL related.draw max ${verdict.relatedDrawMax} ms > 3`);
+      if (report.results.some((r) => r.arm === "on" && !r.bandsDrawn)) console.log("  FAIL a run drew no band (no semantic search in this graph, or the query is not eligible)");
+    }
+  }
   if (drill) {
     const on = report.results.filter((r) => r.arm === "on");
     console.log(`  drill: ${on.map((r) => r.keys).join(" / ")} keys per run, data fetches ${on.map((r) => r.drillFetches).join(" / ")} per run, preview open at the end: ${on.every((r) => r.previewAtEnd)}`);

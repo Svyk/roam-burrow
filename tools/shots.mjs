@@ -18,8 +18,8 @@ import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", related: "marvel movies in order" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", related: "how to stay focused" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
 const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "semanticRows"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -107,6 +107,10 @@ const SCENARIOS = [
   { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
+  // 0.8.0: the Related band (Roam's semantic search); waitband waits for it, up to 8 s.
+  { id: "58-related", query: `((${config.related}`, keys: ["preview-closed", "waitband"], loose: true },
+  { id: "59-related-active", query: `((${config.related}`, keys: ["preview-closed", "waitband", "alt+r", "ArrowDown"], loose: true },
+  { id: "60-related-page", query: "[[how to stay focused", keys: ["preview-closed", "waitband"], loose: true },
 ];
 
 const c = await connect(title);
@@ -153,6 +157,23 @@ const altSlash = async () => {
   await c.call("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "÷", unmodifiedText: "÷" });
   await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 };
+
+// ⌥R as a mac sends it: key "r" (code KeyR), typed text "®".
+const altR = async () => {
+  const base = { key: "r", code: "KeyR", windowsVirtualKeyCode: 82, nativeVirtualKeyCode: 82, modifiers: 1 };
+  await c.call("Input.dispatchKeyEvent", { type: "keyDown", ...base, text: "®", unmodifiedText: "®" });
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+};
+
+// The Related band has rows, or 8 s have passed.
+async function waitBand() {
+  for (let t0 = Date.now(); Date.now() - t0 < 8000;) {
+    if (await c.evaluate(() => document.querySelectorAll(".burrow-related:not([hidden]) .burrow-row").length)) { await sleep(250); return true; }
+    await sleep(60);
+  }
+  console.error("waitband: no Related band after 8 s");
+  return false;
+}
 
 const ctrlO = async () => {
   const base = { key: "o", code: "KeyO", windowsVirtualKeyCode: 79, nativeVirtualKeyCode: 79, modifiers: 2 };
@@ -211,6 +232,8 @@ async function runKeys(keys) {
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
     else if (k === "preview-closed") { if (await isExpanded()) await ctrlO(); }
     else if (k === "alt+slash") await altSlash();
+    else if (k === "alt+r") await altR();
+    else if (k === "waitband") await waitBand();
     else if (k === "down-past-strip") {
       const rows = await c.evaluate(() => document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row").length);
       for (let i = 0; i < rows; i++) { await c.key("ArrowDown"); await sleep(60); }
