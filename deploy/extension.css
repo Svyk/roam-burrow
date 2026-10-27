@@ -377,3 +377,23 @@
   white-space: nowrap;
 }
 .burrow-ellipsis { opacity: 0.6; }
+
+/* Related rows (Roam's semantic search): a band in Roam's list column, right
+   after its results (first in the column when the popover opens upward). Its
+   height is set from its rows (src/strip.js bandHeight: label 18 + 33 per row
+   + 6), and the same height is added to Roam's 300 px column cap, so Roam's
+   own list never shrinks when the band arrives late. */
+.burrow-related { flex: none; contain: strict; box-sizing: border-box; padding: 0 4px 5px; border-top: 1px solid rgba(16, 22, 26, 0.12); background: transparent; color: inherit; overflow: hidden; }
+.burrow-related.burrow-dark { border-top-color: rgba(255, 255, 255, 0.1); }
+.burrow-related.burrow-related-top { border-top: none; border-bottom: 1px solid rgba(16, 22, 26, 0.12); }
+.burrow-related.burrow-related-top.burrow-dark { border-bottom-color: rgba(255, 255, 255, 0.1); }
+.burrow-related[hidden] { display: none; }
+/* Quiet, like the footer's text: small, muted, no pill. */
+.burrow-related-label { box-sizing: border-box; height: 18px; padding: 2px 6px 0; font-size: 11px; line-height: 16px; white-space: nowrap; color: var(--burrow-footer-fg, inherit); opacity: 0.6; }
+.rm-autocomplete__results.burrow-related-1 { --burrow-related-h: 57px; }
+.rm-autocomplete__results.burrow-related-2 { --burrow-related-h: 90px; }
+.rm-autocomplete__results.burrow-related-3 { --burrow-related-h: 123px; }
+.rm-autocomplete__results.burrow-related-open,
+.rm-autocomplete__results.burrow-related-open .rm-autocomplete__results-main { max-height: calc(300px + var(--burrow-related-h, 0px)); }
+/* While a Related row holds the selection, Roam's own highlight is muted. */
+.rm-autocomplete__results.burrow-related-owning .rm-autocomplete__results-scroll > div { background-color: transparent !important; }

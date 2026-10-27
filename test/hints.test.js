@@ -151,3 +151,14 @@ test("the Key hints setting names the labels the hint line shows", () => {
   for (const part of [...parts(alias), ...parts(ref), ...drill]) assert.ok(description.includes(part), `${part} in ${description}`);
   assert.doesNotMatch(description, /⇥ drill|⇥\/> drill/);
 });
+
+test("pickerHints: ⌥R names the Related rows while the band has rows; inside it the three band keys", () => {
+  const base = { kind: "((", row: null, native: null, rowsAbove: false, on: ON };
+  assert.equal(keys(pickerHints({ ...base, related: "available" }, true)), "⌥R related");
+  assert.equal(keys(pickerHints({ ...base, related: null }, true)), "");
+  assert.equal(keys(pickerHints({ ...base, related: "active" }, true)), "↵ insert · ↑↓ move · esc back");
+  assert.equal(keyLabel("altR", false), "Alt+R");
+  const ref = { kind: "((", row: { kind: "ref", drill: false }, on: { ...ON, refOutline: false }, related: "available" };
+  assert.equal(keys(pickerHints(ref, true)), "↵ insert ref · ⌥R related");
+  assert.equal(keys(pickerHints({ ...ref, prompt: "add" }, true)), "↵ save alias · esc cancel");
+});
