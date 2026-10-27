@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { matchFromKey, searchKey, searchPlan, searchScore, stripRoamMarkup } from "../src/search.js";
+import { isPrecise, looksLikeCode, matchFromKey, searchKey, searchPlan, searchScore, stripMacros, stripRoamMarkup } from "../src/search.js";
 
 // Cases copied from thymer-reference-extravaganza test/plugin.test.cjs and
 // test/v453-recall.test.cjs, plus the Roam acceptance shapes.
@@ -87,4 +87,42 @@ test("edit distance with transpositions and the early exit", async () => {
   assert.equal(editDistance("kitten", "sitting", 2), 3);
   assert.equal(editDistance("a".repeat(80), "a".repeat(79) + "b", 1), 1);
   assert.equal(editDistance("abc", "abc", 0), 0);
+});
+
+test("looksLikeCode: plain words are prose, code punctuation is code", () => {
+  for (const q of ["black pan", "real time pcr", "ant man", "Black Panther: Wakanda", "EMP 26"]) assert.equal(looksLikeCode(q), false, q);
+  for (const q of ["panel.grid", "library(gg", "zebra_plot", "x <- 1", "fooBar"]) assert.equal(looksLikeCode(q), true, q);
+});
+
+test("any-order words score higher the closer together they sit", () => {
+  const plan = searchPlan("ant man");
+  const near = matchFromKey(searchKey("man and the ant"), plan);
+  const far = matchFromKey(searchKey("man of the sea and the land and an ant"), plan);
+  assert.equal(near.level, 1);
+  assert.equal(far.level, 1);
+  assert.ok(searchScore("man and the ant", "ant man") > searchScore("man of the sea and the land and an ant", "ant man"));
+});
+
+test("every-word-a-prefix stays level 0 and not precise", () => {
+  const match = matchFromKey(searchKey("antibiotics management"), searchPlan("ant man"));
+  assert.equal(match.level, 0);
+  assert.equal(isPrecise(match), false);
+});
+
+test("stripRoamMarkup removes nested macros whole", () => {
+  const out = stripRoamMarkup("{{embed: {{[[TODO]]}} x}} y");
+  assert.ok(!out.includes("{{") && !out.includes("}}") && !out.includes("embed"), out);
+});
+
+test("stripMacros counts braces, so query syntax and nested macros go whole", () => {
+  assert.equal(stripMacros("zebra {{query: {and: [[Burrow/Fixtures]]}}} go").replace(/\s+/g, " "), "zebra go");
+  assert.equal(stripMacros("{{[[query]]: {or: [[a]] [[b]]}}} x").trim(), "x");
+  assert.equal(stripMacros("{{embed: {{[[TODO]]}} x}} y").trim(), "y");
+  assert.equal(stripMacros("{{abc def"), "{{abc def");
+  assert.equal(stripMacros("{{a}} b {{c}}").trim(), "b");
+  assert.equal(stripMacros("no macros"), "no macros");
+});
+
+test("a query macro's words are not keyed", () => {
+  assert.equal(searchKey(stripRoamMarkup("zebra {{query: {and: [[Burrow/Fixtures]]}}}")).tokens.includes("burrow"), false);
 });

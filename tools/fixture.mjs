@@ -28,6 +28,15 @@ export const DRILL_TREE = [
   { key: "taskDone", string: "{{[[DONE]]}} zebra task closed" },
   // A macro that only starts like a task (svy's SmartBlock button under a TODO on Patterns).
   { key: "taskSmart", string: "{{[[TODO]]}} zebra smart parent", children: [{ key: "smartButton", string: "{{TODO today:SmartBlock:TODO today}}" }] },
+  // Rich rows (0.7.0): one block per drawing. `@{page}` is the fixture page's title and `@{key}` that
+  // key's uid, filled in when the block is created. The only page they link is the fixture page, and
+  // there is no {{roam/render}} (it would run code in the user's window).
+  { key: "richCode", string: "```r\n# zebra plot helpers\nlibrary(ggplot2)\nzebra_plot <- function(d) ggplot(d, aes(x, y))\n```" },
+  { key: "richMarks", string: "zebra rich **bold** __italic__ ^^marked^^ ~~gone~~ `inline()` [[@{page}]] #[[@{page}]] ((@{never}))" },
+  { key: "richMacros", string: "zebra macros {{embed: ((@{never}))}} {{query: {and: [[@{page}]]}}} {{zebra go:SmartBlock:zebra go}}" },
+  { key: "richMedia", string: "zebra media ![zebra](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=) [zebra-report.pdf](https://firebasestorage.googleapis.com/v0/b/zebra/o/zebra-report.pdf) [docs](https://example.com/zebra)" },
+  { key: "richLong", string: `zebra long block ${"with plenty of words that run on and on ".repeat(6)}until the zebra snippet target near its end` },
+  { key: "richHtml", string: "zebra html <img src=x onerror=\"window.__burrowXss=1\"> <b>not bold</b>" },
   { key: "steps", string: "Steps section", children: [
     { key: "intro", string: "B-side" },
     { key: "one", string: "1. mix" }, { key: "two", string: "2. bake" },
@@ -40,6 +49,8 @@ export const DRILL_TREE = [
   ] },
   { key: "many", string: "Many section", children: Array.from({ length: 55 }, (_, i) => ({ key: `many${i + 1}`, string: `many ${String(i + 1).padStart(2, "0")}` })) },
 ];
+
+export const RICH_KEYS = ["richCode", "richMarks", "richMacros", "richMedia", "richLong", "richHtml"];
 
 // Aliases of the `<fixture> Chips` page: more than one chip line holds.
 export const CHIP_ALIASES = ["zq chip alpha long alias", "zq chip bravo long alias", "zq chip charlie long alias", "zq chip delta long alias",
@@ -127,7 +138,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
   };
   await writeFile(path, JSON.stringify(plan));
   try {
-    const fx = await c.evaluate(async ({ plan, drillTree, tree, drill, refsUid, title, aliasString }) => {
+    const fx = await c.evaluate(async ({ plan, drillTree, tree, drill, refsUid, title, aliasString, richKeys }) => {
       const api = window.roamAlphaAPI;
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const created = { page: plan.createdPage, sidebar: false, emptyPage: plan.createdEmpty, chipsPage: plan.createdChips, drill: [] };
@@ -143,9 +154,10 @@ export async function setupFixture(c, { drillTree = false } = {}) {
       // The drill tree goes in before the typing block and before keepAll, so
       // the gates never count it as a block Roam created.
       if (drillTree) {
+        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : drill[k]));
         const make = async (nodes, parent) => {
           for (const n of nodes) {
-            await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: n.string, uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}) } });
+            await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: fill(n.string), uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}) } });
             if (parent === pageUid) created.drill.push(drill[n.key]);
             if (n.children) await make(n.children, drill[n.key]);
           }
@@ -153,7 +165,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         await make(tree, pageUid);
         // The referenced blocks the (( cases find: the pick-memory pair, the
         // tasks, and a nested block (outline and context cases).
-        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50}))`, uid: refsUid } });
+        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50})) ${richKeys.map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
         created.drill.push(refsUid);
       }
       await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: "", uid: blockUid } });
@@ -187,7 +199,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
       window.addEventListener("keydown", guard.onKeyDown, true);
       window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill, emptyTitle: `${title} Empty`, emptyUid, chipsTitle: `${title} Chips`, chipsUid, chipsAliasUid };
       return { pageUid, blockUid, windowId, created, drill, chipsTitle: `${title} Chips`, chipsAliasUid, emptyUid, chipsUid };
-    }, { plan, drillTree, tree: DRILL_TREE, drill, refsUid, title: FIXTURE_PAGE, aliasString: CHIPS_ALIAS_STRING });
+    }, { plan, drillTree, tree: DRILL_TREE, drill, refsUid, title: FIXTURE_PAGE, aliasString: CHIPS_ALIAS_STRING, richKeys: RICH_KEYS });
     await writeFile(path, JSON.stringify({ ...plan, sidebar: fx.created.sidebar }));
     return fx;
   } catch (error) {

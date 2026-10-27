@@ -129,7 +129,7 @@
 
 /* What a pane is: "Preview" before a preview's trail, "Drill" before the
    drill list's line. */
-.burrow-trail::before, .burrow-tag {
+.burrow-trail::before, .burrow-what {
   margin-right: 6px;
   padding: 0 4px;
   border-radius: 2px;
@@ -339,3 +339,41 @@
 .burrow-help-foot { flex: none; padding: 4px 10px; border-top: 1px solid rgba(16, 22, 26, 0.12); font-size: 11px; background: var(--burrow-footer-bg, transparent); color: var(--burrow-footer-fg, inherit); }
 .rm-autocomplete__results.burrow-help-open { visibility: hidden !important; }
 .burrow-help-covered { visibility: hidden !important; }
+
+/* Block text drawn as Roam draws it (src/rich.js): quiet, no filled pills, and
+   nothing that changes a row's height. Colors are Roam's own where the theme
+   was sampled (src/strip.js sampleColors), these otherwise. */
+.burrow-ref, .burrow-link { color: var(--burrow-ref, #106ba3); }
+.burrow-tag { color: var(--burrow-tag, var(--burrow-ref, #106ba3)); }
+.burrow-dark .burrow-ref, .burrow-dark .burrow-link { color: var(--burrow-ref, #48aff0); }
+.burrow-dark .burrow-tag { color: var(--burrow-tag, var(--burrow-ref, #48aff0)); }
+/* A theme's quiet tag gray is unreadable on a highlight (svy light: 1.2:1 on the
+   preview's blue line), so a tag on the selected row or line takes the link color. */
+.burrow-active .burrow-tag, .burrow-target .burrow-tag { color: var(--burrow-ref, #106ba3); }
+.burrow-dark .burrow-active .burrow-tag, .burrow-dark .burrow-target .burrow-tag { color: var(--burrow-ref, #48aff0); }
+.burrow-bref { border-bottom: 1px solid var(--burrow-bref, rgba(138, 155, 168, 0.6)); }
+.burrow-attr, .burrow-b { font-weight: 600; }
+.burrow-i { font-style: italic; }
+.burrow-s { text-decoration: line-through; }
+.burrow-hl { background: var(--burrow-hl-bg, rgba(255, 213, 0, 0.45)); color: var(--burrow-hl-fg, inherit); }
+.burrow-code {
+  font-family: var(--burrow-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.88em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--burrow-code-bg, rgba(138, 155, 168, 0.16));
+  color: var(--burrow-code-fg, inherit);
+}
+.burrow-label {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  margin-right: 5px;
+  border: 1px solid rgba(138, 155, 168, 0.55);
+  border-radius: 3px;
+  opacity: 0.85;
+  vertical-align: 1px;
+  white-space: nowrap;
+}
+.burrow-ellipsis { opacity: 0.6; }

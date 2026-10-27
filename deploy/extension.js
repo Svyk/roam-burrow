@@ -1,4 +1,4 @@
-/* Burrow v0.6.1 | MIT | generated; edit src/ */
+/* Burrow v0.7.0 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -21,7 +21,38 @@ for (const [key, vals] of Object.entries(ABBREV_FORWARD)) {
   for (const word of vals) ABBREV_REVERSE.set(word, key);
 }
 function stripRoamMarkup(value) {
-  return String(value == null ? "" : value).replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 ").replace(/\{\{[^{}]*\}\}/g, " ").replace(/\(\(([^()]*)\)\)/g, " ").replace(/\[([^\]]*)\]\(\[\[([^\]]*)\]\]\)/g, "$1 $2").replace(/\[\[|\]\]|#\[\[|\*\*|\^\^|__|~~/g, " ").replace(/(^|\s)#(?=\S)/g, "$1");
+  return stripMacros(String(value == null ? "" : value).replace(/^\s*([^:\n`]{1,80})::\s*/, "$1 ")).replace(/\(\(([^()]*)\)\)/g, " ").replace(/\[([^\]]*)\]\(\[\[([^\]]*)\]\]\)/g, "$1 $2").replace(/\[\[|\]\]|#\[\[|\*\*|\^\^|__|~~/g, " ").replace(/(^|\s)#(?=\S)/g, "$1");
+}
+var MACRO_CAP = 4e3;
+function stripMacros(value) {
+  let at = value.indexOf("{{");
+  if (at === -1) return value;
+  let out = "";
+  let from = 0;
+  while (at !== -1) {
+    const stop = Math.min(value.length, at + MACRO_CAP);
+    let depth = 0;
+    let end = -1;
+    for (let j = at; j < stop; j++) {
+      const c = value.charCodeAt(j);
+      if (c === 123) depth++;
+      else if (c === 125 && --depth === 0) {
+        end = j + 1;
+        break;
+      }
+    }
+    if (end === -1) {
+      at = value.indexOf("{{", at + 2);
+      continue;
+    }
+    out += value.slice(from, at) + " ";
+    from = end;
+    at = value.indexOf("{{", end);
+  }
+  return out + value.slice(from);
+}
+function looksLikeCode(query) {
+  return /[`(){}[\]=<>$;\\|]|::|->|<-/.test(query) || /[\p{L}\p{N}][._][\p{L}\p{N}]/u.test(query) || /\p{Ll}{2,}\p{Lu}/u.test(query);
 }
 function searchKey(value) {
   let raw = String(value == null ? "" : value).toLowerCase();
@@ -30,8 +61,8 @@ function searchKey(value) {
   } catch {
   }
   raw = raw.replace(/\s+/g, " ").trim();
-  const spaced = raw.replace(/(\p{L})(\p{N})/gu, "$1 $2").replace(/(\p{N})(\p{L})/gu, "$1 $2").replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
-  return { raw, spaced, compact: spaced.replace(/\s+/g, ""), tokens: spaced ? spaced.split(" ") : [] };
+  const spaced2 = raw.replace(/(\p{L})(\p{N})/gu, "$1 $2").replace(/(\p{N})(\p{L})/gu, "$1 $2").replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/g, " ").trim();
+  return { raw, spaced: spaced2, compact: spaced2.replace(/\s+/g, ""), tokens: spaced2 ? spaced2.split(" ") : [] };
 }
 function numWord(n) {
   const i = Number(n);
@@ -164,14 +195,29 @@ function strictMatch(target, plan) {
   let level = 3;
   for (const q of plan.clauses) {
     let score = -1;
-    if (target.raw === q.raw) score = 1200;
-    else if (target.spaced === q.spaced) score = 1160;
-    else if (target.compact === q.compact) score = 1120;
-    else if (target.spaced.startsWith(q.spaced)) score = 980;
-    else if (target.compact.startsWith(q.compact)) score = 940;
-    else if (wordIncludes(target, q)) score = 840;
-    else if (compactIncludes(target, q.compact)) score = 800;
-    else {
+    let lv = 1;
+    if (target.raw === q.raw) {
+      score = 1200;
+      lv = 3;
+    } else if (target.spaced === q.spaced) {
+      score = 1160;
+      lv = 3;
+    } else if (target.compact === q.compact) {
+      score = 1120;
+      lv = 3;
+    } else if (target.spaced.startsWith(q.spaced)) {
+      score = 980;
+      lv = 2;
+    } else if (target.compact.startsWith(q.compact)) {
+      score = 940;
+      lv = 2;
+    } else if (wordIncludes(target, q)) {
+      score = 840;
+      lv = 2;
+    } else if (compactIncludes(target, q.compact)) {
+      score = 800;
+      lv = 2;
+    } else {
       let at = -1, ordered = true, gap = 0;
       for (const token of q.tokens) {
         const next = target.tokens.indexOf(token, at + 1);
@@ -183,12 +229,17 @@ function strictMatch(target, plan) {
         at = next;
       }
       if (ordered) score = 640 - Math.min(120, gap * 8);
-      else if (q.tokens.every((token) => tokenSet(target).has(token))) score = 500;
-      else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) score = 440;
-      else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6 && target.tokens.length >= q.compact.length && initialsOf(target).startsWith(q.compact)) score = 380;
+      else if (q.tokens.every((token) => tokenSet(target).has(token))) {
+        const places = q.tokens.map((token) => target.tokens.indexOf(token));
+        const spread = Math.max(...places) - Math.min(...places) + 1 - q.tokens.length;
+        score = 500 - Math.min(40, spread * 2);
+      } else if (q.tokens.every((token) => target.tokens.some((candidate) => candidate.startsWith(token)))) {
+        score = 440;
+        lv = 0;
+      } else if (q.tokens.length === 1 && q.compact.length >= 2 && q.compact.length <= 6 && target.tokens.length >= q.compact.length && initialsOf(target).startsWith(q.compact)) score = 380;
     }
     if (score < 0) return { score: -1, level: 0 };
-    level = Math.min(level, score >= 1120 ? 3 : score >= 800 ? 2 : score === 440 ? 0 : 1);
+    level = Math.min(level, lv);
     total += score;
   }
   return { score: total - Math.min(80, Math.max(0, target.compact.length - plan.compactLength)), level };
@@ -442,6 +493,18 @@ function aliasInsertion(entry, format) {
 var BLOCK_REF = /\(\(([\w-]{9})\)\)/g;
 var PAGE_REF = /\[\[([^[\]]+)\]\]|#([^\s[\]#,]+)/g;
 var RECALL_MAX_TOKENS = 40;
+var LONG_TOKENS = 64;
+function splitCode(string) {
+  const code = [];
+  const prose = String(string).replace(/```[\w+#.-]*[ \t]*\n?([\s\S]*?)(?:```|$)/g, (_, text) => {
+    code.push(text);
+    return " ";
+  }).replace(/`([^`\n]+)`/g, (_, text) => {
+    code.push(text);
+    return " ";
+  });
+  return { prose, code: code.join("\n") };
+}
 async function buildRefIndexSliced(rows, aliasesByPage, { sliceMs = 8, yieldTo: yieldTo2 }) {
   const index = startRefIndex(rows);
   let at = 0;
@@ -464,15 +527,20 @@ function startRefIndex(rows) {
 function keyEntry(entry, index, aliasesByPage) {
   const { byUid } = index;
   const quotes = [];
-  const resolved = entry.string.replace(BLOCK_REF, (_, uid) => {
-    quotes.push(uid);
+  const { prose, code } = splitCode(entry.string);
+  const bare = stripMacros(prose);
+  const resolved = bare.replace(BLOCK_REF, (_, uid) => {
     const target = byUid.get(uid);
     return target ? ` ${target.string} ` : " ";
   });
+  for (const m of entry.string.matchAll(BLOCK_REF)) quotes.push(m[1]);
   entry.key = searchKey(stripRoamMarkup(resolved));
   entry.quotes = quotes;
+  entry.codeKey = code.trim() ? searchKey(code) : null;
+  entry.words = entry.key.tokens.length + (entry.codeKey?.tokens.length || 0);
+  entry.long = entry.words > LONG_TOKENS;
   entry.pureQuote = quotes.length === 1 && !/[\p{L}\p{N}]/u.test(entry.string.replace(BLOCK_REF, "").replace(/\{\{[^{}]*\}\}/g, "")) ? quotes[0] : null;
-  const linked = [...entry.string.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
+  const linked = [...bare.matchAll(PAGE_REF)].map((m) => m[1] || m[2]);
   entry.linked = linked.length ? linked : null;
   for (const title of new Set(linked)) {
     const list = index.byLinked.get(title);
@@ -546,17 +614,27 @@ function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => fa
   if (changed) index.prefilter = null;
   return { next: at, changed };
 }
-function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null } = {}) {
+function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false } = {}) {
   if (!index || !plan) return [];
   const hits = /* @__PURE__ */ new Map();
+  const withCode = !prose || code;
   const consider = (entry, opts) => {
     let match = matchFromKey(entry.key, plan, opts);
     let viaAlias = false;
+    let inCode = false;
+    if (withCode && entry.codeKey) {
+      const codeMatch = matchFromKey(entry.codeKey, plan, opts);
+      if (isPrecise(codeMatch) && (!isPrecise(match) || rankOf(codeMatch) > rankOf(match))) {
+        match = codeMatch;
+        inCode = true;
+      }
+    }
     if (aliasExpand && entry.aliasKey) {
       const aliasMatch = matchFromKey(entry.aliasKey, plan, opts);
       if (isPrecise(aliasMatch) && (!isPrecise(match) || rankOf(aliasMatch) > rankOf(match))) {
         match = aliasMatch;
         viaAlias = true;
+        inCode = false;
       }
     }
     if (!isPrecise(match)) return false;
@@ -564,11 +642,11 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
     if (entry.pureQuote && index.byUid.has(entry.pureQuote)) target = index.byUid.get(entry.pureQuote);
     const previous = hits.get(target.uid);
     if (previous && rankOf(previous.match) >= rankOf(match)) return true;
-    hits.set(target.uid, { entry: target, match, viaAlias });
+    hits.set(target.uid, { entry: target, match, viaAlias, inCode });
     return true;
   };
   const strictHit = /* @__PURE__ */ new Set();
-  for (const entry of prefiltered(index, plan, aliasExpand)) {
+  for (const entry of prefiltered(index, plan, aliasExpand, withCode)) {
     if (consider(entry, { strict: true })) strictHit.add(entry);
   }
   const words = plan.clauses.reduce((n, q) => n + q.tokens.length, 0);
@@ -583,8 +661,16 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
   const rows = [...hits.values()];
   const pick = (hit) => picked?.get(hit.entry.uid) || 0;
   const onPage = (hit) => Number(currentPage != null && hit.entry.page === currentPage);
-  rows.sort((a, b) => rankOf(b.match) - rankOf(a.match) || pick(b) - pick(a) || Number(a.quoter) - Number(b.quoter) || refStep(b.entry.refs) - refStep(a.entry.refs) || Number(b.viaAlias) - Number(a.viaAlias) || onPage(b) - onPage(a) || b.match.score - a.match.score || a.entry.string.length - b.entry.string.length || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
-  return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter }) => ({
+  const titled = (hit) => {
+    var _a;
+    if (hit.titled == null) {
+      (_a = hit.entry).titleKeys ?? (_a.titleKeys = (hit.entry.linked || []).map((t) => searchKey(t)));
+      hit.titled = Number(hit.entry.titleKeys.some((k) => matchFromKey(k, plan, { strict: true }).level >= 2));
+    }
+    return hit.titled;
+  };
+  rows.sort((a, b) => rankOf(b.match) - rankOf(a.match) || pick(b) - pick(a) || Number(a.quoter) - Number(b.quoter) || (prose ? Number(a.entry.long) - Number(b.entry.long) : 0) || refStep(b.entry.refs) - refStep(a.entry.refs) || Number(b.viaAlias) - Number(a.viaAlias) || onPage(b) - onPage(a) || (prose ? titled(b) - titled(a) : 0) || b.match.score - a.match.score || a.entry.string.length - b.entry.string.length || (a.entry.uid < b.entry.uid ? -1 : a.entry.uid > b.entry.uid ? 1 : 0));
+  return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter, inCode }) => ({
     uid: entry.uid,
     string: entry.string,
     refs: entry.refs,
@@ -594,14 +680,16 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
     score: match.score,
     viaAlias,
     quoter,
+    inCode,
+    long: entry.long,
     picked: Boolean(picked?.get(entry.uid)),
     onPage: currentPage != null && entry.page === currentPage
   }));
 }
 var PREFILTER_CACHE = 24;
-function prefiltered(index, plan, aliasExpand) {
+function prefiltered(index, plan, aliasExpand, withCode) {
   const maybe = strictPrefilter(plan);
-  const sig = `${aliasExpand ? 1 : 0}${maybe.initial ?? ""}${maybe.needles.join("")}`;
+  const sig = `${aliasExpand ? 1 : 0}${withCode ? 1 : 0}${maybe.initial ?? ""}${maybe.needles.join("")}`;
   const cache = index.prefilter || (index.prefilter = /* @__PURE__ */ new Map());
   const hit = cache.get(sig);
   if (hit) {
@@ -611,14 +699,15 @@ function prefiltered(index, plan, aliasExpand) {
   }
   let source = index.entries;
   for (const [, cached] of cache) {
-    if (cached.initial == null && cached.aliasExpand === aliasExpand && cached.needles.length === maybe.needles.length && cached.needles.every((n, i) => maybe.needles[i].includes(n)) && cached.length < source.length) {
+    if (cached.initial == null && cached.aliasExpand === aliasExpand && cached.withCode === withCode && cached.needles.length === maybe.needles.length && cached.needles.every((n, i) => maybe.needles[i].includes(n)) && cached.length < source.length) {
       source = cached;
     }
   }
-  const list = source.filter((entry) => maybe(entry.key) || aliasExpand && maybe(entry.aliasKey));
+  const list = source.filter((entry) => maybe(entry.key) || aliasExpand && maybe(entry.aliasKey) || withCode && maybe(entry.codeKey));
   list.needles = maybe.needles;
   list.initial = maybe.initial;
   list.aliasExpand = aliasExpand;
+  list.withCode = withCode;
   cache.set(sig, list);
   if (cache.size > PREFILTER_CACHE) cache.delete(cache.keys().next().value);
   return list;
@@ -1160,6 +1249,8 @@ var DEFAULTS = Object.freeze({
   aliasChips: true,
   refRanking: true,
   refPreselect: true,
+  refProse: true,
+  richRows: true,
   betterMatch: true,
   drill: true,
   drillPreview: true,
@@ -1195,6 +1286,8 @@ var SWITCHES = [
   ["aliasChips", "Alias chips", "Under a selected alias row, the page's other aliases as chips. ⌥↓ moves into them, ←/→ picks one (the line also scrolls with the mouse wheel or trackpad, and a chip shows its full alias when selected or hovered), Enter inserts the page shown as that alias, Esc goes back to the rows."],
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
+  ["refProse", "Prose before code in ((", "Burrow's (( rows match a block's own words: code blocks, inline code and the insides of {{embed}}, {{roam/render}} and other macros count only when what you type looks like code (it has ( ) . _ = or the like). A block of more than 64 words ranks after shorter blocks that match as well, and a match inside a [[page]] or #tag the block links comes first among equals. Off: code counts like any text and length does not count (0.6.1)."],
+  ["richRows", "Rows drawn like Roam", "Burrow's (( rows, the drill panel and the previews draw a block as Roam does: a code block as its language and first line of code, inline code in a monospace face, [[links]], #tags and ((block refs)) as references, bold, italic, highlight and strike, embeds, queries, roam/render and SmartBlock buttons as small labels, images and files as labels. A long block shows the part around what you typed. Off: plain text, as in 0.6.1."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
   ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
   ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
@@ -2001,6 +2094,424 @@ function checkbox(doc, state) {
   return box;
 }
 
+// src/rich.js
+var CHIP = "burrow-label";
+var ATTR = "burrow-attr";
+var ATTR_AT = /^\s*([^:\n`]{1,80})::\s*/;
+var WS = /\s/;
+var WS_RUN = /\s+/g;
+var BRACKETS = /\[\[|\]\]/g;
+var SMARTBLOCK = /:\d*SmartBlock:/i;
+var BREF_IN = /\(\(([\w-]{9})\)\)/;
+var FILE = /\.(?:pdf|docx|xlsx|pptx|zip|csv|mp4|mov|mp3|png|jpg|jpeg|gif)(?:[?#].*)?$/i;
+var COMMENT = /^\s*(#|\/\/|--|;|%|\/\*|\*|<!--)/;
+var MACRO_CAP2 = 4e3;
+var SPAN_CAP = 500;
+var MACROS = /* @__PURE__ */ new Map([
+  ["embed", "embed"],
+  ["embed-path", "embed"],
+  ["embed-children", "embed"],
+  ["roam/render", "render"],
+  ["query", "query"],
+  ["pdf", "pdf"],
+  ["video", "video"],
+  ["youtube", "video"],
+  ["audio", "audio"],
+  ["iframe", "iframe"]
+]);
+var LANGS = /* @__PURE__ */ new Map([
+  ["r", "R"],
+  ["js", "JS"],
+  ["javascript", "JS"],
+  ["ts", "TS"],
+  ["typescript", "TS"],
+  ["py", "Python"],
+  ["python", "Python"],
+  ["clj", "Clojure"],
+  ["clojure", "Clojure"],
+  ["cljs", "Clojure"],
+  ["sh", "Shell"],
+  ["bash", "Shell"],
+  ["shell", "Shell"],
+  ["zsh", "Shell"],
+  ["css", "CSS"],
+  ["html", "HTML"],
+  ["sql", "SQL"],
+  ["json", "JSON"],
+  ["md", "Markdown"],
+  ["markdown", "Markdown"],
+  ["yaml", "YAML"],
+  ["yml", "YAML"]
+]);
+var STYLES = [["**", "burrow-b"], ["__", "burrow-i"], ["^^", "burrow-hl"], ["~~", "burrow-s"]];
+function langLabel(lang) {
+  const key = lang.toLowerCase();
+  if (!key) return "code";
+  const known = LANGS.get(key);
+  if (known) return known;
+  return key.length <= 3 ? key.toUpperCase() : key[0].toUpperCase() + key.slice(1);
+}
+function codeLine(body, needle = null) {
+  const text = String(body ?? "");
+  let first = "";
+  let firstCode = "";
+  let comment = "";
+  let at = 0;
+  while (at <= text.length) {
+    let end = text.indexOf("\n", at);
+    if (end === -1) end = text.length;
+    const line = text.slice(at, end);
+    at = end + 1;
+    if (!line.trim()) continue;
+    if (needle) {
+      needle.lastIndex = 0;
+      const hit = needle.test(line);
+      needle.lastIndex = 0;
+      if (hit) {
+        if (!COMMENT.test(line)) return line.trim().slice(0, 120);
+        if (!comment) comment = line;
+      }
+    }
+    if (!first) first = line;
+    if (!firstCode && !COMMENT.test(line)) {
+      firstCode = line;
+      if (!needle) break;
+    }
+  }
+  return (comment || firstCode || first).trim().slice(0, 120);
+}
+function closeAt(s, from, open, close, cap) {
+  const end = Math.min(s.length, from + cap);
+  const width = open.length;
+  let depth = 1;
+  for (let j = from + width; j < end; j++) {
+    const c = s.charCodeAt(j);
+    if (c === open.charCodeAt(0) && (width === 1 || s.charCodeAt(j + 1) === open.charCodeAt(1))) {
+      depth++;
+      j += width - 1;
+    } else if (c === close.charCodeAt(0) && (width === 1 || s.charCodeAt(j + 1) === close.charCodeAt(1))) {
+      depth--;
+      if (depth === 0) return j + width;
+      j += width - 1;
+    }
+  }
+  return -1;
+}
+function macroEnd(s, from) {
+  const end = Math.min(s.length, from + MACRO_CAP2);
+  let depth = 0;
+  for (let j = from; j < end; j++) {
+    const c = s.charCodeAt(j);
+    if (c === 123) depth++;
+    else if (c === 125 && --depth === 0) return j + 1;
+  }
+  return -1;
+}
+function macroLabel(inner) {
+  const colon = inner.indexOf(":");
+  if (SMARTBLOCK.test(inner)) return inner.slice(0, colon).trim() || "SmartBlock";
+  const written = (colon === -1 ? inner : inner.slice(0, colon)).replace(BRACKETS, "").trim();
+  const known = MACROS.get(written.toLowerCase());
+  if (known) return known;
+  if (!written) return "macro";
+  return written.length > 24 ? `${written.slice(0, 24)}…` : written;
+}
+function richParts(string, { resolve = () => null, needle = null } = {}) {
+  return parse(String(string ?? ""), resolve, false, needle);
+}
+function parse(input, resolve, inner, needle = null) {
+  let s = input.trim();
+  const parts = [];
+  if (s.startsWith(":hiccup")) return [{ text: "hiccup", cls: CHIP }];
+  if (s.startsWith("> ")) s = s.slice(2);
+  const on = [false, false, false, false];
+  let style = "";
+  const push = (text, base = "") => {
+    if (!text) return;
+    if (WS.test(text)) text = text.replace(WS_RUN, " ");
+    const cls = base === CHIP ? base : style ? base ? `${base} ${style}` : style : base;
+    const last2 = parts[parts.length - 1];
+    if (cls !== CHIP && (!last2 || last2.task || last2.cls !== CHIP && last2.text.endsWith(" ")) && text[0] === " ") text = text.slice(1);
+    if (!text) return;
+    if (last2 && !last2.task && cls !== CHIP && last2.cls === cls) last2.text += text;
+    else parts.push({ text, cls });
+  };
+  const pushTask = (task) => {
+    const last2 = parts[parts.length - 1];
+    if (last2 && !last2.task && last2.cls !== CHIP && last2.text.endsWith(" ")) {
+      last2.text = last2.text.slice(0, -1);
+      if (!last2.text) parts.pop();
+    }
+    parts.push({ task });
+  };
+  const attr = ATTR_AT.exec(s);
+  let i = 0;
+  if (attr) {
+    push(`${attr[1].trim()}:`, ATTR);
+    i = attr[0].length;
+  }
+  const n = s.length;
+  let from = i;
+  let marked = -1;
+  const flush = (to) => {
+    if (to > from) push(s.slice(from, to));
+  };
+  const done = (to) => {
+    i = to;
+    from = to;
+  };
+  while (i < n) {
+    const c = s.charCodeAt(i);
+    let end = -1;
+    switch (c) {
+      case 123: {
+        if (s.charCodeAt(i + 1) !== 123 || (end = macroEnd(s, i)) === -1) break;
+        flush(i);
+        const macro = s.slice(i, end);
+        const asTask = taskParts(macro);
+        if (asTask.length === 1 && asTask[0].task) pushTask(asTask[0].task);
+        else {
+          const body = macro.slice(2, -2);
+          const label = macroLabel(body);
+          push(label, CHIP);
+          if (!inner && label === "embed") {
+            const uid = BREF_IN.exec(body)?.[1];
+            const text = uid ? resolve(uid) : null;
+            if (typeof text === "string") for (const part of parse(text, resolve, true)) part.task ? pushTask(part.task) : push(part.text, part.cls);
+          }
+        }
+        done(end);
+        continue;
+      }
+      case 96: {
+        if (s.startsWith("```", i)) {
+          flush(i);
+          const close = s.indexOf("```", i + 3);
+          const nl = s.indexOf("\n", i + 3);
+          let lang = "";
+          let body;
+          if (nl === -1 || close !== -1 && close < nl) body = close === -1 ? s.slice(i + 3) : s.slice(i + 3, close);
+          else {
+            lang = s.slice(i + 3, nl).trim().split(WS_RUN)[0];
+            body = close === -1 ? s.slice(nl + 1) : s.slice(nl + 1, close);
+          }
+          push(langLabel(lang), CHIP);
+          push(codeLine(body, needle), "burrow-code");
+          done(close === -1 ? n : close + 3);
+          continue;
+        }
+        end = s.indexOf("`", i + 1);
+        if (end > i + 1 && !(s.indexOf("\n", i + 1) < end && s.indexOf("\n", i + 1) !== -1)) {
+          flush(i);
+          push(s.slice(i + 1, end), "burrow-code");
+          done(end + 1);
+          continue;
+        }
+        break;
+      }
+      case 36: {
+        if (s.charCodeAt(i + 1) !== 36) break;
+        end = s.indexOf("$$", i + 2);
+        if (end <= i + 2) break;
+        flush(i);
+        push(s.slice(i + 2, end), "burrow-code");
+        done(end + 2);
+        continue;
+      }
+      case 91: {
+        if (s.charCodeAt(i + 1) === 91) {
+          end = closeAt(s, i, "[[", "]]", SPAN_CAP);
+          if (end === -1) break;
+          flush(i);
+          push(s.slice(i + 2, end - 2).replace(BRACKETS, ""), "burrow-ref");
+          done(end);
+          continue;
+        }
+        const link = linkAt(s, i);
+        if (!link) break;
+        flush(i);
+        const target = link.target.trim();
+        const text = link.text || target;
+        if (target.startsWith("[[") && target.endsWith("]]")) push(text, "burrow-ref");
+        else if (target.startsWith("((") && target.endsWith("))")) push(text, "burrow-bref");
+        else {
+          if (target.includes("firebasestorage") || FILE.test(target)) push("file", CHIP);
+          push(text, "burrow-link");
+        }
+        done(link.end);
+        continue;
+      }
+      case 33: {
+        if (s.charCodeAt(i + 1) !== 91) break;
+        const image = linkAt(s, i + 1);
+        if (!image) break;
+        flush(i);
+        push("image", CHIP);
+        done(image.end);
+        continue;
+      }
+      case 35: {
+        const before = i === 0 ? 32 : s.charCodeAt(i - 1);
+        if (!(before === 32 || before === 40 || before === 9 || before === 10 || before === 13 || marked === i)) break;
+        if (s.charCodeAt(i + 1) === 91 && s.charCodeAt(i + 2) === 91) {
+          end = closeAt(s, i + 1, "[[", "]]", SPAN_CAP);
+          if (end === -1) break;
+          flush(i);
+          push(`#${s.slice(i + 3, end - 2).replace(BRACKETS, "")}`, "burrow-tag");
+          done(end);
+          continue;
+        }
+        let j = i + 1;
+        while (j < n) {
+          const d = s.charCodeAt(j);
+          if (d === 32 || d === 9 || d === 10 || d === 13 || d === 91 || d === 93 || d === 35 || d === 44 || d === 40 || d === 41) break;
+          if ((d === 42 || d === 95 || d === 94 || d === 126) && s.charCodeAt(j + 1) === d && on[d === 42 ? 0 : d === 95 ? 1 : d === 94 ? 2 : 3]) break;
+          j++;
+        }
+        while (j > i + 1 && `.,!?;:'"`.includes(s[j - 1])) j--;
+        if (j === i + 1) break;
+        flush(i);
+        push(s.slice(i, j), "burrow-tag");
+        done(j);
+        continue;
+      }
+      case 40: {
+        if (s.charCodeAt(i + 1) !== 40 || s.charCodeAt(i + 11) !== 41 || s.charCodeAt(i + 12) !== 41) break;
+        const uid = s.slice(i + 2, i + 11);
+        if (!BREF_IN.test(`((${uid}))`)) break;
+        flush(i);
+        const text = inner ? null : resolve(uid);
+        push(typeof text === "string" ? plainText(parse(text, resolve, true)) : `((${uid}))`, "burrow-bref");
+        done(i + 13);
+        continue;
+      }
+      case 42:
+      case 95:
+      case 94:
+      case 126: {
+        if (s.charCodeAt(i + 1) !== c) break;
+        const k = c === 42 ? 0 : c === 95 ? 1 : c === 94 ? 2 : 3;
+        if (!on[k] && s.indexOf(STYLES[k][0], i + 2) === -1) break;
+        flush(i);
+        on[k] = !on[k];
+        style = STYLES.filter((_, x) => on[x]).map((x) => x[1]).join(" ");
+        marked = i + 2;
+        done(i + 2);
+        continue;
+      }
+    }
+    i++;
+  }
+  flush(n);
+  const last = parts[parts.length - 1];
+  if (last && !last.task && last.cls !== CHIP) {
+    last.text = last.text.trimEnd();
+    if (!last.text) parts.pop();
+  }
+  return parts;
+}
+function linkAt(s, from) {
+  const close = closeAt(s, from, "[", "]", SPAN_CAP);
+  if (close === -1 || s.charCodeAt(close) !== 40) return null;
+  const end = closeAt(s, close, "(", ")", SPAN_CAP);
+  if (end === -1) return null;
+  return { text: s.slice(from + 1, close - 1), target: s.slice(close + 1, end - 1), end };
+}
+var spaced = (part) => part.cls === CHIP || part.cls === ATTR;
+function plainText(parts) {
+  let out = "";
+  let apart = false;
+  for (const part of parts) {
+    if (part.task) continue;
+    const gap = out && !out.endsWith(" ") && part.text[0] !== " " && (apart || spaced(part));
+    out += (gap ? " " : "") + part.text;
+    apart = spaced(part);
+  }
+  return out.trim();
+}
+function snippet(parts, re, { lead = 30, keep = 24 } = {}) {
+  if (!re) return parts;
+  let full = "";
+  for (const part of parts) if (!part.task && part.cls !== CHIP) full += part.text;
+  const scan = re.global ? re : new RegExp(re.source, `${re.flags}g`);
+  scan.lastIndex = 0;
+  const hits = [];
+  for (let m = scan.exec(full); m && hits.length < 64; m = scan.exec(full)) {
+    if (!m[0]) {
+      scan.lastIndex++;
+      continue;
+    }
+    hits.push({ index: m.index, word: m[0].toLowerCase() });
+  }
+  scan.lastIndex = 0;
+  if (re.lastIndex) re.lastIndex = 0;
+  if (!hits.length) return parts;
+  let hit = hits[0];
+  let best = 0;
+  for (let i = 0; i < hits.length; i++) {
+    const words = /* @__PURE__ */ new Set();
+    for (let j = i; j < hits.length && hits[j].index <= hits[i].index + 40; j++) words.add(hits[j].word);
+    if (words.size > best) {
+      best = words.size;
+      hit = hits[i];
+    }
+  }
+  if (hit.index <= lead) return parts;
+  let cut = hit.index - keep;
+  if (cut <= 0) return parts;
+  const space = full.indexOf(" ", cut);
+  if (space !== -1 && space < hit.index) cut = space + 1;
+  const out = [];
+  let k = 0;
+  while (k < parts.length && parts[k].task) out.push(parts[k++]);
+  out.push({ text: "…", cls: "burrow-ellipsis" });
+  let at = 0;
+  for (const part of parts) {
+    if (part.task || part.cls === CHIP) {
+      if (at >= cut && !(part.task && out.includes(part))) out.push(part);
+      continue;
+    }
+    const to = at + part.text.length;
+    if (to > cut) out.push(at >= cut ? part : { text: part.text.slice(cut - at), cls: part.cls });
+    at = to;
+  }
+  return out;
+}
+function renderParts(doc, parts, highlight = (text) => text) {
+  const fragment = doc.createDocumentFragment();
+  for (const part of parts) {
+    if (part.task) fragment.append(checkbox(doc, part.task));
+    else if (!part.cls) fragment.append(highlight(part.text));
+    else {
+      const span = doc.createElement("span");
+      span.className = part.cls;
+      if (part.cls === CHIP) span.textContent = part.text;
+      else span.append(highlight(part.text));
+      fragment.append(span);
+    }
+  }
+  return fragment;
+}
+function createRichCache(limit = 400) {
+  const map = /* @__PURE__ */ new Map();
+  return {
+    get(uid, string, make) {
+      const key = `${uid}\0${string}`;
+      if (map.has(key)) return map.get(key);
+      const value = make();
+      map.set(key, value);
+      if (map.size > limit) map.delete(map.keys().next().value);
+      return value;
+    },
+    clear() {
+      map.clear();
+    },
+    get size() {
+      return map.size;
+    }
+  };
+}
+
 // src/preview.js
 var SIBLING_WINDOW = 24;
 var CHILD_LIMIT = 16;
@@ -2032,7 +2543,7 @@ function previewModel(result, tree, text, { hideEmpty = false } = {}) {
     for (const kid of kids) {
       if (items.length >= ITEM_LIMIT) return;
       if (emptyLeaf(kid)) continue;
-      items.push({ uid: kid.uid, text: text(kid.string || ""), task: task(kid.string), depth, heading: kid.heading, target: false });
+      items.push({ uid: kid.uid, text: text(kid.string || ""), string: kid.string ?? "", task: task(kid.string), depth, heading: kid.heading, target: false });
       if (levels > 1 && mayHaveKids(kid)) pushKids(kid.uid, depth + 1, levels - 1);
     }
     if (total2 > CHILD_LIMIT) items.push({ more: total2 - CHILD_LIMIT, depth });
@@ -2049,14 +2560,14 @@ function previewModel(result, tree, text, { hideEmpty = false } = {}) {
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
+    items.push({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
     if (isTarget) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), task: task(target.string), depth: 0, heading: target.heading, target: true });
+  if (!siblings.length) items.push({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true });
   return { key: `node:${target.uid}`, trail, items };
 }
-function createPreview({ doc, win, lifecycle }) {
+function createPreview({ doc, win, lifecycle, rich = null }) {
   const pane = doc.createElement("div");
   pane.className = "burrow-preview bp3-elevation-3";
   pane.hidden = true;
@@ -2071,25 +2582,32 @@ function createPreview({ doc, win, lifecycle }) {
   let pop = null;
   let rest = null;
   let restAt = 0;
-  function render(model, lines = Infinity) {
+  function render(model, lines = Infinity, deadline = Infinity) {
     trailNode.replaceChildren();
     model.trail.forEach((part, i) => {
       if (i) trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-sep", textContent: " › " }));
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
     const first = model.items.slice(0, lines);
-    writeLines(first, 0);
-    rest = model.items.length > lines ? model.items.slice(lines) : null;
-    restAt = first.length;
+    const wrote = writeLines(first, 0, deadline);
+    rest = model.items.length > wrote ? model.items.slice(wrote) : null;
+    restAt = wrote;
     const kids = outline.children;
     while (kids.length > model.items.length) kids[kids.length - 1].remove();
-    for (let i = first.length; i < kids.length; i++) kids[i].hidden = true;
+    for (let i = wrote; i < kids.length; i++) kids[i].hidden = true;
   }
-  function writeLines(items, from) {
+  function writeLines(items, from, deadline = Infinity, min = 0) {
     const kids = outline.children;
     const made = [];
-    items.forEach((item, i) => {
-      const row = kids[from + i] || doc.createElement("div");
+    let lastTarget = -1;
+    if (deadline !== Infinity) {
+      for (let i = 0; i < items.length; i++) if (items[i].target) lastTarget = i;
+    }
+    let wrote = 0;
+    for (; wrote < items.length; wrote++) {
+      if (deadline !== Infinity && wrote >= min && wrote > lastTarget && performance.now() > deadline) break;
+      const item = items[wrote];
+      const row = kids[from + wrote] || doc.createElement("div");
       let cls = "burrow-node";
       if (item.more != null) cls += " burrow-more";
       else {
@@ -2100,14 +2618,32 @@ function createPreview({ doc, win, lifecycle }) {
       if (row.className !== cls) row.className = cls;
       const depth = String(item.depth);
       if (row.style.getPropertyValue("--burrow-depth") !== depth) row.style.setProperty("--burrow-depth", depth);
-      const text = item.more != null ? `+${item.more} more` : item.text || " ";
-      if (row.childNodes.length === 1 && row.firstChild.nodeType === 3) {
-        if (row.firstChild.data !== text) row.firstChild.data = text;
-      } else row.textContent = text;
+      writeContent(row, item);
       if (row.hidden) row.hidden = false;
       if (!row.parentNode) made.push(row);
-    });
+    }
     if (made.length) outline.append(...made);
+    return wrote;
+  }
+  function writeContent(row, item) {
+    if (item.more == null && item.string != null && rich) {
+      const key = `${item.uid}\0${item.string}`;
+      if (row.__burrowLine === key) return;
+      const parts = rich(item)?.filter((part) => !part.task);
+      if (parts?.length) {
+        row.__burrowLine = key;
+        if (parts.every((part) => part.cls === "")) setText(row, plainText(parts) || " ");
+        else row.replaceChildren(renderParts(doc, parts));
+        return;
+      }
+    }
+    row.__burrowLine = null;
+    setText(row, item.more != null ? `+${item.more} more` : item.text || " ");
+  }
+  function setText(row, text) {
+    if (row.childNodes.length === 1 && row.firstChild.nodeType === 3) {
+      if (row.firstChild.data !== text) row.firstChild.data = text;
+    } else row.textContent = text;
   }
   function dockRect(beside) {
     if (beside || !pop.classList.contains("rm-autocomplete__results--expanded")) return null;
@@ -2169,17 +2705,18 @@ function createPreview({ doc, win, lifecycle }) {
     // Does this pane lie over `popover`'s preview area (its class hides Roam's)?
     drills: (popover) => !pane.hidden && pop === popover && pane.classList.contains("burrow-preview-docked"),
     // The model's lines only, no layout read: show() places them (in a frame).
-    fill(model, popover) {
+    fill(model, popover, { budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       if (model.key === shownKey) return;
-      render(model);
+      render(model, Infinity, performance.now() + budgetMs);
       shownKey = model.key;
       filled = true;
     },
     // inFrame: called from a frame callback, so the scroll runs now, in this frame.
     // lines: draw only that many lines now; more() draws the rest later.
-    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false, lines = Infinity } = {}) {
+    // budgetMs: stop writing lines after that long (past the highlighted one).
+    show(model, popover, { avoid = null, beside = null, onFrame = null, inFrame = false, lines = Infinity, budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
       if (!beside) pop.classList.add(DRILL_CLASS);
@@ -2187,7 +2724,7 @@ function createPreview({ doc, win, lifecycle }) {
       const changed = model.key !== shownKey || pane.hidden || filled;
       filled = false;
       if (model.key !== shownKey) {
-        render(model, lines);
+        render(model, lines, performance.now() + budgetMs);
         shownKey = model.key;
       }
       pane.hidden = false;
@@ -2212,12 +2749,16 @@ function createPreview({ doc, win, lifecycle }) {
     get pending() {
       return Boolean(rest) && !pane.hidden;
     },
-    more(lines = Infinity) {
+    // Lines left for more(), shown or not yet (fill() leaves the pane hidden).
+    get unfinished() {
+      return Boolean(rest);
+    },
+    more(lines = Infinity, budgetMs = Infinity) {
       if (!rest || pane.hidden) return;
       const items = rest.slice(0, lines);
-      rest = rest.length > lines ? rest.slice(lines) : null;
-      writeLines(items, restAt);
-      restAt += items.length;
+      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1);
+      rest = wrote < rest.length ? rest.slice(wrote) : null;
+      restAt += wrote;
     },
     hide() {
       cancelScroll();
@@ -2265,7 +2806,9 @@ function firstReal(rows) {
 // src/scopeview.js
 var MAX_LABEL = 40;
 var MAX_ANCESTOR = 22;
-function createScopePanel({ doc, win, lifecycle, highlight }) {
+var RICH_NOW = 12;
+var UPGRADE_SLICE_MS = 3;
+function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice = null }) {
   const node = doc.createElement("div");
   node.className = "burrow-scope bp3-elevation-3";
   node.setAttribute("role", "listbox");
@@ -2306,7 +2849,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     filter.classList.toggle("burrow-placeholder", !level.query);
     crumb.replaceChildren(...parts, filter);
     const label = level.isPage ? "blocks on this page" : "children of this block";
-    what.replaceChildren(span("burrow-tag", "Drill"), level.isPage ? `${label}` : `${label}: ${ellipsize(level.label)}`);
+    what.replaceChildren(span("burrow-what", "Drill"), level.isPage ? `${label}` : `${label}: ${ellipsize(level.label)}`);
   }
   function renderList(scope) {
     const level = scope.levels[scope.levels.length - 1];
@@ -2323,6 +2866,8 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       list.replaceChildren(self);
       return;
     }
+    cancelUpgrade();
+    const later = [];
     list.replaceChildren(...scope.rows.map((row, i) => {
       const item = doc.createElement("div");
       item.className = "burrow-row";
@@ -2336,7 +2881,9 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.heading) item.classList.add(`burrow-h${row.heading}`);
       const text = doc.createElement("span");
       text.className = "burrow-text";
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
+      const parts = rich && row.text ? i < RICH_NOW ? rich(row) : (later.push([text, row]), null) : null;
+      if (parts) text.append(renderParts(doc, parts, (t) => highlight(t, level.query)));
+      else if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text.trim(), level.query));
       else if (row.text) text.append(highlight(row.text, level.query));
       else if (row.drillable) {
         item.classList.add("burrow-empty-row");
@@ -2346,7 +2893,35 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
       if (row.drillable && row.text) item.append(span("burrow-drill-mark", "›"));
       return item;
     }));
+    if (later.length) scheduleUpgrade(later, level.query, key);
   }
+  let upgradeId = null;
+  function cancelUpgrade() {
+    if (upgradeId == null) return;
+    (win.cancelIdleCallback || win.clearTimeout).call(win, upgradeId);
+    upgradeId = null;
+  }
+  function scheduleUpgrade(later, query, forKey) {
+    let at = 0;
+    const run = () => {
+      upgradeId = null;
+      if (listKey !== forKey) return;
+      const t0 = performance.now();
+      while (at < later.length && performance.now() - t0 < UPGRADE_SLICE_MS) {
+        const [text, row] = later[at++];
+        if (!text.isConnected) continue;
+        const parts = rich(row);
+        if (parts) text.replaceChildren(renderParts(doc, parts, (t) => highlight(t, query)));
+      }
+      onSlice?.(performance.now() - t0);
+      if (at < later.length) schedule();
+    };
+    const schedule = () => {
+      upgradeId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 200 }) : win.setTimeout(run, 30);
+    };
+    schedule();
+  }
+  lifecycle.add(cancelUpgrade);
   let hintsShown = null;
   let hintItems = [];
   function renderHints2(scope, on, help) {
@@ -2404,6 +2979,7 @@ function createScopePanel({ doc, win, lifecycle, highlight }) {
     paintActive,
     place,
     hide() {
+      cancelUpgrade();
       node.hidden = true;
       listKey = null;
       hintsShown = null;
@@ -2695,9 +3271,21 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     avoid: () => st.ta?.isConnected ? st.ta.getBoundingClientRect() : null,
     around: () => pickerArea()
   });
-  const preview = createPreview({ doc, win, lifecycle });
-  const scopePreview = createPreview({ doc, win, lifecycle });
-  const scopePanel = createScopePanel({ doc, win, lifecycle, highlight: (text, query) => highlight(text, query) });
+  const richCache = createRichCache();
+  let richRefs = null;
+  const resolveRef = (uid) => indexes.refs?.byUid.get(uid)?.string ?? tree.get(uid)?.string ?? null;
+  const richFor = (uid, string) => setting("richRows") ? richCache.get(uid, string, () => richParts(string, { resolve: resolveRef })) : null;
+  const previewRich = (item) => item.string != null ? richFor(item.uid, item.string) : null;
+  const preview = createPreview({ doc, win, lifecycle, rich: previewRich });
+  const scopePreview = createPreview({ doc, win, lifecycle, rich: previewRich });
+  const scopePanel = createScopePanel({
+    doc,
+    win,
+    lifecycle,
+    highlight: (text, query) => highlight(text, query),
+    rich: (row) => row.node && row.more == null ? richFor(row.node.uid, row.node.string) : null,
+    onSlice: (ms) => perf.push("scope.rich", ms)
+  });
   const fast = api.data?.fast?.q ? (query, ...args) => api.data.fast.q(query, ...args) : (query, ...args) => api.q(query, ...args);
   const tree = createTreeSource({
     pull: (pattern, eid) => api.pull(pattern, eid),
@@ -2742,6 +3330,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   }
   function rank(token) {
     st.drill = null;
+    if (indexes.refs !== richRefs) {
+      richRefs = indexes.refs;
+      richCache.clear();
+    }
     const recall = setting("betterMatch");
     if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
       const parsed = parseDrill(token.query, indexes.titles);
@@ -2762,7 +3354,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         recall,
         aliasExpand: setting("aliasExpand"),
         picked: memory?.lookup("ref", token.query),
-        currentPage: setting("pageBoost") ? st.pageTitle : null
+        currentPage: setting("pageBoost") ? st.pageTitle : null,
+        prose: setting("refProse"),
+        code: looksLikeCode(token.query)
       }).map((hit) => ({
         kind: "ref",
         key: `ref:${hit.uid}`,
@@ -2770,9 +3364,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         refs: hit.refs,
         level: hit.level,
         page: hit.page,
+        inCode: hit.inCode,
         ...rowText(hit.string),
         insertion: `((${hit.uid}))`,
-        pick: hit.uid
+        pick: hit.uid,
+        // A query that matched inside code shows the code line it matched.
+        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(token.query) }) : richFor(hit.uid, hit.string)
       }));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
@@ -2819,7 +3416,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       level: 3,
       insertion: result.insertion,
       crumb: target ? crumb : null,
-      text: target ? readableText(target.string) : page.title
+      text: target ? readableText(target.string) : page.title,
+      rich: target ? richFor(target.uid, target.string) : null
     };
   }
   function readableText(string) {
@@ -2877,12 +3475,46 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         detectRoamAliases();
       } catch {
       }
+      try {
+        sampleColors();
+      } catch {
+      }
     }, { timeout: 5e3 });
   };
   scheduleDetect();
   lifecycle.add(() => {
     if (detectId != null) win.cancelIdleCallback(detectId);
   });
+  let sampledDark = null;
+  function sampleColors() {
+    const nodes = [strip, preview.node, scopePreview.node, scopePanel.node];
+    const set = (name, value) => {
+      for (const node of nodes) {
+        if (value && !/^(transparent|rgba\(.*,\s*0\))$/.test(value)) node.style.setProperty(name, value);
+        else node.style.removeProperty(name);
+      }
+    };
+    const style = (selector) => {
+      const el = doc.querySelector(selector);
+      return el ? win.getComputedStyle(el) : null;
+    };
+    set("--burrow-ref", style(".rm-page-ref--link")?.color);
+    set("--burrow-tag", style(".rm-page-ref--tag")?.color);
+    const bref = style(".rm-block-ref");
+    set("--burrow-bref", bref ? parseFloat(bref.borderBottomWidth) > 0 ? bref.borderBottomColor : bref.color : null);
+    const hl = style(".rm-highlight");
+    set("--burrow-hl-bg", hl?.backgroundColor);
+    set("--burrow-hl-fg", hl?.color);
+    const code = style("code");
+    set("--burrow-code-bg", code?.backgroundColor);
+    set("--burrow-code-fg", code?.color);
+    set("--burrow-mono", code?.fontFamily);
+  }
+  function colorsStale(dark) {
+    if (dark === sampledDark) return;
+    sampledDark = dark;
+    scheduleDetect();
+  }
   function visibleRows() {
     if (!st.pop) return [];
     if (st.token?.kind !== "[[" || st.drill || setting("aliasInline")) return st.rows.slice(0, ROW_LIMIT);
@@ -2912,6 +3544,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       return;
     }
     placeInFlow();
+    liftPop();
     if (st.prompt?.kind === "add") {
       renderPrompt();
       return;
@@ -2996,12 +3629,14 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
         model.drillKey = st.drill.key;
       }
-      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true });
+      const budgetMs = richBudget(1);
+      if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true, budgetMs });
       else {
-        preview.fill(model, st.pop);
+        preview.fill(model, st.pop, { budgetMs });
         redock = true;
         requestPlace();
       }
+      if (preview.unfinished) scheduleRest(preview, () => Boolean(st.drill) && model?.drillKey === st.drill.key, "row");
       return;
     }
     const row = previewTarget();
@@ -3056,25 +3691,44 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     rowPreviewReady = null;
     model = next;
-    preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), onFrame: (ms) => previewSample("scroll", ms), lines: PREVIEW_FIRST_LINES });
+    preview.show(model, st.pop, {
+      avoid: st.ta?.getBoundingClientRect(),
+      onFrame: (ms) => previewSample("scroll", ms),
+      lines: PREVIEW_FIRST_LINES,
+      budgetMs: richBudget(Math.max(0.5, PREVIEW_SLICE_MS - elapsed()))
+    });
     previewSample("draw", elapsed());
-    if (preview.pending) scheduleRowPreviewRest(row);
+    if (preview.pending) scheduleRest(preview, () => previewTarget()?.key === row.key, "row");
   }
+  const richBudget = (ms) => setting("richRows") ? ms : Infinity;
   function previewSample(kind, ms) {
     perf.push("preview", ms);
     perf.push(`preview.${kind}`, ms);
   }
-  function scheduleRowPreviewRest(row) {
-    const run = () => {
-      rowPreviewId = null;
-      if (previewTarget()?.key !== row.key) return;
-      const t0 = performance.now();
-      preview.more(PREVIEW_FIRST_LINES);
-      previewSample("rest", performance.now() - t0);
-      if (preview.pending) scheduleRowPreviewRest(row);
+  let scopeRestId = null;
+  function scheduleRest(pane, current, slot) {
+    if ((slot === "row" ? rowPreviewId : scopeRestId) != null) return;
+    const set = (id) => {
+      if (slot === "row") rowPreviewId = id;
+      else scopeRestId = id;
     };
-    rowPreviewId = typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60);
+    const run = () => {
+      set(null);
+      if (!current() || !pane.unfinished) return;
+      if (pane.pending) {
+        const t0 = performance.now();
+        pane.more(PREVIEW_FIRST_LINES, richBudget(PREVIEW_SLICE_MS));
+        previewSample("rest", performance.now() - t0);
+      }
+      if (pane.unfinished) set(idle(run));
+    };
+    set(idle(run));
   }
+  lifecycle.add(() => {
+    if (scopeRestId != null) (win.cancelIdleCallback || win.clearTimeout).call(win, scopeRestId);
+    scopeRestId = null;
+  });
+  const idle = (run) => typeof win.requestIdleCallback === "function" ? win.requestIdleCallback(run, { timeout: 300 }) : win.setTimeout(run, 60);
   function rowModel(row, read) {
     let page;
     let target = null;
@@ -3101,10 +3755,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       node.title = `${row.alias} → ${row.title}`;
     } else if (row.kind === "drill") {
       if (row.crumb) text.append(Object.assign(doc.createElement("span"), { className: "burrow-trail-inline", textContent: `${row.crumb} › ` }));
-      text.append(row.text);
+      if (row.rich) text.append(richContent(row));
+      else text.append(row.text);
       node.title = row.crumb ? `${row.crumb} › ${row.text}` : row.text;
     } else {
-      if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text));
+      if (row.rich) text.append(richContent(row));
+      else if (row.parts) for (const part of row.parts) text.append(part.task ? checkbox(doc, part.task) : highlight(part.text));
       else text.append(highlight(row.text));
       node.title = row.text;
     }
@@ -3126,14 +3782,20 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   }
   let highlightFor = null;
   let highlightRe = null;
-  function highlight(text, query = st.token?.query) {
-    const fragment = doc.createDocumentFragment();
+  function highlightPattern(query) {
     if (query !== highlightFor) {
       highlightFor = query;
       const words = (String(query ?? "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter((w) => w.length > 1);
       highlightRe = words.length ? new RegExp(`(?<![\\p{L}\\p{N}])(${words.map(escapeRe).join("|")})`, "giu") : null;
     }
-    const re = highlightRe;
+    return highlightRe;
+  }
+  function richContent(row) {
+    return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
+  }
+  function highlight(text, query = st.token?.query) {
+    const fragment = doc.createDocumentFragment();
+    const re = highlightPattern(query);
     if (!re) {
       fragment.append(text);
       return fragment;
@@ -3300,6 +3962,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     else if (!activeRow) strip.style.removeProperty("--burrow-active");
     const dark = isDarkHost(doc);
     strip.classList.toggle("burrow-dark", dark);
+    colorsStale(dark);
     sampleHints(pop, dark);
     for (const p of [preview, scopePreview]) {
       for (const name of ["--burrow-bg", "--burrow-fg"]) p.node.style.setProperty(name, strip.style.getPropertyValue(name));
@@ -3356,6 +4019,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     strip.remove();
     hints.remove();
     if (!st.pop) return;
+    if (lifted) st.pop.style.marginBottom = "";
+    lifted = 0;
     st.pop.classList.remove(...POP_CLASSES);
     for (const node of st.pop.querySelectorAll(`[${FOLDED}]`)) node.removeAttribute(FOLDED);
   }
@@ -3518,6 +4183,37 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   lifecycle.add(() => {
     if (placeId != null) win.cancelAnimationFrame(placeId);
     placeId = null;
+  });
+  let lifted = 0;
+  let liftId = null;
+  function liftPop() {
+    if (!inFrame) {
+      if (liftId != null) return;
+      liftId = win.requestAnimationFrame(() => {
+        liftId = null;
+        inFrameDo(liftPop);
+      });
+      return;
+    }
+    const pop = st.pop;
+    const ta = st.ta;
+    if (!pop?.isConnected || !ta) return;
+    let lift = 0;
+    if (pop.style.bottom === "0px") {
+      const p = pop.getBoundingClientRect();
+      const t = ta.getBoundingClientRect();
+      const textTop = t.top + (parseFloat(win.getComputedStyle(ta).paddingTop) || 0);
+      const top = p.top + lifted;
+      const over = p.bottom + lifted - textTop;
+      if (top < textTop && over > 0) lift = Math.max(0, Math.round(Math.min(over, top)));
+    }
+    if (lift === lifted) return;
+    pop.style.marginBottom = lift ? `${lift}px` : "";
+    lifted = lift;
+  }
+  lifecycle.add(() => {
+    if (liftId != null) win.cancelAnimationFrame(liftId);
+    liftId = null;
   });
   function placePanes() {
     const pop = st.pop;
@@ -4256,6 +4952,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     const pop = st.pop;
     if (!scope || !pop) return;
     pop.classList.add(SCOPE_OPEN);
+    liftPop();
     const popRect = pop.getBoundingClientRect();
     const main = pop.classList.contains("rm-autocomplete__results--expanded") ? pop.querySelector(".rm-autocomplete__results-main") : null;
     scopePanel.place(main ? main.getBoundingClientRect() : popRect, popRect, st.ta.getBoundingClientRect());
@@ -4280,7 +4977,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
       scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
       scopeModel.drillKey = key;
     }
-    scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect() });
+    scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
+    if (scopePreview.unfinished) scheduleRest(scopePreview, () => st.phase === "SCOPE" && Boolean(st.scope?.preview), "scope");
   }
   function scopeMove(delta) {
     const level = scopeLevel();
@@ -4672,7 +5370,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.6.1";
+var VERSION = "0.7.0";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 function safeLocalStorage() {

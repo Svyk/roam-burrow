@@ -27,6 +27,8 @@ import {
 const CONFIGS = {
   svy: {
     ref: { query: "((ant man", uid: "3XSu0IJ8f" },
+    // Svy's case (2026-10-25): two 60-90 KB R code blocks were Burrow's rows for `((black pan`.
+    accept: [{ query: "((black pan", uid: "cs1PFq5go" }],
     alias: { query: "[[lorinatr", insert: "[lorinator]([[Lori Boyd]])" },
     listed: { query: "[[lorinator" },
     drill: { query: "[[MCU Watch Order > watch order > ant man", uid: "3XSu0IJ8f" },
@@ -51,7 +53,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows"];
 const REF_COMMAND = "Burrow: block reference search";
 
 const [title, configName, ...flags] = process.argv.slice(2);
@@ -163,8 +165,14 @@ async function state() {
       phase: b?.state.phase ?? "gone",
       rows: [...document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row")].map((r) => ({
         text: r.textContent, active: r.classList.contains("burrow-active"),
+        labels: [...r.querySelectorAll(".burrow-label")].map((n) => n.textContent),
+        code: [...r.querySelectorAll(".burrow-code")].map((n) => n.textContent),
+        classes: [...new Set([...r.querySelectorAll("*")].flatMap((n) => [...n.classList].filter((x) => x.startsWith("burrow-"))))].sort(),
         checks: [...r.querySelectorAll(".burrow-check")].map((n) => `${n.classList.contains("burrow-done") ? "done" : "todo"}:${getComputedStyle(n, "::after").content !== "none" ? "on" : "off"}:${getComputedStyle(n).pointerEvents === "none" ? "ro" : "rw"}`),
       })),
+      // Block text is never HTML: no element the text could have made, and no handler that ran.
+      htmlEls: [...document.querySelectorAll(".burrow-strip img, .burrow-strip b, .burrow-strip script")].map((n) => n.tagName),
+      xss: window.__burrowXss ?? null,
       firstUid: b?.state.rows?.[0]?.uid ?? null,
       activeUid: b && b.state.phase === "OWNED" ? b.state.rows?.[b.state.active]?.uid ?? null : null,
       context: document.querySelector(".burrow-strip:not([hidden]) .burrow-context")?.textContent ?? null,
@@ -180,6 +188,7 @@ async function state() {
           trail: pane.querySelector(".burrow-trail")?.textContent,
           target: pane.querySelector(".burrow-target")?.textContent ?? null,
           checks: [...pane.querySelectorAll(".burrow-node.burrow-task-todo, .burrow-node.burrow-task-done")].length,
+          targetClasses: [...new Set([...(pane.querySelector(".burrow-target")?.querySelectorAll("*") || [])].flatMap((n) => [...n.classList].filter((x) => x.startsWith("burrow-"))))].sort(),
           label: getComputedStyle(pane.querySelector(".burrow-trail"), "::before").content,
           previewMore: pane.querySelector(".burrow-more")?.textContent ?? null,
           targetVisible: (() => {
@@ -240,6 +249,11 @@ async function state() {
             what: panel.querySelector(".burrow-scope-what")?.textContent ?? "",
             rows: scopeRowsList.map((r) => r.textContent),
             rowsFull: scopeRowsList.map((r) => ({ text: r.textContent, cls: r.className })),
+            rowsRich: scopeRowsList.map((r) => ({
+              text: r.textContent,
+              labels: [...r.querySelectorAll(".burrow-label")].map((n) => n.textContent),
+              checks: [...r.querySelectorAll(".burrow-check")].length,
+            })),
             active: scopeRowsList.find((r) => r.classList.contains("burrow-active"))?.textContent ?? null,
             filter: panel.querySelector(".burrow-scope-filter")?.textContent ?? "",
           } : null,
@@ -860,10 +874,107 @@ const BLOCK_CASES = [
     check: ({ snaps: [a, b] }) => {
       if (!a?.rows[0]?.active || !a.rows[0].checks.includes("todo:off:ro")) return `row ${JSON.stringify(a?.rows)}`;
       if (!a.rowPreview?.docked || !a.preview?.target?.includes("zebra smart parent") || !(a.preview.checks >= 1)) return `preview ${JSON.stringify(a?.preview)} ${JSON.stringify(a?.rowPreview)}`;
-      if (!b?.scope || !b.scope.rows.some((row) => row.includes("{{TODO today:SmartBlock:TODO today}}"))) return `drill panel ${JSON.stringify(b?.scope)} phase`;
+      // With rich rows the macro is a label, "TODO today": not a checkbox, not the raw {{…}} text.
+      if (!b?.scope || !b.scope.rowsRich.some((row) => row.text.trim() === "TODO today" && !row.checks)) return `drill panel ${JSON.stringify(b?.scope?.rowsRich)} phase`;
       return null;
     },
   },
+  // 0.7.0: ranking and rich rows, on the fixture's zebra blocks.
+  {
+    name: "(( code rows only for a code-looking query: ((zebra plot none, ((zebra_plot the R row and its line", query: "((zebra plot",
+    keys: ["snap", "Backspace", "Backspace", "Backspace", "Backspace", "Backspace", "type:_plot", "wait:400", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      if ((a?.rows || []).some((row) => row.labels.includes("R"))) return `a code row for a prose query ${JSON.stringify(a.rows)}`;
+      const row = (b?.rows || []).find((r) => JSON.stringify(r.labels) === '["R"]');
+      if (!row || JSON.stringify(row.code) !== JSON.stringify(["zebra_plot <- function(d) ggplot(d, aes(x, y))"])) return `no R row with its line for ((zebra_plot ${JSON.stringify(b?.rows)}`;
+      return row.text.includes("```") ? `fence left in the row ${JSON.stringify(row.text)}` : null;
+    },
+  },
+  {
+    name: "(( rich rows: marks, code, links, tags and block refs drawn like Roam", query: "((zebra rich",
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const row = a?.rows[0];
+      if (!row) return `no row ${JSON.stringify(a?.rows)}`;
+      const missing = ["burrow-b", "burrow-i", "burrow-hl", "burrow-s", "burrow-code", "burrow-ref", "burrow-tag", "burrow-bref"].filter((x) => !row.classes.includes(x));
+      if (missing.length) return `row lacks ${missing.join(", ")}: ${JSON.stringify(row)}`;
+      const raw = ["**", "__", "^^", "~~", "[[", "((", "`"].filter((x) => row.text.includes(x));
+      if (raw.length) return `markup text left in the row (${raw.join(" ")}) ${JSON.stringify(row.text)}`;
+      return row.text.includes("never grok for writing") ? null : `block ref not resolved ${JSON.stringify(row.text)}`;
+    },
+  },
+  {
+    name: "(( rich rows off: the 0.6.1 drawing, no refs or labels", query: "((zebra rich", settings: { richRows: false },
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const row = a?.rows[0];
+      if (!row) return `no row ${JSON.stringify(a?.rows)}`;
+      return row.classes.includes("burrow-ref") || row.classes.includes("burrow-label") ? `rich classes with richRows off ${JSON.stringify(row.classes)}` : null;
+    },
+  },
+  {
+    name: "(( rich rows: macros and files are labels", query: "((zebra macros",
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const row = a?.rows[0];
+      if (!row) return `no row ${JSON.stringify(a?.rows)}`;
+      const missing = ["embed", "query", "zebra go"].filter((x) => !row.labels.includes(x));
+      if (missing.length) return `labels lack ${missing.join(", ")}: ${JSON.stringify(row.labels)}`;
+      return row.text.includes("{{") ? `macro text left ${JSON.stringify(row.text)}` : null;
+    },
+  },
+  {
+    name: "(( rich rows: images and files are labels", query: "((zebra media",
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const row = a?.rows[0];
+      if (!row) return `no row ${JSON.stringify(a?.rows)}`;
+      const missing = ["image", "file"].filter((x) => !row.labels.includes(x));
+      if (missing.length) return `labels lack ${missing.join(", ")}: ${JSON.stringify(row.labels)}`;
+      const raw = ["{{", "![", "]("].filter((x) => row.text.includes(x));
+      return raw.length ? `markup text left (${raw.join(" ")}) ${JSON.stringify(row.text)}` : null;
+    },
+  },
+  {
+    name: "(( a long row is cut around the match", query: "((zebra snippet",
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const row = a?.rows[0];
+      if (!row) return `no row ${JSON.stringify(a?.rows)}`;
+      return row.text.startsWith("…") && row.text.includes("zebra snippet") ? null : `row text ${JSON.stringify(row.text)}`;
+    },
+  },
+  {
+    name: "(( block text is never HTML", query: "((zebra html",
+    keys: ["snap", "wait:300", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      const row = a?.rows[0];
+      if (!row) return `no row ${JSON.stringify(a?.rows)}`;
+      if (!row.text.includes("<img")) return `the tag is not shown as text ${JSON.stringify(row.text)}`;
+      if (a.htmlEls.length || b?.htmlEls.length) return `HTML elements in the strip ${JSON.stringify([a.htmlEls, b?.htmlEls])}`;
+      return a.xss === null && b?.xss === null ? null : `onerror ran: window.__burrowXss = ${JSON.stringify(b?.xss ?? a.xss)}`;
+    },
+  },
+  {
+    name: "(( rich preview lines", query: "((zebra rich", restorePreview: true,
+    keys: ["preview-open", "wait:600", "snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const classes = a?.preview?.targetClasses || [];
+      const missing = ["burrow-b", "burrow-ref"].filter((x) => !classes.includes(x));
+      return missing.length ? `preview target lacks ${missing.join(", ")}: ${JSON.stringify(a?.preview)}` : null;
+    },
+  },
+  ...(config.accept || []).map(({ query, uid }) => ({
+    // Real data, no fixture: the original block leads and no code block outranks it.
+    name: `acceptance: ${query} → ((${uid})) first and pre-selected, no code rows`, query,
+    keys: ["snap", "Escape"],
+    check: ({ snaps: [a] }) => {
+      if (a?.firstUid !== uid) return `first row ${JSON.stringify(a?.firstUid)} != ${uid} ${JSON.stringify(a?.rows)}`;
+      if (a.activeUid !== uid || !a.rows[0]?.active) return `first row not pre-selected: active ${JSON.stringify(a.activeUid)} ${JSON.stringify(a.rows)}`;
+      const code = a.rows.filter((row) => row.labels.length || row.code.length);
+      return code.length ? `code rows ${JSON.stringify(code)}` : null;
+    },
+  })),
   {
     name: "(( where the block lives: page › parent and its children under the highlighted row", query: "((never grok",
     keys: ["snap", "Escape"],
@@ -1313,7 +1424,7 @@ async function runPickCase() {
     window.__burrowDev.values.pickMemory = true;
     return { key, value };
   });
-  const query = "((zebra burrow";
+  const query = "((zebra burrow pick";
   const typeAndRead = async () => {
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed" };
@@ -1598,6 +1709,9 @@ async function runTextOverlap() {
       await visit(`(( rows, a tip on a row, ${p}`, config.ref.query, ["hover:.burrow-strip .burrow-row", "wait:700"], { preview });
       await visit(`(( Roam's row highlighted, ${p}`, config.ref.query, ["down-past-strip"], { preview });
       await visit(`(( tasks, ${p}`, "((zebra task", [], { preview });
+      await visit(`(( rich rows, ${p}`, "((zebra rich", [], { preview });
+      await visit(`(( code row, ${p}`, "((zebra_plot", [], { preview });
+      await visit(`(( a cut long row, ${p}`, "((zebra snippet", [], { preview });
       // The preview scrolls to a line far down its siblings: its header stays on top.
       await visit(`(( preview scrolled to its highlighted line, ${p}`, "((many 50", ["wait:400"], { preview });
       await visit(`(( ⇧⇥ up to the parent, ${p}`, "((never grok", ["shift+Tab", "wait:300"], { preview });
