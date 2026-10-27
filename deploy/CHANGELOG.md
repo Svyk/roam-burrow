@@ -4,6 +4,20 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-27
+
+### Added
+
+- **Recent rows** (`recentRows`, on; BRW-14). With up to two characters after `((` or `[[`, Burrow shows up to three rows: the blocks or pages you picked most recently, then the ones edited most recently (the last 14 days). Nothing is selected, so Enter does what Roam does; ↑ from Roam's first row moves onto them. A character narrows them to those with a word that starts with it. In `[[`, alias rows come first and recent pages fill what is left; a page Roam already lists is not shown twice. The block or page you are editing is never offered. Hover says `Recent pick` or `Edited recently`.
+- **Frequent first** (`frecency`, on). Every pick feeds a score that halves every two weeks. Among rows that match equally well and have as many references, the ones you pick more often and more lately come first, for any query and also for alias rows. Picks of Roam's own rows count too: Burrow reads back what Roam inserted. Kept in this browser only: uids, a score and a time (never block text), at most 500 per graph.
+- **Burrow: forget recent picks** in the command palette clears this graph's history. **Disable all features** also turns off the two new switches.
+
+### Changed
+
+- **Frequent first replaces Pick memory.** The exact-query rule is gone with its `pickMemory` switch; what you had picked under `burrow:picks:<graph>` is folded into the new store the first time 0.8.1 loads (each pick at its own time; the query text and alias are dropped) and the old key is removed.
+- Cost: the last-14-days query (about 185 ms in notes, 274 ms the first time; 105k blocks, 4,006 edits) runs only inside the quiet idle build, the first one included, never with a popup open; a keystroke does a few array operations on lists made at idle, 0 queries and 0 pulls.
+- Live gates: recent pick first and not selected with the same Enter in the off and gone arms, three picks flip two equal rows, forget clears; the pick-memory case is gone.
+
 ## [0.7.0] - 2026-10-26
 
 ### Fixed

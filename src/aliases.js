@@ -98,8 +98,9 @@ export function matchAliases(index, plan, { strict = false, limit = 3, skip, pic
     if (match.score < 0 || match.tier === "close") continue;
     hits.push({ ...entry, score: match.score, level: match.level, tier: match.tier });
   }
-  const pick = (hit) => picked?.get(`${hit.uid}:${hit.alias}`) || 0;
-  hits.sort((a, b) => pick(b) - pick(a) || b.score - a.score || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
+  // picked: page uid -> frecency score (spec §18), a tie-break after the match.
+  const pick = (hit) => picked?.get(hit.uid) || 0;
+  hits.sort((a, b) => b.score - a.score || pick(b) - pick(a) || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
   return hits.slice(0, limit);
 }
 
