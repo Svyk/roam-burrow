@@ -13,6 +13,7 @@ import { createScopePanel } from "./scopeview.js";
 import { looksLikeCode, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
 import { checkbox, hasTask, taskParts } from "./tasks.js";
 import { isDarkHost } from "./theme.js";
+import { createThumbs } from "./thumbs.js";
 import { createTips } from "./tips.js";
 import { applyToken, findToken, tokenStillValid } from "./token.js";
 import { wheelPlan } from "./wheel.js";
@@ -117,8 +118,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   const resolveRef = (uid) => indexes.refs?.byUid.get(uid)?.string ?? tree.get(uid)?.string ?? null;
   const richFor = (uid, string) => (setting("richRows") ? richCache.get(uid, string, () => richParts(string, { resolve: resolveRef })) : null);
   const previewRich = (item) => (item.string != null ? richFor(item.uid, item.string) : null);
-  const preview = createPreview({ doc, win, lifecycle, rich: previewRich });
-  const scopePreview = createPreview({ doc, win, lifecycle, rich: previewRich });
+  const thumbs = createThumbs({ doc, win, api, perf, lifecycle });
+  const preview = createPreview({ doc, win, lifecycle, rich: previewRich, thumbs });
+  const scopePreview = createPreview({ doc, win, lifecycle, rich: previewRich, thumbs });
   const scopePanel = createScopePanel({
     doc, win, lifecycle, highlight: (text, query) => highlight(text, query),
     rich: (row) => (row.node && row.more == null ? richFor(row.node.uid, row.node.string) : null),
@@ -461,7 +463,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
+        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
         model.drillKey = st.drill.key;
       }
       // The lines now; their place (a layout read) in the frame.
@@ -480,6 +482,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       // The pane keeps the last row's outline until this one is drawn, so
       // moving between Burrow's rows does not flash it (or resize Roam's popover).
       cancelRowPreview();
+      thumbs.cancel();
       if (model?.drillKey?.startsWith("row:") !== true) hidePreview();
       rowPreviewKey = row.key;
       scheduleRowPreview(row);
@@ -578,7 +581,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty") });
+    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
     next.drillKey = `row:${row.key}`;
     return next;
   }
@@ -1326,6 +1329,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.prompt = null;
     promptRows = [];
     cancelRowPreview();
+    thumbs.clear();
     model = null;
     scopeModel = null;
     tree.clear();
@@ -1854,7 +1858,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!page) { scopePreview.hide(); return; }
     const key = `${page.uid}:${target?.uid ?? ""}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty") });
+      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });

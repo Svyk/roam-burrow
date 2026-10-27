@@ -63,7 +63,7 @@ test("a second load disposes the previous runtime before registering again", asy
 
 test("every feature has its own switch in the settings panel", () => {
   const ids = createSettingsPanel().settings.filter((s) => s.action.type === "switch").map((s) => s.id);
-  assert.deepEqual(ids.sort(), ["aliasChips", "aliasExpand", "aliasInline", "aliasPages", "aliasPreselect", "betterMatch", "drill", "drillPreview", "aliasCreate", "aliasDelete", "drillCap", "drillEmpty", "drillOrdinals", "helpNudge", "helpSheet", "helpTips", "keyHints", "pageBoost", "paneLayout", "perfHud", "pickMemory", "refContext", "refOutline", "refPreselect", "refProse", "refRanking", "richRows", "refSearch", "refSearchHotkey", "rowPreview", "tabDrill"].sort());
+  assert.deepEqual(ids.sort(), ["aliasChips", "aliasExpand", "aliasInline", "aliasPages", "aliasPreselect", "betterMatch", "drill", "drillPreview", "aliasCreate", "aliasDelete", "drillCap", "drillEmpty", "drillOrdinals", "helpNudge", "helpSheet", "helpTips", "keyHints", "pageBoost", "paneLayout", "perfHud", "pickMemory", "previewImages", "refContext", "refOutline", "refPreselect", "refProse", "refRanking", "richRows", "refSearch", "refSearchHotkey", "rowPreview", "tabDrill"].sort());
   assert.equal(DEFAULTS.refPreselect, true);
   assert.equal(DEFAULTS.pickMemory, false);
 });

@@ -207,6 +207,44 @@
   background: var(--burrow-highlight, rgba(72, 175, 240, 0.22));
 }
 
+/* The highlighted line's image: a box reserved when the line is drawn, so the
+   image arriving moves nothing. The line drops its 3-line clamp for it. */
+.burrow-node:has(> .burrow-thumb) { display: block; }
+.burrow-thumb {
+  display: block;
+  box-sizing: border-box;
+  position: relative;
+  width: 240px;
+  max-width: 100%;
+  height: 160px;
+  margin: 4px 0 2px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgba(16, 22, 26, 0.06);
+}
+.burrow-dark .burrow-thumb { background: rgba(255, 255, 255, 0.06); }
+.burrow-thumb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.burrow-thumb-more {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 11px;
+  line-height: 14px;
+  opacity: 0.7;
+}
+.burrow-thumb[data-state="failed"] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+}
+.burrow-thumb[data-state="failed"] .burrow-label { margin-right: 0; white-space: normal; text-align: center; }
+
 .burrow-more {
   opacity: 0.5;
   font-size: 12px;
