@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -107,9 +107,16 @@ const SCENARIOS = [
   { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
+  // 0.8.1 recent rows: a pick seeded first (uids only), nothing selected; ↑ moves onto them.
+  { id: "58-recent-empty-block", query: "((", keys: ["preview-closed"], seedPicks: true },
+  { id: "59-recent-moved-onto", query: "((", keys: ["preview-closed", "ArrowUp"], seedPicks: true },
+  { id: "60-recent-two-chars", query: "((ze", keys: ["preview-closed"], seedPicks: true },
+  { id: "61-recent-empty-page", query: "[[", keys: ["preview-closed"], seedPicks: true },
+  { id: "62-tip-recent-row", query: "((", keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"], seedPicks: true },
 ];
 
 const c = await connect(title);
+let fixture = null;
 
 async function setArm(arm) {
   const code = await readFile(codePath, "utf8");
@@ -269,6 +276,13 @@ let cleaning = null;
 const cleanup = () => (cleaning ||= (async () => {
   try {
     await placeNormal(c).catch(() => {});
+    await c.evaluate(() => {
+      for (const { key, value } of window.__burrowShotsPicks || []) {
+        if (value == null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      }
+      window.__burrowShotsPicks = null;
+    }).catch(() => {});
     await setArm("gone");
     await cleanupFixture(c);
   } catch (error) {
@@ -296,7 +310,7 @@ if (installed.error) { await cleanup(); throw new Error(installed.error); }
 try {
   await mkdir(outDir, { recursive: true });
   await setArm("gone");
-  await setupFixture(c, { drillTree: true });
+  fixture = await setupFixture(c, { drillTree: true });
   const loaded = await setArm("on");
   if (!loaded.refs) throw new Error("index not built");
   const stamp = `${label}-${theme || "default"}`;
@@ -307,6 +321,16 @@ try {
       values.helpNudgeSeen = true;
       Object.assign(values, settings || {});
     }, scenario.settings);
+    // The browser's own pick store is put back after the run (restorePicks).
+    if (scenario.seedPicks) {
+      await c.evaluate(({ uids, page }) => {
+        const f = window.__BURROW.frecency;
+        window.__burrowShotsPicks ??= [`burrow:frecency:${window.roamAlphaAPI.graph?.name ?? "graph"}`].map((key) => ({ key, value: localStorage.getItem(key) }));
+        f.clear();
+        for (const uid of uids) f.record("block", uid);
+        if (page) f.record("page", page);
+      }, { uids: [fixture.drill.pickB, fixture.drill.pickA], page: fixture.chipsUid });
+    }
     await snapshotTitles(c);
     let primed = await primeFixture(c, SEED);
     if (!primed.ok) { await sleep(800); primed = await primeFixture(c, SEED); }

@@ -1888,9 +1888,10 @@ const note = (name, r, before) => report.lines.push(`${report.failures.length > 
 const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
 const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
+const PICKS = "recent and frequent picks: pick then empty ((, 3 picks reorder, forget";
 const TEXT = "text boxes: no text overlaps another in any picker state";
 if (only) {
-  const names = [...BYTE_CASES, ...ALIAS_RUN_CASES, ...WRITE_CASES, ...TAB_CASES].map((k) => k.name).concat(ABOVE, TEXT);
+  const names = [...BYTE_CASES, ...ALIAS_RUN_CASES, ...WRITE_CASES, ...TAB_CASES].map((k) => k.name).concat(ABOVE, TEXT, PICKS);
   if (!names.includes(only)) throw new Error(`unknown case ${JSON.stringify(only)}; names: ${names.map((n) => JSON.stringify(n)).join(", ")}`);
 }
 // One cleanup for the finally path and for SIGINT / SIGTERM / a crash, so the
@@ -1970,6 +1971,16 @@ const aliasVerdict = (kase, r) => {
   }
   return failures;
 };
+const pickVerdict = ({ recent, frecency, forget }) => {
+  const failures = [];
+  // The two rows tie, so either may come first; the other one is picked.
+  if (recent.first?.length !== 2 || !recent.chosen || recent.picked !== `${SEED}((${recent.chosen}))` || recent.firstUid !== recent.chosen || recent.phase !== "ARMED" || recent.active !== -1) {
+    failures.push(`recent rows: ${JSON.stringify(recent)}`);
+  }
+  if (!frecency.target || frecency.afterFirst !== frecency.target || frecency.rounds.length !== 3) failures.push(`frequent first: ${JSON.stringify(frecency)}`);
+  if (forget.size !== 0 || forget.kinds.includes("pick")) failures.push(`forget recent picks: ${JSON.stringify(forget)}`);
+  return failures;
+};
 const tabVerdict = (kase, on, gone, refChild) => {
   const failures = [];
   if (on.error || gone.error) failures.push(`${kase.name}: ${on.error || gone.error}`);
@@ -1998,7 +2009,7 @@ try {
     const kind = BYTE_CASES.some((k) => k.name === only) ? "byte"
       : ALIAS_RUN_CASES.some((k) => k.name === only) ? "alias"
       : WRITE_CASES.some((k) => k.name === only) ? "write"
-      : only === ABOVE ? "above" : only === TEXT ? "text" : "tab";
+      : only === ABOVE ? "above" : only === TEXT ? "text" : only === PICKS ? "picks" : "tab";
     report.only = { name: only, kind, runs: [] };
     if (kind === "byte") {
       const kase = BYTE_CASES.find((k) => k.name === only);
@@ -2016,6 +2027,13 @@ try {
         }
       }
       if (results.on && results.off && results.gone) report.failures.push(...byteVerdict(kase, results));
+    } else if (kind === "picks") {
+      for (let i = 0; i < repeat; i++) {
+        await setArm("on");
+        const r = await runPickCases();
+        report.only.runs.push({ arm: "on", ...r });
+        report.failures.push(...pickVerdict(r));
+      }
     } else if (kind === "alias" || kind === "write") {
       const kase = [...ALIAS_RUN_CASES, ...WRITE_CASES].find((k) => k.name === only);
       for (let i = 0; i < repeat; i++) {
@@ -2120,15 +2138,7 @@ try {
     report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${ABOVE}`);
   }
   report.pick = await runPickCases();
-  {
-    const { recent, frecency, forget } = report.pick;
-    // The two rows tie, so either may come first; the other one is picked.
-    if (recent.first?.length !== 2 || !recent.chosen || recent.picked !== `${SEED}((${recent.chosen}))` || recent.firstUid !== recent.chosen || recent.phase !== "ARMED" || recent.active !== -1) {
-      report.failures.push(`recent rows: ${JSON.stringify(recent)}`);
-    }
-    if (!frecency.target || frecency.afterFirst !== frecency.target || frecency.rounds.length !== 3) report.failures.push(`frequent first: ${JSON.stringify(frecency)}`);
-    if (forget.size !== 0 || forget.kinds.includes("pick")) report.failures.push(`forget recent picks: ${JSON.stringify(forget)}`);
-  }
+  report.failures.push(...pickVerdict(report.pick));
   // Real pages, read-only: the spec's drill example resolves and inserts.
   report.realDrill = await runCase("on", { name: "real drill", query: config.drill.query, keys: ["Enter"] });
   if (report.realDrill.string !== `${SEED}((${config.drill.uid}))` || report.realDrill.newPages?.length) {

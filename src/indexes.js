@@ -189,8 +189,9 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     if (!first && refs && !quiet()) { perf.counters.rebuildsDeferred = (perf.counters.rebuildsDeferred || 0) + 1; return false; }
     const rows = await q(REFERENCED_BLOCKS);
     // The newest edits: blocks (with their text, pulled once) and pages.
-    let nextRecent = null;
-    if (setting("recentRows")) {
+    // Quiet only, the first build too; skipped, the last list stays.
+    let nextRecent = setting("recentRows") ? recent : null;
+    if (setting("recentRows") && quiet()) {
       try {
         const edited = latestEdits(await q(EDITED_SINCE, Date.now() - RECENT_DAYS * 86_400_000), { blocks: 30 });
         nextRecent = { blocks: pullBlocks(api, edited.blocks), pages: edited.pages, builtAt: Date.now() };

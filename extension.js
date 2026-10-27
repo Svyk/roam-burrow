@@ -1186,8 +1186,8 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
       return false;
     }
     const rows = await q(REFERENCED_BLOCKS);
-    let nextRecent = null;
-    if (setting("recentRows")) {
+    let nextRecent = setting("recentRows") ? recent : null;
+    if (setting("recentRows") && quiet()) {
       try {
         const edited = latestEdits(await q(EDITED_SINCE, Date.now() - RECENT_DAYS * 864e5), { blocks: 30 });
         nextRecent = { blocks: pullBlocks(api, edited.blocks), pages: edited.pages, builtAt: Date.now() };
