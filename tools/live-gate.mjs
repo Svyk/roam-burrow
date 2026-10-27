@@ -225,7 +225,11 @@ async function state() {
             state: t.getAttribute("data-state"), w: Math.round(box.width), h: Math.round(box.height),
             rect: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
             inTarget: t.closest(".burrow-target") != null,
-            img: img ? { src: (img.getAttribute("src") || "").split(":")[0], lazy: img.loading, natural: img.naturalWidth } : null,
+            // Where the box sits in the pane's content (the pane itself may be re-placed by Roam's popover).
+            inPane: (() => { const p = pane.getBoundingClientRect(); return { left: Math.round(box.left - p.left), top: Math.round(box.top - p.top + pane.scrollTop) }; })(),
+            pane: (() => { const p = pane.getBoundingClientRect(); return { left: Math.round(p.left), top: Math.round(p.top), width: Math.round(p.width), height: Math.round(p.height) }; })(),
+            img: img ? { src: (img.getAttribute("src") || "").split(":")[0], head: (img.getAttribute("src") || "").slice(0, 48), lazy: img.loading, natural: img.naturalWidth } : null,
+            line: (t.closest(".burrow-node")?.textContent || "").slice(0, 60),
             more: t.querySelector(".burrow-thumb-more")?.textContent ?? null,
             label: t.querySelector(".burrow-label")?.textContent ?? null,
             text: t.textContent,
@@ -235,7 +239,7 @@ async function state() {
         return null;
       })(),
       thumbAny: document.querySelectorAll(".burrow-thumb").length,
-      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null },
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null },
       urlNet: window.__burrowUrlNet ?? null,
       pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
       rowPreview: (() => {
@@ -1050,9 +1054,10 @@ const BLOCK_CASES = [
       const u = b?.thumb;
       if (!u || u.state !== "ok" || !(u.img?.natural > 0)) return `second snap ${JSON.stringify(u)}`;
       const scheme = config.encrypted ? "blob" : "https";
-      if (u.img.src !== scheme) return `image src scheme ${u.img.src} != ${scheme}`;
+      if (u.img.src !== scheme) return `image src scheme ${u.img.src} != ${scheme}: ${JSON.stringify(u)}`;
       if (!config.encrypted && u.img.lazy !== "lazy") return `loading ${u.img.lazy} != lazy`;
-      if (JSON.stringify(t.rect) !== JSON.stringify(u.rect)) return `layout shift ${JSON.stringify(t.rect)} -> ${JSON.stringify(u.rect)}`;
+      // The image arriving moves nothing: the box keeps its size and its place in the pane's content.
+      if (t.w !== u.w || t.h !== u.h || JSON.stringify(t.inPane) !== JSON.stringify(u.inPane)) return `layout shift ${JSON.stringify([t.rect, t.inPane, t.pane])} -> ${JSON.stringify([u.rect, u.inPane, u.pane])}`;
       if (t.overlaps || u.overlaps) return `thumbnail overlaps text ${JSON.stringify([t.overlaps, u.overlaps])}`;
       return d?.thumbCounters?.urls === 0 && d.thumbAny === 0 ? null : `after Escape ${JSON.stringify(d?.thumbCounters)} thumbs ${d?.thumbAny}`;
     },
@@ -1068,7 +1073,7 @@ const BLOCK_CASES = [
     check: ({ snaps: [a, b] }) => {
       const t = b?.thumb;
       if (t?.state !== "failed" || !t.label?.includes("image") || !t.text.includes("zebra broken alt")) return `failed state ${JSON.stringify(t)}`;
-      if (a?.thumb && JSON.stringify(a.thumb.rect) !== JSON.stringify(t.rect)) return `box changed ${JSON.stringify(a.thumb.rect)} -> ${JSON.stringify(t.rect)}`;
+      if (a?.thumb && (a.thumb.w !== t.w || a.thumb.h !== t.h || JSON.stringify(a.thumb.inPane) !== JSON.stringify(t.inPane))) return `box changed ${JSON.stringify([a.thumb.rect, a.thumb.inPane])} -> ${JSON.stringify([t.rect, t.inPane])}`;
       return b.pageErrors === 0 ? null : `page errors ${b.pageErrors}`;
     },
   },
@@ -1077,12 +1082,14 @@ const BLOCK_CASES = [
     keys: ["preview-open", "wait:400", "Tab", "wait:300", "reset-loads", "count-urls", ...Array(9).fill("ArrowDown"), "wait-thumb:ok:6000", "snap", "Escape", "Escape", "wait:200", "snap"],
     check: ({ snaps: [a, b] }) => {
       if (!(a?.thumbCounters?.loads <= 1)) return `loads ${JSON.stringify(a?.thumbCounters)}`;
+      // Each ↓ redraws the preview beside the list, with its box, in the key's own work: held to the 4 ms budget.
+      if (!(a.thumbCounters.keyP95 <= 4)) return `per-key p95 ${a.thumbCounters.keyP95} ms over 4`;
       if (a.thumb?.state !== "ok" || !a.preview?.target?.includes("zebra photo 10")) return `last row ${JSON.stringify(a?.thumb)} ${JSON.stringify(a?.preview?.target)}`;
       return b?.thumbCounters?.urls === 0 && b.urlNet === 0 ? null : `after close ${JSON.stringify(b?.thumbCounters)} urlNet ${b?.urlNet}`;
     },
   },
   {
-    name: "[[ drill preview shows the target's thumbnail", query: `[[${FIXTURE_PAGE} > zebra photos > zebra photo 03`, restorePreview: true,
+    name: "[[ drill preview shows the target's thumbnail", query: `[[${FIXTURE_PAGE} > zebra photos > zebra photo 03`, restorePreview: true, mayCreatePage: true,
     keys: ["wait-thumb:ok:6000", "snap", "Escape"],
     check: ({ snaps: [a] }) => (a?.thumb?.inTarget && a.thumb.state === "ok" ? null : `thumb ${JSON.stringify(a?.thumb)} preview ${JSON.stringify(a?.preview?.target)}`),
   },
