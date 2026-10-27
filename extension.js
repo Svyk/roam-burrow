@@ -614,6 +614,7 @@ function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => fa
   if (changed) index.prefilter = null;
   return { next: at, changed };
 }
+var COMMON_WORD = 200;
 function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false } = {}) {
   if (!index || !plan) return [];
   const hits = /* @__PURE__ */ new Map();
@@ -651,10 +652,11 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, p
   }
   const words = plan.clauses.reduce((n, q) => n + q.tokens.length, 0);
   if (recall && words >= 2 && hits.size < limit) {
+    const lists = plan.clauses.flatMap((clause) => clause.tokens).map((word) => index.words.get(word) || []);
+    const rare = lists.filter((list) => list.length <= COMMON_WORD);
+    const seeds = rare.length ? rare : lists;
     const candidates2 = /* @__PURE__ */ new Set();
-    for (const clause of plan.clauses) {
-      for (const word of clause.tokens) for (const entry of index.words.get(word) || []) candidates2.add(entry);
-    }
+    for (const list of seeds) for (const entry of list) candidates2.add(entry);
     for (const entry of candidates2) if (!strictHit.has(entry)) consider(entry, {});
   }
   for (const hit of hits.values()) hit.quoter = hit.entry.quotes.some((uid) => uid !== hit.entry.uid && hits.has(uid));

@@ -199,3 +199,15 @@ test("links inside a macro are not what the block links", () => {
   assert.equal(index.entries[0].linked, null);
   assert.deepEqual(index.entries[1].linked, ["Some Page"]);
 });
+
+test("recall: a word in hundreds of blocks seeds candidates only when every query word is that common", () => {
+  const rows = [[uid(1), "how to stay focussed at work", 1]];
+  for (let i = 2; i < 260; i += 1) rows.push([uid(i), `notes to self number ${i}`, 1]);
+  const index = buildRefIndex(rows);
+  // "stay" is rare and exact; "focused" matches "focussed" fuzzily.
+  assert.equal(rankRefs(index, searchPlan("stay focused"))[0]?.uid, uid(1));
+  // "to" is in 259 blocks: with a rare word beside it, it seeds nothing on its own.
+  assert.equal(rankRefs(index, searchPlan("to focused")).length, 0);
+  // Every word common: the common word still seeds.
+  assert.equal(rankRefs(index, searchPlan("to self")).length > 0, true);
+});
