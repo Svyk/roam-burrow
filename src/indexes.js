@@ -1,5 +1,6 @@
 import { aliasRowsFromPull, buildAliasIndex, keywordTitles, setAliasRefs } from "./aliases.js";
 import { aliasKeyTargets, buildRefIndexSliced, rekeyAliases } from "./refindex.js";
+import { RECENT_DAYS, latestEdits, pullBlocks } from "./recents.js";
 import { buildTitleIndex } from "./titles.js";
 
 const TTL_MS = 60_000;
@@ -18,6 +19,11 @@ const REKEY_SLICE_MS = 3;
 
 const REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
   :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
+// The blocks edited in the last RECENT_DAYS days with their pages (recent
+// rows, spec §18): about 180 ms on the main thread in a 114k-block graph, so
+// it runs only inside the quiet build, with the long query above.
+const EDITED_SINCE = `[:find ?u ?t ?pu ?pt :in $ ?since
+  :where [?b :edit/time ?t] [(> ?t ?since)] [?b :block/uid ?u] [?b :block/page ?p] [?p :block/uid ?pu] [?p :node/title ?pt]]`;
 const TITLES = "[:find ?t ?u :where [?p :node/title ?t] [?p :block/uid ?u]]";
 const WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] [?p :block/children ?c]]";
 // The blocks that reference an alias attribute page, read with one pull per
@@ -34,6 +40,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
   let aliases = null;
   let refs = null;
   let titles = null;
+  let recent = null;
   let builtAt = 0;
   let keyword = null;
   let pending = false;
@@ -181,6 +188,14 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     // The long query: not now if the user is typing or a popup opened meanwhile.
     if (!first && refs && !quiet()) { perf.counters.rebuildsDeferred = (perf.counters.rebuildsDeferred || 0) + 1; return false; }
     const rows = await q(REFERENCED_BLOCKS);
+    // The newest edits: blocks (with their text, pulled once) and pages.
+    let nextRecent = null;
+    if (setting("recentRows")) {
+      try {
+        const edited = latestEdits(await q(EDITED_SINCE, Date.now() - RECENT_DAYS * 86_400_000), { blocks: 30 });
+        nextRecent = { blocks: pullBlocks(api, edited.blocks), pages: edited.pages, builtAt: Date.now() };
+      } catch (error) { console.error("[burrow] recent edits unavailable", error); }
+    }
     const titleRows = await q(TITLES);
     const separated = (titleRows || []).map(([t]) => t).filter((t) => /[#>]/.test(t));
     const withContent = new Set(separated.length ? await q(WITH_CONTENT, separated) : []);
@@ -192,6 +207,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
     rekey = null;
     refs = nextRefs;
+    recent = nextRecent;
     aliases = nextAliases;
     aliasPrint = printOf(aliasRows);
     keyword = nextKeyword;
@@ -233,6 +249,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     get aliases() { return aliases; },
     get refs() { return refs; },
     get titles() { return titles; },
+    get recent() { return recent; },
     schedule,
     build,
     refreshAliases,
