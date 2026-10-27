@@ -32,7 +32,7 @@ const WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] 
 export const ALIAS_PULL = "[{:block/_refs [:block/string {:block/page [:node/title :block/uid]}]}]";
 const ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p]]";
 // The strings of the blocks that link an alias page as `[alias]([[Page]])`,
-// for the chip order (spec §19). ?r keeps equal strings from different
+// for the chip order (spec §20). ?r keeps equal strings from different
 // blocks apart.
 const ALIAS_USES = `[:find ?u ?r ?s :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p] [?r :block/string ?s] [(clojure.string/includes? ?s "]([[")]]`;
 

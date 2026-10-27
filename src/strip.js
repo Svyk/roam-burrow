@@ -2,6 +2,7 @@ import { aliasInsertion, aliasUses, groupAliasHits, matchAliases, roamAliasesWil
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
+import { parseFilters, pageFilter, refFilter } from "./filters.js";
 import { createHelpSheet, helpGroups, helpKeyAction } from "./help.js";
 import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints.js";
 import { createTreeSource, PAUSE } from "./pagetree.js";
@@ -41,7 +42,7 @@ const POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
 const HAS_KIDS = "[(limit :block/children 1)]";
 const MIN_REF_QUERY = 3;
 const MIN_ALIAS_QUERY = 2;
-// `[[alias:lo`: only alias rows for what follows the prefix (spec §19).
+// `[[alias:lo`: only alias rows for what follows the prefix (spec §20).
 const ALIAS_PREFIX = /^alias:\s*(.*)$/is;
 // Recent rows show with this many characters typed or fewer (spec §18).
 const RECENT_QUERY = 2;
@@ -76,7 +77,7 @@ const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaEleme
 // preview), Esc passes through. Deleting the `#` or `>` ends drill mode.
 export function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, saveSetting = null, doc = document, win = window }) {
   const st = {
-    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null,
+    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
     auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null,
   };
@@ -100,6 +101,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // Under the highlighted block row: where the block lives (refContext).
   const contextNode = doc.createElement("div");
   contextNode.className = "burrow-context";
+  // Above the rows: the query filters in force (queryFilters).
+  const filtersNode = doc.createElement("div");
+  filtersNode.className = "burrow-filters";
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -180,6 +184,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function rank(token) {
     st.drill = null;
     st.aliasOnly = null;
+    st.filters = null;
     if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
       const m = ALIAS_PREFIX.exec(token.query);
       if (m) {
@@ -208,8 +213,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   const frequent = (kind) => (setting("frecency") ? frecency?.scores(kind) : null);
 
+  // query: the text ranked on (after `alias:` in prefix mode, spec §20).
   function mainRows(token, recall, query = token.query) {
-    const plan = searchPlan(query);
+    const filters = setting("queryFilters") ? parseFilters(query) : null;
+    st.filters = filters;
+    const searchText = filters ? filters.text : query;
+    const planText = filters ? filters.planText : query;
+    const plan = searchPlan(planText);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
@@ -217,13 +227,17 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       return rankRefs(indexes.refs, plan, {
         limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
         frequent: frequent("block"), currentPage: setting("pageBoost") ? st.pageTitle : null,
-        prose: setting("refProse"), code: looksLikeCode(token.query),
+        prose: setting("refProse"), code: looksLikeCode(searchText),
+        accept: refFilter(filters, {
+          currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null,
+          withCode: !setting("refProse") || looksLikeCode(searchText),
+        }),
       })
         .map((hit) => ({
           kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
           ...rowText(hit.string), insertion: `((${hit.uid}))`,
           // A query that matched inside code shows the code line it matched.
-          rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(token.query) }) : richFor(hit.uid, hit.string),
+          rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
         }));
     }
     if (!setting("aliasPages") || (compact < MIN_ALIAS_QUERY && st.aliasOnly == null)) return [];
@@ -231,7 +245,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const format = setting("aliasLinkFormat");
     // No cut here: visibleRows drops rows Roam or roam-aliases already show,
     // and a cut before that could hide a row nobody else lists.
-    const hits = matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: frequent("page") });
+    const accepted = pageFilter(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
+    const hits = matchAliases(indexes.aliases, plan, {
+      strict: !recall, limit: Infinity, picked: frequent("page"),
+      skip: accepted ? (entry) => !accepted(entry) : undefined,
+    });
     if (setting("aliasInline")) {
       return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit) => ({
         kind: "alias", key: `alias:${hit.uid}`, uid: hit.uid, alias: hit.alias, title: hit.title, aliases: hit.aliases,
@@ -351,12 +369,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const ROW_HEIGHT = 33;
   const CHIPS_HEIGHT = 28;
   const CONTEXT_HEIGHT = 18;
+  const FILTERS_HEIGHT = 18;
   // .burrow-strip padding (4 + 3) and its bottom border.
   const STRIP_FRAME = 8;
   let stripHeight = null;
   function sizeStrip(count = shown.length) {
     const lines = (chipsNode.isConnected && chipsNode.parentNode === strip ? CHIPS_HEIGHT : 0)
-      + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0);
+      + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0)
+      + (filtersNode.isConnected && filtersNode.parentNode === strip ? FILTERS_HEIGHT : 0);
     const promptRow = strip.firstChild === promptNode ? 1 : 0;
     const height = (count || promptRow) ? (count || promptRow) * ROW_HEIGHT + lines + STRIP_FRAME : 0;
     if (height === stripHeight) return;
@@ -458,6 +478,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   let shown = [];
   let shownQuery = null;
+  let shownFilters = "";
+  // The filter label line: each filter as typed, in:here with its page.
+  function filtersText() {
+    const labels = st.filters?.labels;
+    if (!labels?.length) return "";
+    return labels.map((label) => (label.toLowerCase() === "in:here" && st.pageTitle ? `in:here (${st.pageTitle})` : label)).join(" · ");
+  }
   function render() {
     if (st.phase === "SCOPE") { placeScope(); return; }
     placeInFlow();
@@ -465,9 +492,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.prompt?.kind === "add") { renderPrompt(); return; }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
-    const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
+    const searchText = st.filters ? st.filters.planText : (st.aliasOnly ?? query);
+    const filterText = rows.length ? filtersText() : "";
+    const same = query === shownQuery && filterText === shownFilters && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
-      strip.replaceChildren(...rows.map((row, i) => rowNode(row, i)));
+      strip.replaceChildren(...(filterText ? [filtersNode] : []), ...rows.map((row, i) => rowNode(row, i)));
+      shownFilters = filterText;
+      if (filterText) { filtersNode.textContent = filterText; filtersNode.title = `Query filters: ${filterText}`; }
       sizeStrip(rows.length);
       shown = rows;
       shownQuery = query;
@@ -482,9 +513,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const aliasQuery = st.aliasOnly ?? query;
     const wanted = !rows[0].recent && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2)
-      || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, aliasQuery) && !exactTitle(aliasQuery)));
+      || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText)));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       // Native rows arrived late, or the query moved on: give the selection back.
       st.phase = "ARMED";
@@ -708,6 +738,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     return node;
   }
 
+  // What the rows are searched and highlighted on: the query without its filters.
+  const searchWords = () => (st.filters ? st.filters.planText : (st.aliasOnly ?? st.token?.query));
+
   // The query's words as one pattern, made once per query (rows render per key).
   let highlightFor = null;
   let highlightRe = null;
@@ -722,10 +755,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   // A row's block as Roam draws it, cut around the match when long.
   function richContent(row) {
-    return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
+    return renderParts(doc, snippet(row.rich, highlightPattern(searchWords())), (t) => highlight(t));
   }
 
-  function highlight(text, query = st.aliasOnly ?? st.token?.query) {
+  function highlight(text, query = searchWords()) {
     const fragment = doc.createDocumentFragment();
     const re = highlightPattern(query);
     if (!re) { fragment.append(text); return fragment; }
@@ -982,6 +1015,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     chipsNode.remove();
     chipsFor = null;
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelContext();
     cancelRowPreview();
@@ -1009,6 +1044,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     chipsNode.remove();
     chipsFor = null;
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelContext();
     hints.hidden = true;
@@ -1411,6 +1448,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.rows = [];
     st.active = -1;
     st.token = null;
+    st.filters = null;
     st.released = null;
     st.drill = null;
     st.auto = false;
@@ -1425,6 +1463,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     tree.clear();
     shown = [];
     shownQuery = null;
+    shownFilters = "";
     chipsFor = null;
     hintsFor = null;
     strip.replaceChildren();
@@ -1679,6 +1718,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     sizeStrip(0);
     shown = [];
     shownQuery = null;
+    shownFilters = "";
     chipsFor = null;
     chipsNode.remove();
     strip.hidden = false;
@@ -1868,6 +1908,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     strip.classList.remove(OWNING);
     chipsNode.remove();
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelRowPreview();
     hidePreview();

@@ -160,8 +160,8 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `aliasInline` | switch | on | BRW-5: one alias row per page with its ref count, roam-aliases' duplicates folded |
 | `aliasPreselect` | switch | on | BRW-5: the alias row starts selected when the alias starts with the query and no page has that exact title |
 | `aliasChips` | switch | on | BRW-5: the selected alias row's aliases as chips (⌥↓) |
-| `aliasUsage` | switch | on | BRW-19: chips ordered by how often `[alias]([[Page]])` appears in the graph, `×N` in the tip (§19) |
-| `aliasPrefix` | switch | on | BRW-19: `[[alias:lo` lists only alias rows for `lo` (§19) |
+| `aliasUsage` | switch | on | BRW-19: chips ordered by how often `[alias]([[Page]])` appears in the graph, `×N` in the tip (§20) |
+| `aliasPrefix` | switch | on | BRW-19: `[[alias:lo` lists only alias rows for `lo` (§20) |
 | `tabDrill` | switch | on | BRW-5: Tab / Shift+Tab drill into the highlighted row's children |
 | `paneLayout` | switch | on | BRW-5: roam-aliases' column, Roam's list and Roam's preview each in their own space |
 | `keyHints` | switch | on | BRW-5: key-hint line under Roam's list and in the drill panel (BRW-6: RefX wording; BRW-7: only keys that apply to the highlighted row) |
@@ -427,7 +427,33 @@ Two switches, both on: `recentRows` and `frecency`. They replace pick memory (`p
 
 **Forget.** The command palette entry `Burrow: forget recent picks` (also `window.__BURROW.forgetPicks()` for the gates) clears the store and the in-memory pick rows. `Disable all features` turns `recentRows` and `frecency` off.
 
-## 19. Alias polish (BRW-19)
+## 19. Query filters (BRW-18)
+
+Precedents: RefX R5 filters, Omnisearch (phrases, `-` exclusions, `path:`), Search+ (page scopes), Logseq's search in page (BRW-12 §2, §4). Switch `queryFilters`, on.
+
+**Grammar** (`src/filters.js`, `parseFilters`, pure). The token is read, never rewritten.
+- `"words"`: a phrase. Its words must stand together in order, each a whole word (`hasRun` over the key's tokens); with no closing quote yet the last word may be a prefix. The phrase's words also join the scorer's plan, so they rank as before.
+- `-word`, `-"two words"`: excluded. Only `-` at a word start followed by a letter or a quote: `ant-man`, `a - b` and `-20` stay text.
+- `in:here`: the page being edited (`st.pageTitle`, the edited block's `[data-page-title]`). `in:Title`: runs to the next filter (`in:` `ns:` `is:` `"` `-x`) or the end, so a title with spaces needs no quotes; `in:"Title"` ends at its quote. Resolved with the drill's title index (exact, case, separators, alias); a value that names no page is compared as typed.
+- `ns:A/B/`: the page `A/B` and pages under `A/B/` (trailing `/` optional). One word, like `in:here`; `ns:"A B/"` for a namespace with a space. So `((in:here pcr` and `((ns:Systems/ grok` search `pcr` and `grok`.
+- A named filter needs its value right after the colon (or the colon at the end, while typing): `what it is: foo` is text.
+- `is:todo`, `is:done`: the block's first task macro (`taskParts`, the checkbox reader: `{{[[TODO]]}}`, `{{TODO}}`, `{{[[DONE]]}}`, Better Tasks' `{{[[DONE]]:((uid))}}`; a SmartBlock button that starts like one is no task). A prefix names its state while typed (`is:t`); another value matches nothing.
+- Any other word is search text. A filter needs its colon, quotes or `-`. `in:` with nothing after it is taken out of the text and filters nothing yet, so typing `in:` does not change the rows.
+- Page filters (`in:here`, `in:`, `ns:`) add up: a block passes when any names its page. Every other filter must hold.
+
+**Where it applies.**
+- `((`: `rankRefs` takes `accept`, tested on the row's block after a quoter folds into its original (the page that counts is the original's). Phrases and exclusions read the prose key, and the code key when code is matched (`looksLikeCode` of the search words, or `refProse` off). The pool stays the referenced blocks (§3): the gate page `PhD/Cronobacter & Spore Control in PIF` has 20 blocks with `pcr`, 6 of them referenced; Roam's list has the rest. Reading a page's other blocks would be a pull of up to 28,570 blocks (377 ms on that page, §5), not a per-key cost.
+- `[[`: alias rows through `matchAliases`' `skip`. Phrases and exclusions read the alias and the title; `in:`/`ns:` test the row's page title; `is:` leaves no page row.
+- Drill (`[[Page#h > x`) parses first and is unchanged.
+- Search words without filters go to the plan, the code test and highlighting; filter values are never highlighted. roam-aliases' fold-in keeps the raw query (roam-aliases filters on what is typed).
+
+**Label line.** With rows and at least one filter, `div.burrow-filters` is the strip's first child: the filters as typed joined by ` · `, `in:here` with its page in parentheses, 11 px at 0.6 opacity like the context line, 18 px counted in the strip's height. Not a `.burrow-row`, so keyboard indexes are unchanged. No match leaves no rows and so no line.
+
+**Cost.** One regex decides that a query holds no filter; with filters, the parse is a single pass over the token and the tests run only on blocks that already matched (the prefilter cache is keyed on the plan's words, unchanged).
+
+**Gates (0.9.0).** svy: 18 `filters:` cases (fixture: `is:todo`, `is:done`, `-closed`, `"quilt pattern"` vs `quilt pattern`, `in:`, `in:here`, `ns:`, no-match `ns:` and `in:`, the switch off, two `[[` cases; real data: `((watch is:todo` only open TODOs, `(("black panther"` only rows where the words stand together, `((black panther`; Escape and Enter on `((zebra task is:todo` byte-for-byte in the on, off and gone arms) all PASS. notes: 9 cases including `((pcr in:PhD/Cronobacter & Spore Control in PIF` (every row on that page) PASS. `perf-gate --filters`: svy p95 2.0–2.1 ms per key, notes 1.6–1.7 ms (budget 4). Screenshots: `tools/shots.mjs` 63–65, both graphs, light and dark. After merging 0.8.1 (recent rows, frecency) the key cases ran again on the merged build: svy 7/7 (with 0.8.1's recent-rows byte case), notes 3/3, three-filter p95 svy 2.1–2.3 ms, notes 1.6–1.8 ms.
+
+## 20. Alias polish (BRW-19)
 
 Two switches, both on: `aliasUsage` and `aliasPrefix`. `Disable all features` turns both off.
 

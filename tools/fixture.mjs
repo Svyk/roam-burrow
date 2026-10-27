@@ -26,6 +26,9 @@ export const DRILL_TREE = [
   // Referenced tasks, drawn as Roam's checkboxes in Burrow's rows (0.6.0).
   { key: "taskTodo", string: "{{[[TODO]]}} zebra task open" },
   { key: "taskDone", string: "{{[[DONE]]}} zebra task closed" },
+  // Contiguous vs scattered words for the "quoted phrase" filter (0.9.0).
+  { key: "quiltRun", string: "zebra quilt pattern stitched" },
+  { key: "quiltScatter", string: "zebra quilt with a bold pattern" },
   // A macro that only starts like a task (svy's SmartBlock button under a TODO on Patterns).
   { key: "taskSmart", string: "{{[[TODO]]}} zebra smart parent", children: [{ key: "smartButton", string: "{{TODO today:SmartBlock:TODO today}}" }] },
   // Rich rows (0.7.0): one block per drawing. `@{page}` is the fixture page's title and `@{key}` that
@@ -48,7 +51,7 @@ export const DRILL_TREE = [
     { key: "afterHollow", string: "after hollow" },
   ] },
   { key: "many", string: "Many section", children: Array.from({ length: 55 }, (_, i) => ({ key: `many${i + 1}`, string: `many ${String(i + 1).padStart(2, "0")}` })) },
-  // 0.9.0 alias use counts, under one parent so the fixture page's other lists keep their size. `@{usedPage}`
+  // 0.9.1 alias use counts, under one parent so the fixture page's other lists keep their size. `@{usedPage}`
   // is the `<fixture> Used` page's title, `@{twinAPage}` / `@{twinBPage}` the twin pages'. "zq used three" is used 3 times (one block holds two links),
   // "zq used two" once, "zq used one" never.
   { key: "usage", string: "Usage section", children: [
@@ -73,7 +76,7 @@ export const CHIPS_ALIAS_STRING = `Aliases:: ${[...CHIP_ALIASES, CHIP_LONG].join
 // The gates use this page; BURROW_FIXTURE_PAGE picks another when a crashed run left a stale tree.
 export const FIXTURE_PAGE = process.env.BURROW_FIXTURE_PAGE || "Burrow/Fixtures";
 
-// Scratch pages of the 0.9.0 alias cases: use counts (`Used`) and one alias shared by two pages (`Twin A`, `Twin B`).
+// Scratch pages of the 0.9.1 alias cases: use counts (`Used`) and one alias shared by two pages (`Twin A`, `Twin B`).
 export const USED_TITLE = `${FIXTURE_PAGE} Used`;
 export const USED_ALIASES = ["zq used one", "zq used two", "zq used three"];
 // Chip order with aliasUsage on (most used first) and the uses behind it.
@@ -209,7 +212,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         await make(tree, pageUid);
         // The referenced blocks the (( cases find: the pick-memory pair, the
         // tasks, and a nested block (outline and context cases).
-        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.never})) ((${drill.many50})) ${richKeys.map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
+        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.quiltRun})) ((${drill.quiltScatter})) ((${drill.never})) ((${drill.many50})) ${richKeys.map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
         created.drill.push(refsUid);
       }
       await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: "", uid: blockUid } });

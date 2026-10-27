@@ -179,10 +179,11 @@ export function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
 // (start of block and word distance), shorter text, uid. With prose off the
 // long and title steps are skipped and code matches like prose (the 0.6.1
 // order).
-// Pass 1 is strict only;
+// accept (query filters, src/filters.js) tests the row's block after a
+// quoter folds into its original. Pass 1 is strict only;
 // recall (typos, abbreviations) runs only when the strip is not yet full,
 // because recall rows rank below every strict row.
-export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, frequent = null, currentPage = null, prose = true, code = false } = {}) {
+export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, frequent = null, currentPage = null, prose = true, code = false, accept = null } = {}) {
   if (!index || !plan) return [];
   const hits = new Map();
   const withCode = !prose || code;
@@ -208,6 +209,7 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
     if (!isPrecise(match)) return false;
     let target = entry;
     if (entry.pureQuote && index.byUid.has(entry.pureQuote)) target = index.byUid.get(entry.pureQuote);
+    if (accept && !accept(target)) return false;
     const previous = hits.get(target.uid);
     if (previous && rankOf(previous.match) >= rankOf(match)) return true;
     hits.set(target.uid, { entry: target, match, viaAlias, inCode });

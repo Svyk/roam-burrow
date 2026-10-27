@@ -60,6 +60,21 @@ export function helpGroups(setting, mac = IS_MAC) {
   preview.items.push([k("ctrlO"), on("rowPreview") ? "Roam's preview, for Burrow's rows too" : "Roam's preview"]);
   if (on("tabDrill") && on("drillPreview")) preview.items.push([k("ctrlO"), "in a drill: its own preview"]);
   groups.push(preview);
+
+  if (on("queryFilters")) {
+    groups.push({
+      title: "Filters",
+      items: [
+        ["\"…\"", "words that stand together"],
+        ["-word", "leave out blocks with the word"],
+        ["in:here", "blocks on this page"],
+        ["in:Page", "blocks on that page (to the next filter)"],
+        ["ns:A/", "pages under A/"],
+        ["is:todo", "open tasks; is:done for done"],
+      ],
+      notes: [],
+    });
+  }
   return groups;
 }
 
