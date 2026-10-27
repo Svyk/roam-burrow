@@ -41,6 +41,7 @@ const DB = {
   rich00002: "zebra target text",
   fixtureU1: "the block being edited, about Wakanda",
   nat1: "Already listed by Roam: Wakanda trailer",
+  huge1: `Huge block ${"word ".repeat(4000)}`,
   long1: "**One Hour Of No-Screen Deep Work** Work for one hour on your calendar with a pen, paper and no screens, so you can stay focused",
 };
 const PAGES = { pg1: "Wakanda Forever", pg2: "Black Panther" };
@@ -232,7 +233,8 @@ test("a shown band goes when the query changes, and RELATED goes back to ARMED",
 test("what Burrow's strip shows, the block being edited and Roam's visible rows are left out; no uid twice", () => withRelated({
   query: "((zebra target",
   hits: [block("rich00002"), block("fixtureU1"), block("nat1"), block("b1"), block("b1"), block("b2"), block("b3"), block("b4")],
-  native: [{ text: "x" }, { text: "Already **listed** by Roam: Wakanda trailer" }],
+  // Roam's (( row carries the raw block string as its title.
+  native: [{ text: "x" }, { title: "Already listed by Roam: Wakanda trailer", text: "Already listed by Roam: Wakanda trailer" }],
 }, async (h) => {
   assert.ok(await until(h.shownBand));
   assert.deepEqual(h.strip.related.rows.map((r) => r.uid), ["b1", "b2", "b3"]);
@@ -343,4 +345,11 @@ test("a Related row starts at the block's start, not cut around the typed words"
   assert.ok(await until(h.shownBand), "the band arrives");
   const text = h.bandRows()[0].querySelector(".burrow-text").textContent;
   assert.ok(text.startsWith("One Hour Of No-Screen Deep Work"), text);
+}));
+
+test("a long Related block draws only its first characters", () => withRelated({ query: "((stay focused", hits: [block("huge1")] }, async (h) => {
+  assert.ok(await until(h.shownBand), "the band arrives");
+  const text = h.bandRows()[0].querySelector(".burrow-text").textContent;
+  assert.ok(text.startsWith("Huge block word"), text.slice(0, 40));
+  assert.ok(text.length <= 241, `drawn ${text.length} characters`);
 }));

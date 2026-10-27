@@ -27,7 +27,7 @@
 // Also reported: related.request p50/p95, related.pull and related.draw p95/max, and
 // how many bands were drawn; related.pull and related.draw max are held to 3 ms.
 // An installed Burrow is parked for the run and put back afterwards.
-//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--preview] [--related] [--cold "[[plexus"] [--theme light|dark] [--json]
+//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--preview] [--related [--band off]] [--cold "[[plexus"] [--theme light|dark] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
@@ -43,6 +43,9 @@ const drill = args.includes("--drill");
 const withPreview = args.includes("--preview");
 const cold = flag("--cold", null);
 const related = args.includes("--related");
+// --band off: the --related typing with semanticRows off, the control for the
+// band's per-key cost (no band is drawn, so the band checks are skipped).
+const bandOff = flag("--band", "on") === "off";
 const query = flag("--query", drill ? "never > grand" : related ? "how to stay focused" : "ant man");
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
@@ -56,13 +59,14 @@ const code = await readFile(new URL("extension.js", root), "utf8");
 const css = await readFile(new URL("extension.css", root), "utf8");
 
 async function setArm(arm) {
-  return c.evaluate(async ({ arm, code, css }) => {
+  return c.evaluate(async ({ arm, code, css, bandOff }) => {
     const dev = window.__burrowDev || (window.__burrowDev = { values: {} });
     if (dev.module) { await dev.module.default.onunload(); dev.module = null; }
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
     for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
       "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "semanticRows"]) dev.values[f] = true;
+    if (bandOff) dev.values.semanticRows = false;
     dev.values.helpNudgeSeen = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
@@ -82,7 +86,7 @@ async function setArm(arm) {
     while (!window.__BURROW?.indexes?.refs && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
     await new Promise((r) => setTimeout(r, 1500));
     return { arm, refs: window.__BURROW.indexes.refs.entries.length, build: { query: window.__BURROW_PERF.samples.buildQuery, keys: window.__BURROW_PERF.samples.buildKeys } };
-  }, { arm, code, css });
+  }, { arm, code, css, bandOff });
 }
 
 async function startRun() {
@@ -458,17 +462,17 @@ const verdict = {
 verdict.emptyRuns = report.results.filter((r) => !r.keys || (r.arm === "on" && !r.burrowSamples)).length
   + Math.max(0, runs * 2 - report.results.length)
   // --related: a run in which no band was drawn did not measure the band.
-  + (related ? report.results.filter((r) => r.arm === "on" && !r.bandsDrawn).length : 0);
+  + (related && !bandOff ? report.results.filter((r) => r.arm === "on" && !r.bandsDrawn).length : 0);
 verdict.pass = !report.error && verdict.emptyRuns === 0 && verdict.burrowP95Max <= 4 && verdict.paintP95Delta <= 5 && verdict.queries === 0 && verdict.strayKeys === 0
   && verdict.rebuildsWhileTyping === 0 && verdict.contextP95Max <= 4
   && verdict.aliasRefreshP95Max <= 4
   && (!withPreview || (verdict.previewP95Max != null && verdict.previewP95Max <= 4))
-  && (!related || (verdict.relatedPullMax <= 3 && verdict.relatedDrawMax <= 3));
+  && (!related || bandOff || (verdict.relatedPullMax <= 3 && verdict.relatedDrawMax <= 3));
 report.verdict = verdict;
 if (args.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else {
-  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${related ? " (related)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
+  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${related ? (bandOff ? " (related typing, band off)" : " (related)") : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
   if (withPreview) console.log(`  preview slices by kind: ${report.results.filter((r) => r.arm === "on").map((r) => Object.entries(r.previewKinds || {}).map(([k, v]) => `${k} ${v}`).join(", ")).join(" / ")}`);

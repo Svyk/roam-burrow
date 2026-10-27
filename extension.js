@@ -3411,6 +3411,7 @@ var PREVIEW_DRAW_ALONE_MS = 0.5;
 var PREVIEW_FIRST_LINES = 24;
 var CONTEXT_KIDS = 100;
 var RELATED_ROWS = 3;
+var RELATED_HEAD = 240;
 var RELATED_LABEL = 18;
 var RELATED_FRAME = 6;
 var RELATED_POOL = 5;
@@ -3995,7 +3996,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     return highlightRe;
   }
   function richContent(row) {
-    if (row.kind === "related") return renderParts(doc, row.rich, (t) => highlight(t));
+    if (row.kind === "related") return renderParts(doc, headParts(row.rich, RELATED_HEAD), (t) => highlight(t));
     return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
   }
   function highlight(text, query = st.token?.query) {
@@ -4606,24 +4607,20 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     if (typeof string !== "string" || !string.trim() || title != null) return null;
     return { kind: "related", page: false, key: `related:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`, ...rowText(string), rich: richFor(hit.uid, string), source: string };
   }
-  const plainKey = (text) => stripRoamMarkup(text).replace(/\s+/g, " ").trim().toLowerCase();
   function relatedVisible(rows) {
     const titles = /* @__PURE__ */ new Set();
-    const texts = /* @__PURE__ */ new Set();
+    const strings = /* @__PURE__ */ new Set();
     for (const el of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
       const title = el.getAttribute("title");
-      if (title) {
-        titles.add(title.toLowerCase());
-        texts.add(plainKey(title));
-      }
-      if (st.token?.kind === "((") texts.add(plainKey(el.textContent));
+      if (!title) continue;
+      titles.add(title.toLowerCase());
+      strings.add(title);
     }
-    texts.delete("");
     const seen = /* @__PURE__ */ new Set();
     return rows.filter((row) => {
       if (seen.has(row.uid)) return false;
       seen.add(row.uid);
-      return row.page ? !titles.has(row.text.toLowerCase()) : !texts.has(plainKey(row.source));
+      return row.page ? !titles.has(row.text.toLowerCase()) : !strings.has(row.source);
     }).slice(0, RELATED_ROWS);
   }
   function relatedDrawSlice(job) {
@@ -5914,6 +5911,25 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
   return { state: st, debug, reset, tree, related: relatedDebug };
+}
+function headParts(parts, max) {
+  const out = [];
+  let left = max;
+  for (const part of parts) {
+    if (left <= 0) break;
+    if (part.task || part.text == null) {
+      out.push(part);
+      continue;
+    }
+    if (part.text.length <= left) {
+      out.push(part);
+      left -= part.text.length;
+      continue;
+    }
+    out.push({ ...part, text: `${part.text.slice(0, left)}…` });
+    left = 0;
+  }
+  return out;
 }
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

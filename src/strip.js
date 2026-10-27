@@ -58,6 +58,8 @@ const CONTEXT_KIDS = 100;
 // Roam's list column (src/extension.css, .burrow-related-N) so Roam's list
 // keeps its own 300 px.
 const RELATED_ROWS = 3;
+// Characters of a Related row that are drawn (the row shows one line).
+const RELATED_HEAD = 240;
 const RELATED_LABEL = 18;
 // .burrow-related padding (bottom) and its border.
 const RELATED_FRAME = 6;
@@ -660,7 +662,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // Related row matched by meaning, not by the typed words: it starts at the
   // block's start (a semantic hit's typed words are often deep inside it).
   function richContent(row) {
-    if (row.kind === "related") return renderParts(doc, row.rich, (t) => highlight(t));
+    if (row.kind === "related") return renderParts(doc, headParts(row.rich, RELATED_HEAD), (t) => highlight(t));
     return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
   }
 
@@ -1331,25 +1333,24 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return { kind: "related", page: false, key: `related:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`, ...rowText(string), rich: richFor(hit.uid, string), source: string };
   }
 
-  const plainKey = (text) => stripRoamMarkup(text).replace(/\s+/g, " ").trim().toLowerCase();
-
-  // Not drawn again: what Roam's list shows already. A [[ page row carries its
-  // title; a (( row has no uid in the DOM, so its visible text is compared,
-  // normalised. Read at draw time only.
+  // Not drawn again: what Roam's list shows already. A native row's title
+  // attribute holds the page title, or the block's raw string, so a plain
+  // comparison is enough (normalising every native row's text cost 10 ms in
+  // notes, where a row can hold a whole transcript). Read at draw time only.
   function relatedVisible(rows) {
     const titles = new Set();
-    const texts = new Set();
+    const strings = new Set();
     for (const el of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
       const title = el.getAttribute("title");
-      if (title) { titles.add(title.toLowerCase()); texts.add(plainKey(title)); }
-      if (st.token?.kind === "((") texts.add(plainKey(el.textContent));
+      if (!title) continue;
+      titles.add(title.toLowerCase());
+      strings.add(title);
     }
-    texts.delete("");
     const seen = new Set();
     return rows.filter((row) => {
       if (seen.has(row.uid)) return false;
       seen.add(row.uid);
-      return row.page ? !titles.has(row.text.toLowerCase()) : !texts.has(plainKey(row.source));
+      return row.page ? !titles.has(row.text.toLowerCase()) : !strings.has(row.source);
     }).slice(0, RELATED_ROWS);
   }
 
@@ -2603,6 +2604,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.add(() => reset("unload"));
 
   return { state: st, debug, reset, tree, related: relatedDebug };
+}
+
+// The first `max` characters of a row's parts: a Related row is one line, and
+// a block can hold a whole transcript.
+function headParts(parts, max) {
+  const out = [];
+  let left = max;
+  for (const part of parts) {
+    if (left <= 0) break;
+    if (part.task || part.text == null) { out.push(part); continue; }
+    if (part.text.length <= left) { out.push(part); left -= part.text.length; continue; }
+    out.push({ ...part, text: `${part.text.slice(0, left)}…` });
+    left = 0;
+  }
+  return out;
 }
 
 function escapeRe(s) {
