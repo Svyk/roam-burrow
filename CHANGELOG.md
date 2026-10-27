@@ -4,6 +4,16 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-27
+
+### Added
+
+- **Insert as embed or as a labelled link** (`insertVariants`, on). With a Burrow row, the drill row or a drill panel row highlighted, ⇧↵ inserts `{{[[embed]]: ((uid))}}` for a block or `{{[[embed]]: [[Page]]}}` for a page; ⌥↵ inserts `[label](((uid)))`, the label being what you typed (the `((` query, a drill-down's last step, the drill panel's filter) or, with nothing typed, the block's first 40 characters as a reader sees them; on an alias row (or a chip) ⌥↵ inserts `[alias]([[Page]])` whatever the Alias link format says. Same checks as Enter: with the text before the caret changed, nothing is written and the rows are ranked again.
+- **Open in the sidebar** (`openInSidebar`, on). ⌘⇧↵ (Ctrl+Shift+↵ off a Mac) or ⇧+click opens the highlighted page or block in Roam's right sidebar (`rightSidebar.addWindow`): the block keeps its text and caret, and the picker (or the drill panel) stays open.
+- On Roam's own rows these keys stay Roam's (⇧↵ its newline). The hint line ends with `⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar` on Burrow's rows and in the drill panel, the tips say exactly what ⇧↵ and ⌥↵ would insert, and the key list's Pick group names all three; each goes with its switch.
+- Unit tests (`test/variants.test.js`): the keys, what each inserts, labels, the hint line and key list, and on jsdom the strip writing only the token, the sidebar call leaving text and caret, the switches off, a refused key, and Roam's row keeping the keys.
+- Live gates: each key on Burrow's block row, the alias row, the drill row and the drill panel, ⇧+click on a row and in the panel, Roam's row (⇧↵ still Roam's newline), the switches off, a refused ⇧↵ and ⌥↵; every case byte-for-byte against Roam alone. The gates' off arm now turns the new switches off too. `tools/shots.mjs` scenarios 58–63.
+
 ## [0.7.0] - 2026-10-26
 
 ### Fixed

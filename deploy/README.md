@@ -15,6 +15,7 @@ A Roam Research extension that adds to Roam's own `[[` page search and `((` bloc
 - **Rows drawn like Roam.** Burrow's rows, the drill panel and the previews draw a block as Roam does: a code block as its language (`R`) and its first line of code, inline code in a monospace face, links, tags and block refs (resolved to their text) as references in the theme's colors, bold, italic, highlight and strike, embeds, queries, `roam/render` and SmartBlock buttons, images and files as small labels. A long block shows the part around what you typed. Text only: nothing in a block can turn into HTML.
 - **Where the block lives.** Under the highlighted block row, a quiet line with its page and parent (`in MCU Watch Order › Watch Order (…)`) and how many children Tab lists (`⇥ 2 children`, counted up to `100+`).
 - **Up and down the outline.** On a highlighted block row, Shift+Tab lists its parent's children with the block highlighted; Shift+Tab again goes higher, Enter inserts the highlighted one, so you can pick the parent or a sibling instead. Tab lists the block's children under its whole trail (`Blocks › MCU Watch Order › Watch Order › Watch Agents…`).
+- **Insert as embed, as a labelled link, or open in the sidebar.** On a highlighted Burrow row, drill row or drill panel row, ⇧↵ inserts an embed (`{{[[embed]]: ((uid))}}` for a block, `{{[[embed]]: [[Page]]}}` for a page), ⌥↵ a labelled link (`[ant man](((uid)))` with what you typed as the label, or the block's first 40 characters when you typed nothing; `[alias]([[Page]])` on an alias row, whatever the alias link format), and ⌘⇧↵ or ⇧+click opens the page or block in Roam's right sidebar: the text stays as you typed it and the picker stays open. On Roam's own rows these keys stay Roam's (⇧↵ its newline). The hint line ends with `⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar`, and the tips show exactly what each would insert.
 - **Alias expansion in `((`.** An alias also finds referenced blocks that link to its page.
 - **Forgiving matching.** `ant man` finds `[[Ant-Man]]`, `EMP 26` finds `EMP26-002-BHP`, `mcu` finds `Marvel Cinematic Universe`, small typos are forgiven. Numbers never fuzz.
 - **Drill-down in `[[`.** Type a page, then `#` for a heading on it and `>` for a child one level down: `[[Systems/Executor Lanes and LaunchAgents#grok lane > never`. A preview shows the page outline around that block, highlighted, with the trail of its parents. Enter inserts the block's `((uid))`. If nothing below the page matches, Enter inserts `[[Page]]`, so a drill-down never creates a page.
@@ -32,6 +33,9 @@ Burrow takes keys only while one of its rows is selected, on Tab over a row it c
 | ↑ | previous Burrow row | from Roam's first row: Burrow's last row |
 | ↓ | next Burrow row; past the last, back to Roam | Roam |
 | Enter | insert the Burrow row; if the text changed under it, nothing is inserted and the rows are ranked again (Enter never goes on to a Roam row that was not highlighted) | Roam |
+| ⇧↵ | insert the row as an embed (when Insert variants is on) | Roam (a newline) |
+| ⌥↵ | insert `[label](((uid)))`, or `[alias]([[Page]])` on an alias row (when Insert variants is on) | Roam |
+| ⌘⇧↵ (Ctrl+Shift+↵ off a Mac), ⇧+click | open the row's page or block in the right sidebar; the text and the picker stay (when Open in sidebar is on) | Roam |
 | Tab | page or alias row: the blocks on the page; block row: its children; nothing under it: insert the row | `[[`: the blocks on the page; nothing to drill into: Roam |
 | ⇧⇥ | block row: up to its parent, the block highlighted (when Up and down the outline is on) | Roam |
 | ⌥↓ | alias row: move into its chips | Roam |
@@ -50,6 +54,8 @@ While drilled in (Tab), Burrow holds the keyboard and the block keeps exactly th
 | letters, space | filter the blocks of this level (shown in the breadcrumb, never typed into the block) |
 | ↑ / ↓ | move |
 | Enter | insert the highlighted block's `((uid))` in place of the whole `[[…]]`; with no block left, insert the level itself; on `(empty) ▸`, go into it; on `+N more`, list the next 50 |
+| ⇧↵ / ⌥↵ | insert it as an embed / as `[filter](((uid)))` (the block's first 40 characters with no filter) |
+| ⌘⇧↵, ⇧+click | open it in the right sidebar; the panel stays open |
 | Tab or `>` | one level deeper (rows with children carry a `›`) |
 | Shift+Tab | one level back; from the first level, back to the results |
 | Backspace | delete a filter character; on an empty filter, one level back |
@@ -60,7 +66,7 @@ While drilled in (Tab), Burrow holds the keyboard and the block keeps exactly th
 
 While a drill-down is on (the text before `#` or `>` is a page title or alias), Burrow's one row is selected: Enter inserts it, Tab drills into its children (or inserts it when it has none), ↑ and ↓ do nothing, Esc goes to Roam. Delete the `#` or `>` and Roam's search is back.
 
-Burrow writes only the `((…))` or `[[…]]` you are typing, and only if the text before the caret is still exactly what it ranked. When the caret moves (a click, ← or →), Burrow ranks again for the text before it, as Roam does; with the caret back inside a token that closes further on (`((agen|t))`) the popup is Roam's alone, with its own highlight, until the caret is back at the end. The one exception to "only the token" is the opt-in alias switches: ⌥A and Alt+Backspace change one page's alias block, nothing else.
+Burrow writes only the `((…))` or `[[…]]` you are typing, and only if the text before the caret is still exactly what it ranked (⇧↵, ⌥↵ and ⌘⇧↵ too). When the caret moves (a click, ← or →), Burrow ranks again for the text before it, as Roam does; with the caret back inside a token that closes further on (`((agen|t))`) the popup is Roam's alone, with its own highlight, until the caret is back at the end. The one exception to "only the token" is the opt-in alias switches: ⌥A and Alt+Backspace change one page's alias block, nothing else.
 
 | Key | While drilled in after ⇧⇥ or Tab on a block row |
 |---|---|
@@ -80,7 +86,7 @@ Burrow writes only the `((…))` or `[[…]]` you are typing, and only if the te
 
 ## Settings
 
-Every feature has its own switch under **Settings → Burrow**: alias rows, alias rows with their page, alias pre-select, alias chips, alias expansion, referenced-first ranking, pre-select, prose before code, rows drawn like Roam, forgiving matching, drill-down, drill-down preview, Tab drill, keep panes apart, key hints, hover tips, key list (⌥/, F1 or ?), first-run tip, where the block lives, up and down the outline, preview follows Burrow's rows, ordinal matching, hide empty blocks, long levels in slices, the block reference search command and its Alt+Shift+9 key (off by default), create aliases and delete aliases (both off by default: they write to your graph), pick memory (off by default, kept in this browser only), current page first, and a performance readout. **Alias attribute** should match roam-aliases' Keyword (default `Aliases`). **Alias link format** picks `[alias]([[Page]])` or `[[Page]]`. The command palette has **Burrow: Disable all features**.
+Every feature has its own switch under **Settings → Burrow**: alias rows, alias rows with their page, alias pre-select, alias chips, alias expansion, referenced-first ranking, pre-select, prose before code, rows drawn like Roam, forgiving matching, drill-down, drill-down preview, Tab drill, keep panes apart, key hints, hover tips, key list (⌥/, F1 or ?), first-run tip, where the block lives, up and down the outline, insert variants (⇧↵ embed, ⌥↵ label), open in sidebar (⌘⇧↵ or ⇧+click), preview follows Burrow's rows, ordinal matching, hide empty blocks, long levels in slices, the block reference search command and its Alt+Shift+9 key (off by default), create aliases and delete aliases (both off by default: they write to your graph), pick memory (off by default, kept in this browser only), current page first, and a performance readout. **Alias attribute** should match roam-aliases' Keyword (default `Aliases`). **Alias link format** picks `[alias]([[Page]])` or `[[Page]]`. The command palette has **Burrow: Disable all features**.
 
 ## Working with roam-aliases
 

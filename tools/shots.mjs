@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "insertVariants", "openInSidebar"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -107,6 +107,13 @@ const SCENARIOS = [
   { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
+  // 0.8.0: insert variants and the sidebar.
+  { id: "58-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed"] },
+  { id: "59-variants-alias-row", query: config.alias, keys: ["preview-closed"] },
+  { id: "60-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "61-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "wait:300"], loose: true },
+  { id: "62-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
+  { id: "63-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
 ];
 
 const c = await connect(title);
@@ -207,7 +214,7 @@ async function palette(name) {
 
 async function runKeys(keys) {
   for (const k of keys) {
-    const modified = k.match(/^(alt|shift)\+(.+)$/);
+    const modified = k.match(/^((?:(?:alt|ctrl|meta|shift)\+)+)(.+)$/);
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
     else if (k === "preview-closed") { if (await isExpanded()) await ctrlO(); }
     else if (k === "alt+slash") await altSlash();
@@ -226,7 +233,8 @@ async function runKeys(keys) {
     } else if (k.startsWith("palette:")) await palette(k.slice(8));
     else if (k.startsWith("wait:")) await sleep(Number(k.slice(5)));
     else if (k.startsWith("type:")) await c.type(k.slice(5), TYPE_MS);
-    else if (modified) await c.key(modified[2], modified[1] === "alt" ? 1 : 8);
+    else if (k === "sidebar-mark") await c.evaluate(() => { window.__burrowFixture.sidebarBase = window.roamAlphaAPI.ui.rightSidebar.getWindows().map((w) => w["window-id"]); });
+    else if (modified) await c.key(modified[2], modified[1].split("+").filter(Boolean).reduce((m, name) => m | { alt: 1, ctrl: 2, meta: 4, shift: 8 }[name], 0));
     else await c.key(k);
     if (!k.startsWith("wait:")) await sleep(120);
   }
@@ -249,8 +257,18 @@ async function captureRect() {
   });
 }
 
-// Out of the popup, block cleared, and any page the typing made deleted.
+// Out of the popup, block cleared, any page the typing made deleted, and any
+// sidebar window a scenario opened (after its sidebar-mark) closed.
 async function reset() {
+  await c.evaluate(async () => {
+    const g = window.__burrowFixture;
+    if (!g?.sidebarBase) return;
+    const base = new Set(g.sidebarBase);
+    g.sidebarBase = null;
+    for (const w of window.roamAlphaAPI.ui.rightSidebar.getWindows().filter((x) => !base.has(x["window-id"]))) {
+      await window.roamAlphaAPI.ui.rightSidebar.removeWindow({ window: { type: w.type, "block-uid": w["block-uid"] ?? w["page-uid"] } });
+    }
+  });
   await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
   for (let i = 0; i < 3; i++) { await c.key("Escape"); await sleep(150); }
   await guardReport(c);
@@ -320,7 +338,7 @@ try {
       }
       await runKeys(scenario.keys);
       await sleep(400);
-      const rect = await captureRect();
+      const rect = scenario.full ? await c.evaluate(() => ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight })) : await captureRect();
       if (!rect) { console.error(`${scenario.id}: nothing on screen, skipped`); continue; }
       const file = join(outDir, `${stamp}-${scenario.id}.png`);
       await writeFile(file, await c.screenshot(rect));

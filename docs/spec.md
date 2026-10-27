@@ -177,6 +177,8 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `refOutline` | switch | on | BRW-8: ⇧⇥ on a block row lists its parent's children (up the outline); Tab lists its children under its whole trail |
 | `refProse` | switch | on | BRW-10: `((` rows match a block's prose; code only for a code-looking query; long blocks after short; title matches first (§17) |
 | `richRows` | switch | on | BRW-10: rows, drill panel and previews drawn like Roam (§17) |
+| `insertVariants` | switch | on | BRW-15: ⇧↵ embed, ⌥↵ labelled link on Burrow's rows (§18) |
+| `openInSidebar` | switch | on | BRW-15: ⌘⇧↵ or ⇧+click opens the row in the right sidebar (§18) |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
 | `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
 | `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
@@ -403,6 +405,26 @@ Preview idle slices are at most 3.7 ms; the cold `[[plexus` preview has a p95 of
 1. BRW-8's report had one more ⇧⇥ screenshot with the pre-review drill hint line: notes, `⇧⇥` (BRW-9 had retaken the four svy ones). Retaken on the 0.6.0 build it reports, `tools/shots.mjs <notes> notes --only 38 --theme dark --code <0.6.0 extension.js>`, on the shipped line; the page as it was is kept with BRW-10's report.
 2. `test/stripkeys.test.js` drives `createStrip` on a jsdom DOM (dev dependency, 26.1.0): with the key list open, Enter, Tab, Shift+Enter, ⌘Enter, Ctrl+Enter and Shift+Tab only close it (event consumed, text unchanged, no commit, the row still selected), Esc closes it, a typed key closes it and goes on, and a control case shows a commit is visible to the harness. Deleting `onKeyDown`'s key-list line, or `helpKey`'s consume, fails it.
 3. §16 said the six key-list cases fail on 0.6.0 "in svy"; BRW-9's report said svy and notes, but only svy had been run. Run in notes now (0.6.0 build, 0.6.1 gates, `--arms on`): all six fail there too, the same way. Enter, and Tab after F1, over Roam's `((` row make a new block `real time pcr` through Roam's row; Shift+Enter, ⌘Enter and Shift+Tab make a newline and a TODO; Enter over Roam's `[[` row inserts the page; Enter over Burrow's row and over the drill panel inserts their block. They pass on 0.7.0 in notes. §16 now says svy and notes.
+
+## 18. Insert variants and the sidebar (BRW-15)
+
+Sources: BRW-12 report §4 (Thymer's Shift+Enter transclusion, RoamJS Quick Switcher's Shift+Enter to the sidebar, Workbench's text-and-alias reference commands). svy holds 556 embed blocks.
+
+**Keys.** Only while a Burrow row (`((` block row, `[[` alias row and its chips, the drill row) or a drill panel row holds the highlight (§4 OWNED or SCOPE). With Roam's row highlighted (ARMED) nothing changes: Roam's ⇧↵ is its newline (memory: only plain Enter and Tab pick Roam's row; ⌘↵ toggles TODO).
+
+| Key | Switch | Block | Page (alias row, chip, a drill-down that reached only its page, an empty drill level that is a page) |
+|---|---|---|---|
+| ⇧↵ | `insertVariants` | `{{[[embed]]: ((uid))}}` | `{{[[embed]]: [[Page]]}}` |
+| ⌥↵ | `insertVariants` | `[label](((uid)))` | `[alias]([[Page]])` whatever `aliasLinkFormat` says; without an alias `[query]([[Page]])`, else `[Page]([[Page]])` |
+| ⌘⇧↵ (Ctrl+Shift+↵ off a Mac), ⇧+click | `openInSidebar` | `rightSidebar.addWindow({type: "block"})` | `addWindow({type: "outline"})` |
+
+The label is what was typed: the `((` query, the drill-down's last step (`[[MCU Watch Order > watch order > ant man` → `ant man`), the drill panel's filter. With nothing typed it is the block's first 40 characters (code points) as a reader sees them: markup, macros and block refs gone (§17's `stripRoamMarkup` after refs are resolved), a markdown image or link reduced to its text; `[` and `]` are dropped from any label (a `]` would end it), whitespace collapsed; an empty result falls back to the uid. `src/variants.js` is pure; the strip passes it a target `{type, uid, text|title, alias}`.
+
+**Safety.** ⇧↵ and ⌥↵ go through `commit` (§4): the same token, caret and focused-block checks, and the stale-key path ranks again and consumes the key when the text before the caret moved. ⌘⇧↵ writes nothing but makes the same token and focus checks before it opens anything; it leaves the textarea, its caret, Burrow's state and Roam's popup as they are, and the panel stays open in SCOPE. A refused variant only redraws (never a Roam row). The modifiers the keys need are checked exactly: ⌥⇧↵, ⌘↵ and Ctrl+⇧↵ on a Mac are not variants.
+
+**Discoverability.** The hint line ends with `⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar` on every Burrow row and in the drill panel (last, so in a narrow panel they are what an ellipsis cuts, never esc); each tip names exactly what ⇧↵ and ⌥↵ would insert; the key list's Pick group lists the three. All three go when their switch is off.
+
+**Cost.** Nothing per key: the variant is decided on the Enter keydown. A tip builds its two insertions on hover.
 
 ## Also noticed
 
