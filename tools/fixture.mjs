@@ -48,6 +48,18 @@ export const DRILL_TREE = [
     { key: "afterHollow", string: "after hollow" },
   ] },
   { key: "many", string: "Many section", children: Array.from({ length: 55 }, (_, i) => ({ key: `many${i + 1}`, string: `many ${String(i + 1).padStart(2, "0")}` })) },
+  // 0.9.0 alias use counts, under one parent so the fixture page's other lists keep their size. `@{usedPage}`
+  // is the `<fixture> Used` page's title, `@{twinAPage}` / `@{twinBPage}` the twin pages'. "zq used three" is used 3 times (one block holds two links),
+  // "zq used two" once, "zq used one" never.
+  { key: "usage", string: "Usage section", children: [
+    { key: "useThreeA", string: "[zq used three]([[@{usedPage}]]) and [zq used three]([[@{usedPage}]]) both" },
+    { key: "useThreeB", string: "[zq used three]([[@{usedPage}]]) again" },
+    { key: "useTwo", string: "[zq used two]([[@{usedPage}]]) once" },
+    // Plain links, so the twin rows carry their own ref counts: Twin A 1, Twin B 2.
+    { key: "twinLinkA", string: "see [[@{twinAPage}]]" },
+    { key: "twinLinkB1", string: "see [[@{twinBPage}]]" },
+    { key: "twinLinkB2", string: "see also [[@{twinBPage}]]" },
+  ] },
 ];
 
 export const RICH_KEYS = ["richCode", "richMarks", "richMacros", "richMedia", "richLong", "richHtml"];
@@ -60,6 +72,27 @@ export const CHIPS_ALIAS_STRING = `Aliases:: ${[...CHIP_ALIASES, CHIP_LONG].join
 
 // The gates use this page; BURROW_FIXTURE_PAGE picks another when a crashed run left a stale tree.
 export const FIXTURE_PAGE = process.env.BURROW_FIXTURE_PAGE || "Burrow/Fixtures";
+
+// Scratch pages of the 0.9.0 alias cases: use counts (`Used`) and one alias shared by two pages (`Twin A`, `Twin B`).
+export const USED_TITLE = `${FIXTURE_PAGE} Used`;
+export const USED_ALIASES = ["zq used one", "zq used two", "zq used three"];
+// Chip order with aliasUsage on (most used first) and the uses behind it.
+export const USED_ORDER = ["zq used three", "zq used two", "zq used one"];
+export const USED_USES = { "zq used three": 3, "zq used two": 1, "zq used one": 0 };
+export const USED_ALIAS_STRING = `Aliases:: ${USED_ALIASES.join(", ")}`;
+export const TWIN_ALIAS = "zq twin shared";
+export const TWIN_A_EXTRA = "zq twin alpha";
+export const TWIN_A_TITLE = `${FIXTURE_PAGE} Twin A`;
+export const TWIN_B_TITLE = `${FIXTURE_PAGE} Twin B`;
+// Plain links to the twin pages in the usage blocks give their alias rows these ref counts.
+export const TWIN_REFS = { a: 1, b: 2 };
+export const TWIN_A_ALIAS_STRING = `Aliases:: ${TWIN_ALIAS}, ${TWIN_A_EXTRA}`;
+export const TWIN_B_ALIAS_STRING = `Aliases:: ${TWIN_ALIAS}`;
+const SCRATCH = [
+  { key: "used", title: USED_TITLE, aliasString: USED_ALIAS_STRING },
+  { key: "twinA", title: TWIN_A_TITLE, aliasString: TWIN_A_ALIAS_STRING },
+  { key: "twinB", title: TWIN_B_TITLE, aliasString: TWIN_B_ALIAS_STRING },
+];
 
 const newUid = () => randomBytes(9).toString("base64url").slice(0, 9);
 
@@ -85,7 +118,8 @@ async function cleanFromLedger(c, ledger) {
     for (const uid of [ledger.blockUid, ...(ledger.drillUids || [])].filter(Boolean)) {
       if (exists(uid)) { await api.data.block.delete({ block: { uid } }); done.blocks += 1; }
     }
-    const pages = [[ledger.chipsUid, ledger.createdChips], [ledger.emptyUid, ledger.createdEmpty], [ledger.pageUid, ledger.createdPage]];
+    const pages = [[ledger.chipsUid, ledger.createdChips], [ledger.emptyUid, ledger.createdEmpty],
+      [ledger.usedUid, ledger.createdUsed], [ledger.twinAUid, ledger.createdTwinA], [ledger.twinBUid, ledger.createdTwinB], [ledger.pageUid, ledger.createdPage]];
     for (const [uid, created] of pages) {
       if (!uid || !created) continue;
       const t = api.q(`[:find ?t . :where [?p :block/uid "${uid}"] [?p :node/title ?t]]`);
@@ -105,7 +139,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     await rm(path, { force: true });
   }
   // What exists now (read-only); the stale-tree check runs after the ledger cleanup.
-  const found = await c.evaluate(({ title, drillTree }) => {
+  const found = await c.evaluate(({ title, drillTree, scratch }) => {
     const api = window.roamAlphaAPI;
     const uidOf = (t) => api.q(`[:find ?u . :where [?p :node/title ${JSON.stringify(t)}] [?p :block/uid ?u]]`);
     const pageUid = uidOf(title);
@@ -114,8 +148,8 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     }
     const chipsUid = uidOf(`${title} Chips`);
     const chipsAliasUid = chipsUid ? api.q(`[:find ?u . :where [?p :block/uid "${chipsUid}"] [?p :block/children ?b] [?b :block/string ?s] [(clojure.string/starts-with? ?s "Aliases::")] [?b :block/uid ?u]]`) : null;
-    return { pageUid, emptyUid: uidOf(`${title} Empty`), chipsUid, chipsAliasUid };
-  }, { title: FIXTURE_PAGE, drillTree });
+    return { pageUid, emptyUid: uidOf(`${title} Empty`), chipsUid, chipsAliasUid, scratch: Object.fromEntries(scratch.map((p) => [p.key, uidOf(p.title)])) };
+  }, { title: FIXTURE_PAGE, drillTree, scratch: SCRATCH.map(({ key, title }) => ({ key, title })) });
 
   // Every uid is chosen here so the ledger can be written before anything is created.
   const drill = {};
@@ -134,14 +168,18 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     title: String(c.page.title || "").split(" - ")[0],
     pageUid: found.pageUid || newUid(), emptyUid: found.emptyUid || newUid(), chipsUid: found.chipsUid || newUid(),
     chipsAliasUid: found.chipsAliasUid || newUid(), blockUid: newUid(), drillUids,
+    usedUid: found.scratch.used || newUid(), twinAUid: found.scratch.twinA || newUid(), twinBUid: found.scratch.twinB || newUid(),
+    createdUsed: !found.scratch.used, createdTwinA: !found.scratch.twinA, createdTwinB: !found.scratch.twinB,
     createdPage: !found.pageUid, createdEmpty: !found.emptyUid, createdChips: !found.chipsUid, sidebar: false, at: Date.now(),
   };
   await writeFile(path, JSON.stringify(plan));
   try {
-    const fx = await c.evaluate(async ({ plan, drillTree, tree, drill, refsUid, title, aliasString, richKeys }) => {
+    const fx = await c.evaluate(async ({ plan, drillTree, tree, drill, refsUid, title, aliasString, richKeys, scratch }) => {
       const api = window.roamAlphaAPI;
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const created = { page: plan.createdPage, sidebar: false, emptyPage: plan.createdEmpty, chipsPage: plan.createdChips, drill: [] };
+      const created = { page: plan.createdPage, sidebar: false, emptyPage: plan.createdEmpty, chipsPage: plan.createdChips, drill: [],
+        used: plan.createdUsed, twinA: plan.createdTwinA, twinB: plan.createdTwinB };
+      const scratchUid = { used: plan.usedUid, twinA: plan.twinAUid, twinB: plan.twinBUid };
       const { pageUid, emptyUid, chipsUid, chipsAliasUid, blockUid } = plan;
       if (created.page) await api.data.page.create({ page: { title, uid: pageUid } });
       // An empty page for the "nothing to drill into" Tab case.
@@ -151,10 +189,16 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         await api.data.page.create({ page: { title: `${title} Chips`, uid: chipsUid } });
         await api.data.block.create({ location: { "parent-uid": chipsUid, order: 0 }, block: { string: aliasString, uid: chipsAliasUid } });
       }
+      // Alias use counts and a shared alias: pages made only when missing, deleted only if made here.
+      for (const p of scratch) {
+        if (!created[p.key]) continue;
+        await api.data.page.create({ page: { title: p.title, uid: scratchUid[p.key] } });
+        await api.data.block.create({ location: { "parent-uid": scratchUid[p.key], order: 0 }, block: { string: p.aliasString } });
+      }
       // The drill tree goes in before the typing block and before keepAll, so
       // the gates never count it as a block Roam created.
       if (drillTree) {
-        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : drill[k]));
+        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : k === "usedPage" ? scratch[0].title : k === "twinAPage" ? scratch[1].title : k === "twinBPage" ? scratch[2].title : drill[k]));
         const make = async (nodes, parent) => {
           for (const n of nodes) {
             await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: fill(n.string), uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}) } });
@@ -197,9 +241,11 @@ export async function setupFixture(c, { drillTree = false } = {}) {
       for (const old of window.__burrowGuards || []) window.removeEventListener("keydown", old, true);
       window.__burrowGuards = [guard.onKeyDown];
       window.addEventListener("keydown", guard.onKeyDown, true);
-      window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill, emptyTitle: `${title} Empty`, emptyUid, chipsTitle: `${title} Chips`, chipsUid, chipsAliasUid };
-      return { pageUid, blockUid, windowId, created, drill, chipsTitle: `${title} Chips`, chipsAliasUid, emptyUid, chipsUid };
-    }, { plan, drillTree, tree: DRILL_TREE, drill, refsUid, title: FIXTURE_PAGE, aliasString: CHIPS_ALIAS_STRING, richKeys: RICH_KEYS });
+      // What Burrow's alias index must hold before the alias cases (see waitAliasFixtures); the uses only with the usage blocks.
+      const usage = { usedUid: scratchUid.used, usedTitle: scratch[0].title, twinAUid: scratchUid.twinA, twinBUid: scratchUid.twinB, twinATitle: scratch[1].title, twinBTitle: scratch[2].title, counted: drillTree };
+      window.__burrowFixture = { pageUid, blockUid, windowId, inputId, created, keepAll, guard, drill, emptyTitle: `${title} Empty`, emptyUid, chipsTitle: `${title} Chips`, chipsUid, chipsAliasUid, usage, scratchUid };
+      return { pageUid, blockUid, windowId, created, drill, chipsTitle: `${title} Chips`, chipsAliasUid, emptyUid, chipsUid, usage, scratchUid };
+    }, { plan, drillTree, tree: DRILL_TREE, drill, refsUid, title: FIXTURE_PAGE, aliasString: CHIPS_ALIAS_STRING, richKeys: RICH_KEYS, scratch: SCRATCH });
     await writeFile(path, JSON.stringify({ ...plan, sidebar: fx.created.sidebar }));
     return fx;
   } catch (error) {
@@ -319,6 +365,15 @@ async function cleanupFixtureInPage(c, { keep }) {
         await api.data.page.delete({ page: { uid: g.chipsUid } });
       }
     }
+    // The scratch alias pages: only the alias block left, nothing linking in.
+    for (const [key, prefix] of [["used", "Aliases:: zq used"], ["twinA", "Aliases:: zq twin"], ["twinB", "Aliases:: zq twin"]]) {
+      if (!g.created[key]) continue;
+      const p = api.pull("[:block/uid {:block/children [:block/string]} {:block/_refs [:db/id]}]", [":block/uid", g.scratchUid[key]]);
+      const kids = p?.[":block/children"] || [];
+      if (p && kids.length === 1 && kids[0][":block/string"].startsWith(prefix) && !p[":block/_refs"]?.length) {
+        await api.data.page.delete({ page: { uid: g.scratchUid[key] } });
+      }
+    }
     window.__burrowFixture = null;
     return { blockExists: Boolean(exists) };
   }, { keep });
@@ -435,3 +490,38 @@ export const createdSince = (c, t0) => c.evaluate((t0) => window.roamAlphaAPI.q(
 export const deleteBlock = (c, uid) => c.evaluate(async (uid) => {
   if (window.roamAlphaAPI.q(`[:find ?e . :where [?e :block/uid "${uid}"]]`)) await window.roamAlphaAPI.data.block.delete({ block: { uid } });
 }, uid);
+
+// After Burrow is loaded: its alias index has read the scratch pages (and, with the aliasUsage
+// switch on and the usage blocks made, their use counts). A build is forced when the idle
+// one has not seen them; throws when they never show up.
+export async function waitAliasFixtures(c) {
+  const result = await c.evaluate(async () => {
+    const g = window.__burrowFixture;
+    if (!g?.usage) return { ok: true, skipped: true };
+    const u = g.usage;
+    const counts = Boolean(window.__burrowDev?.values?.aliasUsage) && u.counted;
+    const state = () => {
+      const index = window.__BURROW?.indexes?.aliases;
+      const has = (t) => Boolean(index?.entries.some((e) => e.title === t));
+      return {
+        entries: has(u.usedTitle) && has(u.twinATitle) && has(u.twinBTitle),
+        uses: !counts || (index?.usesByAlias?.get(`${u.usedUid}\u0000zq used three`) === 3
+          && index.refsByPage?.get(u.twinAUid) === 1 && index.refsByPage?.get(u.twinBUid) === 2),
+      };
+    };
+    const done = () => { const s = state(); return s.entries && s.uses; };
+    let forced = 0;
+    for (let t0 = performance.now(), last = t0; !done() && performance.now() - t0 < 15000;) {
+      if (performance.now() - last > 1500 && window.__BURROW?.indexes?.build) {
+        last = performance.now();
+        forced += 1;
+        try { await window.__BURROW.indexes.build(); } catch { /* retried */ }
+        continue;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { ok: done(), forced, ...state() };
+  });
+  if (!result.ok) throw new Error(`Burrow's alias index lacks the fixture's alias pages: ${JSON.stringify(result)}`);
+  return result;
+}

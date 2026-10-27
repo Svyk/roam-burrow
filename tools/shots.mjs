@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles, waitAliasFixtures } from "./fixture.mjs";
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
@@ -27,7 +27,7 @@ const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
-  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
+  "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
@@ -113,6 +113,10 @@ const SCENARIOS = [
   { id: "60-recent-two-chars", query: "((ze", keys: ["preview-closed"], seedPicks: true },
   { id: "61-recent-empty-page", query: "[[", keys: ["preview-closed"], seedPicks: true },
   { id: "62-tip-recent-row", query: "((", keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"], seedPicks: true },
+  // 0.9.0: chips ordered by use (the hovered chip's tip carries its count), two pages sharing an alias, the `alias:` prefix.
+  { id: "63-chips-by-use", query: "[[zq used", keys: ["alt+ArrowDown", "hover:.burrow-chips .burrow-chip", "wait:700"] },
+  { id: "64-shared-alias-rows", query: "[[zq twin sh", keys: [] },
+  { id: "65-alias-prefix-rows", query: "[[alias:zq", keys: [] },
 ];
 
 const c = await connect(title);
@@ -313,6 +317,7 @@ try {
   fixture = await setupFixture(c, { drillTree: true });
   const loaded = await setArm("on");
   if (!loaded.refs) throw new Error("index not built");
+  await waitAliasFixtures(c);
   const stamp = `${label}-${theme || "default"}`;
   for (const scenario of SCENARIOS.filter((x) => !only || only.some((id) => x.id.startsWith(id)))) {
     await c.evaluate((settings) => {

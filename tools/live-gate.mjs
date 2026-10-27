@@ -20,8 +20,9 @@ import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
 import {
-  CHIP_ALIASES, CHIP_LONG, CHIPS_ALIAS_STRING, FIXTURE_PAGE, aliasBlockString, childStrings, cleanupFixture, createdSince, deleteBlock, editedSince, guardReport,
-  neutralClick, onAbort, pageNow, placeLow, placeNormal, primeFixture, setAliasBlock, setupFixture,
+  CHIP_ALIASES, CHIP_LONG, CHIPS_ALIAS_STRING, FIXTURE_PAGE, TWIN_A_TITLE, TWIN_ALIAS, TWIN_B_TITLE, TWIN_REFS, USED_ALIASES, USED_ORDER, USED_TITLE, USED_USES,
+  aliasBlockString, childStrings, cleanupFixture, createdSince, deleteBlock, editedSince, guardReport,
+  neutralClick, onAbort, pageNow, placeLow, placeNormal, primeFixture, setAliasBlock, setupFixture, waitAliasFixtures,
 } from "./fixture.mjs";
 
 const CONFIGS = {
@@ -51,7 +52,7 @@ const CONFIGS = {
 const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
-  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
+  "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
   "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency"];
 const REF_COMMAND = "Burrow: block reference search";
@@ -170,6 +171,11 @@ async function state() {
         classes: [...new Set([...r.querySelectorAll("*")].flatMap((n) => [...n.classList].filter((x) => x.startsWith("burrow-"))))].sort(),
         checks: [...r.querySelectorAll(".burrow-check")].map((n) => `${n.classList.contains("burrow-done") ? "done" : "todo"}:${getComputedStyle(n, "::after").content !== "none" ? "on" : "off"}:${getComputedStyle(n).pointerEvents === "none" ? "ro" : "rw"}`),
       })),
+      // The count element of each Burrow row (alias and page rows draw one when the page has links).
+      nativeRows: document.querySelectorAll(".rm-autocomplete__results-scroll > div").length,
+      rowCounts: [...document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row")].map((r) => r.querySelector(".rm-autocomplete__ref-count")?.textContent ?? null),
+      // roam-aliases' items that are drawn, not folded into a Burrow row (see FOLDED in src/strip.js).
+      roamAliasItems: [...document.querySelectorAll(".rm-aliases .dont-focus-block.alias")].filter((n) => shown(n) && !n.hasAttribute("data-burrow-folded")).map((n) => n.textContent),
       // Block text is never HTML: no element the text could have made, and no handler that ran.
       htmlEls: [...document.querySelectorAll(".burrow-strip img, .burrow-strip b, .burrow-strip script")].map((n) => n.tagName),
       xss: window.__burrowXss ?? null,
@@ -308,7 +314,7 @@ async function state() {
 async function setArm(arm) {
   const code = await readFile(new URL("extension.js", root), "utf8");
   const css = await readFile(new URL("extension.css", root), "utf8");
-  return c.evaluate(async ({ arm, code, css, features, refCommand }) => {
+  const loaded = await c.evaluate(async ({ arm, code, css, features, refCommand }) => {
     const dev = window.__burrowDev || (window.__burrowDev = { values: {} });
     if (arm === "gone") {
       if (dev.module) await dev.module.default.onunload();
@@ -350,6 +356,9 @@ async function setArm(arm) {
     while (!window.__BURROW?.indexes?.refs && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
     return { arm, refs: window.__BURROW?.indexes?.refs?.entries.length };
   }, { arm, code, css, features: FEATURES, refCommand: REF_COMMAND });
+  // The alias cases need the scratch alias pages (and use counts) in Burrow's index; "off" never reads them.
+  if (arm === "on" || arm === "drilloff") await waitAliasFixtures(c);
+  return loaded;
 }
 
 // ---- cases ----
@@ -668,7 +677,8 @@ const ALIAS_CASES = [
     },
   },
   {
-    name: "alias chips: ⌥↓, ←, Enter", query: config.chips.query,
+    // Real pages may have use counts; this case is about the alias-block order.
+    name: "alias chips: ⌥↓, ←, Enter", query: config.chips.query, settings: { aliasUsage: false },
     keys: ["snap", ...config.chips.keys.flatMap((k) => (k === "alt+ArrowDown" ? [k, "snap"] : [k]))], on: `${SEED}${config.chips.insert}`,
     check: (r) => {
       const chips = r.snaps[1]?.chips || [];
@@ -677,7 +687,7 @@ const ALIAS_CASES = [
   },
   {
     // The fixture's Chips page has more aliases than the chip line holds.
-    name: "alias chips: the active chip scrolls into view", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`,
+    name: "alias chips: the active chip scrolls into view", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, settings: { aliasUsage: false },
     keys: ["alt+ArrowDown", "snap", ...Array(7).fill("ArrowRight"), "snap", ...Array(7).fill("ArrowLeft"), "snap", ...Array(7).fill("ArrowRight"), "Enter"],
     on: `${SEED}[${CHIP_ALIASES.at(-1)}]([[${FIXTURE_PAGE} Chips]])`,
     check: (r) => {
@@ -692,7 +702,7 @@ const ALIAS_CASES = [
     },
   },
   {
-    name: "alias chips: wheel scrolls the line, click a hidden chip", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`,
+    name: "alias chips: wheel scrolls the line, click a hidden chip", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, settings: { aliasUsage: false },
     keys: ["snap", `wheel-until:chips:${CHIP_ALIASES[7]}`, "rerender", "wait:300", "wait:200", "snap", `click:chip:${CHIP_ALIASES[7]}`],
     on: `${SEED}[${CHIP_ALIASES[7]}]([[${FIXTURE_PAGE} Chips]])`,
     check: ({ snaps: [a, b] }) => {
@@ -703,7 +713,7 @@ const ALIAS_CASES = [
     },
   },
   {
-    name: "alias chips: a long alias shows in full when selected", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, settings: { aliasDelete: true },
+    name: "alias chips: a long alias shows in full when selected", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, settings: { aliasDelete: true, aliasUsage: false },
     keys: ["alt+ArrowDown", "snap", ...Array(8).fill("ArrowRight"), "snap", "Enter"],
     on: `${SEED}[${CHIP_LONG}]([[${FIXTURE_PAGE} Chips]])`,
     check: ({ snaps: [a, b] }) => {
@@ -728,7 +738,7 @@ const ALIAS_CASES = [
     },
   },
   {
-    name: "chips: at the end of the line the wheel goes on to Roam's list", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, mayCreatePage: true,
+    name: "chips: at the end of the line the wheel goes on to Roam's list", query: `[[${CHIP_ALIASES[0].slice(0, 10)}`, mayCreatePage: true, settings: { aliasUsage: false },
     keys: [`wheel-until:chips:${CHIP_LONG}`, "snap", "wheel:chips:120", "wait:250", "snap", "wheel:chips:-120", "wait:250", "snap", "Escape"],
     check: ({ snaps: [a, b, d] }) => {
       if (!(a?.chipsScroll > 0) || a.lastWheel !== "chips") return `the line did not scroll to its end: ${a?.chipsScroll} ${a?.lastWheel}`;
@@ -843,6 +853,90 @@ const ALIAS_CASES = [
     check: ({ snaps: [a, b] }) => {
       if (a?.rowPreview?.trail !== config.preselect.page || !a.rowPreview.docked || !a.rowPreview.overNative) return `Burrow row selected: ${JSON.stringify(a?.rowPreview)}`;
       return b?.rowPreview === null ? null : `Roam row selected: ${JSON.stringify(b?.rowPreview)}`;
+    },
+  },
+  {
+    // 0.9.0: two pages share one alias. One Burrow row per page, each with its own count, and no
+    // alias/page pair listed twice by Burrow and a roam-aliases item not folded away.
+    name: "shared alias: one row per page", query: "[[zq twin sh", keys: ["snap", "ArrowUp", "snap", "Enter"],
+    check: ({ snaps: [a, b], string }) => {
+      const aliasRows = (a?.rows || []).map((row, i) => ({ row, i })).filter(({ row }) => row.text.includes("↳"));
+      if (aliasRows.length !== 2) return `${aliasRows.length} alias rows ${JSON.stringify(a?.rows)}`;
+      const which = (text) => (text.includes(TWIN_A_TITLE) ? "A" : text.includes(TWIN_B_TITLE) ? "B" : "?");
+      if (aliasRows.map(({ row }) => which(row.text)).sort().join("") !== "AB") return `rows are not one per page ${JSON.stringify(a.rows)}`;
+      for (const { row, i } of aliasRows) {
+        const want = String(which(row.text) === "A" ? TWIN_REFS.a : TWIN_REFS.b);
+        if (a.rowCounts?.[i] !== want) return `row ${JSON.stringify(row.text)} count ${JSON.stringify(a.rowCounts?.[i])}, expected ${want}`;
+      }
+      for (const title of [TWIN_A_TITLE, TWIN_B_TITLE]) {
+        const listed = aliasRows.filter(({ row }) => row.text.includes(title)).length
+          + (a.roamAliasItems || []).filter((text) => text.includes(TWIN_ALIAS) && text.includes(title)).length;
+        if (listed > 1) return `${TWIN_ALIAS} -> ${title} listed ${listed} times ${JSON.stringify({ rows: a.rows.map((row) => row.text), roam: a.roamAliasItems })}`;
+      }
+      const at = b?.rows.findIndex((row) => row.active) ?? -1;
+      if (at < 0 || !b.rows[at].text.includes("↳")) return `after ↑ no alias row selected ${JSON.stringify(b?.rows)}`;
+      const title = which(b.rows[at].text) === "A" ? TWIN_A_TITLE : which(b.rows[at].text) === "B" ? TWIN_B_TITLE : null;
+      if (!title) return `highlighted row ${JSON.stringify(b.rows[at].text)}`;
+      return string === `${SEED}[${TWIN_ALIAS}]([[${title}]])` ? null : `inserted ${JSON.stringify(string)} for the highlighted ${title}`;
+    },
+  },
+  {
+    // 0.9.0: `[[alias:` lists alias rows only (up to 3) over Roam's list, the first pre-selected, and
+    // Enter inserts the alias link with nothing of `alias:` left. The aliasPrefix-off arm is a byte case below.
+    name: "alias: prefix lists only alias rows", query: "[[alias:zq us", keys: ["snap", "Enter"],
+    check: ({ snaps: [a], string }) => {
+      const rows = a?.rows || [];
+      if (rows.length < 1 || rows.length > 3) return `${rows.length} Burrow rows ${JSON.stringify(rows)}`;
+      if (rows.some((row) => !row.text.includes("↳") || !row.text.includes(USED_TITLE))) return `a row that is not an alias row of ${USED_TITLE}: ${JSON.stringify(rows)}`;
+      if (!rows[0].active) return `first row not pre-selected ${JSON.stringify(rows)}`;
+      if (!a.nativeRows) return "Roam's own list is gone";
+      const escaped = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (!new RegExp(`^${escaped(SEED)}\\[(${USED_ALIASES.map(escaped).join("|")})\\]\\(\\[\\[${escaped(USED_TITLE)}\\]\\]\\)$`).test(string)) return `inserted ${JSON.stringify(string)}`;
+      return string.includes("alias:") ? `alias: left in ${JSON.stringify(string)}` : null;
+    },
+  },
+];
+
+// 0.9.0 alias use order and the aliasPrefix switch, in the byte-for-byte arms: off and gone agree, and
+// "on" is the expected text (or agrees with gone when nothing is written).
+const usageTitle = (alias, uses) => (uses > 0 ? `${alias} ×${uses}` : alias);
+const ALIAS_USAGE_CASES = [
+  {
+    // Chips under the selected alias row, most used first; ties keep the alias block's order.
+    name: "alias usage: chips most used first", query: "[[zq used", keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a], string }) => {
+      const chips = a?.chips || [];
+      if (JSON.stringify(chips.map((chip) => chip.text)) !== JSON.stringify(USED_ORDER)) return `chips ${JSON.stringify(chips.map((chip) => chip.text))} != ${JSON.stringify(USED_ORDER)}`;
+      const titles = chips.map((chip) => chip.title);
+      const want = USED_ORDER.map((alias) => usageTitle(alias, USED_USES[alias]));
+      if (JSON.stringify(titles) !== JSON.stringify(want)) return `chip titles ${JSON.stringify(titles)} != ${JSON.stringify(want)}`;
+      return string === `${SEED}[[zq used]]` ? null : `block text ${JSON.stringify(string)}`;
+    },
+  },
+  {
+    name: "alias usage off: chips in the alias block's order", query: "[[zq used", settings: { aliasUsage: false }, keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a], string }) => {
+      const chips = a?.chips || [];
+      if (JSON.stringify(chips.map((chip) => chip.text)) !== JSON.stringify(USED_ALIASES)) return `chips ${JSON.stringify(chips.map((chip) => chip.text))} != ${JSON.stringify(USED_ALIASES)}`;
+      if (chips.some((chip) => chip.title !== chip.text)) return `chip titles ${JSON.stringify(chips.map((chip) => chip.title))}`;
+      return string === `${SEED}[[zq used]]` ? null : `block text ${JSON.stringify(string)}`;
+    },
+  },
+  {
+    // ⌥↓ lands on the matched alias chip; ← three times (the line has three, ← stops at the first) reaches the most used.
+    name: "alias usage: Enter on the first chip inserts the most used", query: "[[zq used", keys: ["alt+ArrowDown", "ArrowLeft", "ArrowLeft", "ArrowLeft", "Enter"],
+    on: `${SEED}[${USED_ORDER[0]}]([[${USED_TITLE}]])`,
+  },
+  {
+    // aliasPrefix off: no Burrow row for the text, so Roam alone answers Enter (same as gone).
+    name: "alias: prefix off: Roam's list alone", query: "[[alias:zq us", settings: { aliasPrefix: false }, loose: true, keys: ["snap", "Enter"],
+    check: ({ snaps: [a] }) => (a?.rows.length ? `Burrow rows ${JSON.stringify(a.rows)}` : null),
+  },
+  {
+    name: "alias: prefix: Esc writes nothing", query: "[[alias:zq tw", keys: ["snap", "Escape"],
+    check: ({ snaps: [a], string }) => {
+      if (!a?.rows.length || a.rows.some((row) => !row.text.includes("↳"))) return `rows ${JSON.stringify(a?.rows)}`;
+      return string === `${SEED}[[alias:zq tw]]` ? null : `block text ${JSON.stringify(string)}`;
     },
   },
 ];
@@ -1103,7 +1197,7 @@ function chipsProblem(snap) {
 
 // Write cases, on arm only: each restores what it wrote. `read` runs before the restore.
 const CHIPS_Q = `[[${CHIP_ALIASES[0].slice(0, 10)}`;
-const WRITE_SETTINGS = { aliasCreate: true, aliasDelete: true };
+const WRITE_SETTINGS = { aliasCreate: true, aliasDelete: true, aliasUsage: false };
 const within = (edited, ...allowed) => edited.every((u) => allowed.includes(u));
 const WRITE_CASES = [
   {
@@ -1886,7 +1980,7 @@ async function runAbove() {
 const report = { window: c.page.title, config: configName, theme, themeSet, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
 const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
-const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE];
+const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE, ...ALIAS_USAGE_CASES];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
 const PICKS = "recent and frequent picks: pick then empty ((, 3 picks reorder, forget";
 const TEXT = "text boxes: no text overlaps another in any picker state";
@@ -2073,7 +2167,7 @@ try {
   } else {
   for (const arm of arms) {
     report.arms[arm] = {};
-    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE] : [...cases, ...DRILL_CASES]) {
+    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE, ...ALIAS_USAGE_CASES] : [...cases, ...DRILL_CASES]) {
       // Unload and break both damage the runtime: reload the module per case.
       const loaded = await setArm(arm);
       if (arm !== "gone" && !loaded.refs) throw new Error(`arm ${arm}: index not built`);
