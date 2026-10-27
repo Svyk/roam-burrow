@@ -900,7 +900,7 @@ const ALIAS_CASES = [
 // 0.9.0 alias use order and the aliasPrefix switch, in the byte-for-byte arms: off and gone agree, and
 // "on" is the expected text (or agrees with gone when nothing is written).
 const usageTitle = (alias, uses) => (uses > 0 ? `${alias} ×${uses}` : alias);
-const ALIAS_USAGE_CASES = [
+const ALIAS_USAGE_RUN_CASES = [
   {
     // Chips under the selected alias row, most used first; ties keep the alias block's order.
     name: "alias usage: chips most used first", query: "[[zq used", keys: ["alt+ArrowDown", "snap", "Escape", "Escape"],
@@ -927,6 +927,12 @@ const ALIAS_USAGE_CASES = [
     name: "alias usage: Enter on the first chip inserts the most used", query: "[[zq used", keys: ["alt+ArrowDown", "ArrowLeft", "ArrowLeft", "ArrowLeft", "Enter"],
     on: `${SEED}[${USED_ORDER[0]}]([[${USED_TITLE}]])`,
   },
+];
+
+// The same Enter, Esc and Tab as gone are compared in ALIAS_USAGE_CASES; these press ⌥↓ and ←,
+// which without Burrow are Roam's own keys (⌥↓ moves the block), so they run on the on arm only,
+// like the other chip cases.
+const ALIAS_USAGE_CASES = [
   {
     // aliasPrefix off: no Burrow row for the text, so Roam alone answers Enter (same as gone).
     name: "alias: prefix off: Roam's list alone", query: "[[alias:zq us", settings: { aliasPrefix: false }, loose: true, keys: ["snap", "Enter"],
@@ -1979,7 +1985,7 @@ async function runAbove() {
 
 const report = { window: c.page.title, config: configName, theme, themeSet, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
-const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
+const ALIAS_RUN_CASES = [...ALIAS_CASES, ...ALIAS_USAGE_RUN_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
 const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE, ...ALIAS_USAGE_CASES];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
 const PICKS = "recent and frequent picks: pick then empty ((, 3 picks reorder, forget";
