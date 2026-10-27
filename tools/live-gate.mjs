@@ -239,7 +239,7 @@ async function state() {
         return null;
       })(),
       thumbAny: document.querySelectorAll(".burrow-thumb").length,
-      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.input || []).slice(-40).map((x) => Math.round(x * 100) / 100) },
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.["scope.key"] || []).slice(-40).map((x) => Math.round(x * 100) / 100) },
       thumbLog: window.__burrowThumbLog ?? null,
       urlNet: window.__burrowUrlNet ?? null,
       pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
@@ -616,7 +616,7 @@ async function runKeys(keys, snaps = []) {
         if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
         await sleep(100);
       }
-    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; if (window.__BURROW_PERF?.samples) window.__BURROW_PERF.samples.input = []; });
+    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; if (window.__BURROW_PERF?.samples) window.__BURROW_PERF.samples["scope.key"] = []; });
     else if (k === "count-urls") {
       await c.evaluate(() => {
         if (window.__burrowUrlWrap) return;
@@ -633,12 +633,14 @@ async function runKeys(keys, snaps = []) {
         if (window.__burrowThumbWatch) return;
         window.__burrowThumbLog = [];
         const record = () => {
-          for (const t of document.querySelectorAll(".burrow-preview:not([hidden]) .burrow-thumb")) {
+          // From the moment the box exists, also while its pane is still hidden (drawn, then shown in a frame).
+          for (const t of document.querySelectorAll(".burrow-preview .burrow-thumb")) {
             const pane = t.closest(".burrow-preview");
+            const shown = !pane.hidden;
             const b = t.getBoundingClientRect();
             const p = pane.getBoundingClientRect();
-            const entry = { state: t.getAttribute("data-state"), w: Math.round(b.width), h: Math.round(b.height),
-              left: Math.round(b.left - p.left), top: Math.round(b.top - p.top + pane.scrollTop), img: Boolean(t.querySelector("img")) };
+            const entry = { state: t.getAttribute("data-state"), shown, w: shown ? Math.round(b.width) : null, h: shown ? Math.round(b.height) : null,
+              left: shown ? Math.round(b.left - p.left) : null, top: shown ? Math.round(b.top - p.top + pane.scrollTop) : null, img: Boolean(t.querySelector("img")) };
             const last = window.__burrowThumbLog[window.__burrowThumbLog.length - 1];
             if (!last || JSON.stringify(last) !== JSON.stringify(entry)) window.__burrowThumbLog.push(entry);
           }
@@ -1076,10 +1078,12 @@ const BLOCK_CASES = [
       // The box is there, empty and full size, before the image: its first recorded state is "wait", without an img,
       // and every later state up to "ok" keeps its size and place.
       const log = b?.thumbLog || [];
-      const first = log[0];
-      if (!first || first.state !== "wait" || first.img || first.w !== t.w || first.h !== t.h) return `not reserved before load: ${JSON.stringify(log)}`;
-      if (!log.some((e) => e.state === "ok")) return `never ok: ${JSON.stringify(log)}`;
-      if (log.some((e) => e.w !== first.w || e.h !== first.h || e.left !== first.left || e.top !== first.top)) return `layout shift while loading: ${JSON.stringify(log)}`;
+      if (!log[0] || log[0].state !== "wait" || log[0].img) return `not reserved before load: ${JSON.stringify(log)}`;
+      const seen = log.filter((e) => e.shown);
+      const box = seen.find((e) => e.state === "wait") || seen[0];
+      if (!box || box.w !== t.w || box.h !== t.h) return `no full-size box shown before the image: ${JSON.stringify(log)}`;
+      if (!seen.some((e) => e.state === "ok")) return `never ok: ${JSON.stringify(log)}`;
+      if (seen.some((e) => e.w !== box.w || e.h !== box.h || e.left !== box.left || e.top !== box.top)) return `layout shift while loading: ${JSON.stringify(log)}`;
       const u = b?.thumb;
       if (!u || u.state !== "ok" || !(u.img?.natural > 0)) return `second snap ${JSON.stringify(u)}`;
       const scheme = config.encrypted ? "blob" : "https";

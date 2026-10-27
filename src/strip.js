@@ -1865,11 +1865,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (scopePreview.unfinished) scheduleRest(scopePreview, () => st.phase === "SCOPE" && Boolean(st.scope?.preview), "scope");
   }
 
+  // ↑/↓ in the drill panel redraw its preview in the key's own work: one "scope.key" sample each.
   function scopeMove(delta) {
-    const level = scopeLevel();
-    level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
-    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
-    showScopePreview();
+    perf.time("scope.key", () => {
+      const level = scopeLevel();
+      level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
+      scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
+      showScopePreview();
+    });
   }
 
   function scopeDeeper() {
