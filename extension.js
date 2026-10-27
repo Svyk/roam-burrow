@@ -4267,9 +4267,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function showPreview() {
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
-      if (model?.drillKey !== st.drill.key) {
+      if (model?.drillKey !== st.drill.key || model.tables !== setting("previewTables")) {
         model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
         model.drillKey = st.drill.key;
+        model.tables = setting("previewTables");
       }
       const budgetMs = richBudget(1);
       if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true, budgetMs });
@@ -5631,7 +5632,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       scopePreview.hide();
       return;
     }
-    const key = `${page.uid}:${target?.uid ?? ""}`;
+    const key = `${page.uid}:${target?.uid ?? ""}:${setting("previewTables")}`;
     if (scopeModel?.drillKey !== key) {
       scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
       scopeModel.drillKey = key;
