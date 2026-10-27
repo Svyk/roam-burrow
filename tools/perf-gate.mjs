@@ -38,6 +38,7 @@ const drill = args.includes("--drill");
 const withPreview = args.includes("--preview");
 const cold = flag("--cold", null);
 const query = flag("--query", drill ? "never > grand" : "ant man");
+// The (( opener and the first two characters of the query are the recent rows' keys (BRW-14).
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
@@ -56,7 +57,7 @@ async function setArm(arm) {
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
     for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows"]) dev.values[f] = true;
+      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency"]) dev.values[f] = true;
     dev.values.helpNudgeSeen = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";

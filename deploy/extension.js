@@ -65,7 +65,7 @@ function createFrecency({ storage, key, legacyKey = null, now = Date.now }) {
     } catch {
     }
   };
-  const load = () => {
+  const load = (older = true) => {
     if (entries) return entries;
     entries = [];
     byId = /* @__PURE__ */ new Map();
@@ -83,13 +83,20 @@ function createFrecency({ storage, key, legacyKey = null, now = Date.now }) {
         byId.set(id(e.k, e.id), entry);
       }
     }
-    migrate();
+    if (older) migrate();
     return entries;
   };
   return {
     // Reads the store (and folds in a pick memory of an older version) now.
     load() {
       load();
+    },
+    // Reads the stored value again, as it is (the live gate puts the browser's
+    // own store back and syncs the running instance to it).
+    reload() {
+      entries = null;
+      changed();
+      load(false);
     },
     record(kind, uid) {
       if (!KINDS.has(kind) || !uid || typeof uid !== "string") return;

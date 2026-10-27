@@ -53,7 +53,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency"];
 const REF_COMMAND = "Burrow: block reference search";
 
 const [title, configName, ...flags] = process.argv.slice(2);
@@ -1414,42 +1414,98 @@ const TAB_CASES = [
   },
 ].filter((kase) => !kase.refCase || config.refHasChildren);
 
-// Pick memory, on arm only: pick the second of two equal rows, type the same
-// query again, and that row must come first. The browser's pick store is
-// put back exactly as it was.
-async function runPickCase() {
+// Recent rows and frequent first (BRW-14), on arm only. The browser's own
+// frecency and old pick stores are put back exactly as they were, and the
+// running instance re-reads them.
+async function withPickStore(fn) {
   const saved = await c.evaluate(() => {
-    const key = `burrow:picks:${window.roamAlphaAPI.graph?.name ?? "graph"}`;
-    const value = localStorage.getItem(key);
-    window.__burrowDev.values.pickMemory = true;
-    return { key, value };
+    const graph = window.roamAlphaAPI.graph?.name ?? "graph";
+    return [`burrow:frecency:${graph}`, `burrow:picks:${graph}`].map((key) => ({ key, value: localStorage.getItem(key) }));
   });
-  const query = "((zebra burrow pick";
-  const typeAndRead = async () => {
-    const primed = await prime(SEED);
-    if (!primed.ok) return { error: "focus failed" };
-    await c.type(query, TYPE_MS);
-    await settle("on");
-    return state();
-  };
   try {
-    const first = await typeAndRead();
-    await c.key("ArrowDown");
-    await sleep(80);
-    await c.key("Enter");
-    const picked = await readBack();
-    const second = await typeAndRead();
-    await c.key("Escape");
-    await readBack();
-    return { first: first.rows, firstUids: [first.firstUid], picked: picked.string, second: second.rows, secondFirst: second.firstUid };
+    await c.evaluate(() => window.__BURROW.frecency.clear());
+    return await fn();
   } finally {
-    await c.evaluate(({ key, value }) => {
-      window.__burrowDev.values.pickMemory = false;
-      if (value == null) localStorage.removeItem(key);
-      else localStorage.setItem(key, value);
+    await c.evaluate((saved) => {
+      for (const { key, value } of saved) {
+        if (value == null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      }
+      window.__BURROW?.frecency?.reload();
     }, saved);
   }
 }
+
+const seedPick = (uid) => c.evaluate((uid) => window.__BURROW.frecency.record("block", uid), uid);
+
+async function runPickCases() {
+  return withPickStore(async () => {
+    const query = "((zebra burrow pick";
+    const typeAndRead = async (text) => {
+      const primed = await prime(SEED);
+      if (!primed.ok) return { error: "focus failed" };
+      await c.type(text, TYPE_MS);
+      await settle("on");
+      return state();
+    };
+    const out = {};
+    // (a) Pick the second of two equal rows; an empty (( then lists it first,
+    // not selected. (The same Enter in off/gone arms: the byte case below.)
+    const first = await typeAndRead(query);
+    await c.key("ArrowDown");
+    await sleep(80);
+    const chosen = (await state()).activeUid;
+    await c.key("Enter");
+    const picked = await readBack();
+    const empty = await typeAndRead("((");
+    const active = empty.rows.findIndex((r) => r.active);
+    await c.key("Escape");
+    await readBack();
+    out.recent = { first: first.rows, chosen, picked: picked.string, firstUid: empty.firstUid, phase: empty.phase, active, rows: empty.rows.map((r) => r.text) };
+    // (b) Three picks of the same row, whichever place it is in, and the
+    // query again: it comes first.
+    out.frecency = { target: chosen, rounds: [] };
+    await c.evaluate(() => window.__BURROW.frecency.clear());
+    const base = await typeAndRead(query);
+    out.frecency.before = base.firstUid;
+    const target = base.firstUid === chosen ? (await c.evaluate(() => window.__BURROW.state.rows.map((r) => r.uid)))[1] : chosen;
+    out.frecency.target = target;
+    for (let i = 0; i < 3; i++) {
+      const round = i === 0 ? base : await typeAndRead(query);
+      const uids = await c.evaluate(() => window.__BURROW.state.rows.map((r) => r.uid));
+      const at = uids.indexOf(target);
+      for (let k = 0; k < Math.max(0, at); k++) { await c.key("ArrowDown"); await sleep(60); }
+      await c.key("Enter");
+      await readBack();
+      out.frecency.rounds.push({ at, rows: round.rows.length });
+    }
+    const again = await typeAndRead(query);
+    await c.key("Escape");
+    await readBack();
+    out.frecency.afterFirst = again.firstUid;
+    // (c) Forget: the history is gone, and so are its rows.
+    await c.evaluate(() => window.__BURROW.forgetPicks());
+    const gone = await typeAndRead("((");
+    const kinds = await c.evaluate(() => ({ recent: window.__BURROW.state.rows.map((r) => r.recent ?? null), size: window.__BURROW.frecency.size }));
+    await c.key("Escape");
+    await readBack();
+    out.forget = { rows: gone.rows.length, kinds: kinds.recent, size: kinds.size };
+    return out;
+  });
+}
+
+// One recent pick in the store, an empty ((: the pick is Burrow's first row,
+// nothing is highlighted, and Enter does what Roam alone does (compared with
+// the off and gone arms by the byte cases' verdict).
+const RECENT_CASE = {
+  name: "(( with nothing typed: the recent pick is the first row, nothing selected, Enter is Roam's",
+  query: "((", seedPick: () => fx.drill.pickA, keys: ["snap", "Enter"],
+  check: ({ before, snaps: [a] }) => {
+    if (before?.firstUid !== fx.drill.pickA) return `first row ${JSON.stringify(before?.firstUid)} != ${fx.drill.pickA} ${JSON.stringify(before?.rows?.map((r) => r.text))}`;
+    if (before.phase !== "ARMED" || before.rows.some((r) => r.active) || a?.rows.some((r) => r.active)) return `selected: phase ${before.phase} rows ${JSON.stringify(before.rows.map((r) => r.active))}`;
+    return null;
+  },
+};
 
 // Fast typing: Enter lands before Burrow's post-paint ranking has run, so
 // the keydown must flush it and still commit the original.
@@ -1519,6 +1575,7 @@ async function runAliasCase(kase) {
 let retypes = 0;
 
 async function runCase(arm, kase) {
+  if (kase.seedPick && arm === "on") return withPickStore(async () => { await seedPick(kase.seedPick()); return withSettings(arm, kase.settings, () => runCaseBody(arm, kase)); });
   return withSettings(arm, kase.settings, () => runCaseBody(arm, kase));
 }
 
@@ -1829,7 +1886,7 @@ async function runAbove() {
 const report = { window: c.page.title, config: configName, theme, themeSet, arms: {}, failures: [], lines: [] };
 const note = (name, r, before) => report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${name}${r?.string != null ? `: ${JSON.stringify(r.string)}` : ""}`);
 const ALIAS_RUN_CASES = [...ALIAS_CASES, ...REFSEARCH_CASES, ...BLOCK_CASES];
-const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES];
+const BYTE_CASES = [...CASES, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE];
 const ABOVE = "popup above the text: panes stay in the popover, off the text";
 const TEXT = "text boxes: no text overlaps another in any picker state";
 if (only) {
@@ -1998,7 +2055,7 @@ try {
   } else {
   for (const arm of arms) {
     report.arms[arm] = {};
-    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...PASS_CASES] : [...cases, ...DRILL_CASES]) {
+    for (const kase of arm === "drilloff" ? DRILL_CASES : arm === "on" || arm === "off" || arm === "gone" ? [...cases, ...DRILL_CASES, ...PASS_CASES, RECENT_CASE] : [...cases, ...DRILL_CASES]) {
       // Unload and break both damage the runtime: reload the module per case.
       const loaded = await setArm(arm);
       if (arm !== "gone" && !loaded.refs) throw new Error(`arm ${arm}: index not built`);
@@ -2062,11 +2119,15 @@ try {
     for (const problem of report.above.problems) report.failures.push(`${ABOVE}: ${problem}`);
     report.lines.push(`${report.failures.length > before ? "FAIL" : "PASS"} ${ABOVE}`);
   }
-  report.pick = await runPickCase();
-  // The two rows tie, so either may come first; the other one is picked.
-  report.pick.expected = report.pick.firstUids?.[0] === fx.drill.pickA ? fx.drill.pickB : fx.drill.pickA;
-  if (report.pick.first?.length !== 2 || report.pick.picked !== `${SEED}((${report.pick.expected}))` || report.pick.secondFirst !== report.pick.expected) {
-    report.failures.push(`pick memory: ${JSON.stringify(report.pick)}`);
+  report.pick = await runPickCases();
+  {
+    const { recent, frecency, forget } = report.pick;
+    // The two rows tie, so either may come first; the other one is picked.
+    if (recent.first?.length !== 2 || !recent.chosen || recent.picked !== `${SEED}((${recent.chosen}))` || recent.firstUid !== recent.chosen || recent.phase !== "ARMED" || recent.active !== -1) {
+      report.failures.push(`recent rows: ${JSON.stringify(recent)}`);
+    }
+    if (!frecency.target || frecency.afterFirst !== frecency.target || frecency.rounds.length !== 3) report.failures.push(`frequent first: ${JSON.stringify(frecency)}`);
+    if (forget.size !== 0 || forget.kinds.includes("pick")) report.failures.push(`forget recent picks: ${JSON.stringify(forget)}`);
   }
   // Real pages, read-only: the spec's drill example resolves and inserts.
   report.realDrill = await runCase("on", { name: "real drill", query: config.drill.query, keys: ["Enter"] });
@@ -2112,7 +2173,7 @@ if (flags.includes("--json")) {
     .reduce((n, k) => n + (report.arms[arm]?.[k.name]?.newPages?.length || 0), 0);
   console.log(`  drill pages created: by Burrow commits ${drillPages("on", true)}; by Roam in the pass-through cases on ${drillPages("on", false)} = gone ${drillPages("gone", false)}`);
   console.log(`  real drill ${config.drill.query} -> ${JSON.stringify(report.realDrill?.string)}`);
-  console.log(`  pick memory: picked the second row, then it came first: ${report.pick?.secondFirst === report.pick?.expected}`);
+  console.log(`  recent rows: picked row first, not selected: ${report.pick?.recent?.firstUid === report.pick?.recent?.chosen && report.pick?.recent?.active === -1}; frequent first after 3 picks: ${report.pick?.frecency?.afterFirst === report.pick?.frecency?.target}; forget: ${report.pick?.forget?.size === 0}`);
   const p = report.arms.on?.[DRILL_CASES[0].name]?.before?.preview;
   console.log(`  drill preview: trail ${JSON.stringify(p?.trail)}, highlighted ${JSON.stringify(p?.target)}, in view ${p?.targetVisible}`);
   console.log(`  fast typing then Enter: ${JSON.stringify(report.fast?.string)}`);
