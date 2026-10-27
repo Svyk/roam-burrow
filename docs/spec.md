@@ -350,7 +350,7 @@ Where this section differs from §14 or §15, it wins.
 
 **Other overlays.** Checked which keys pick one of Roam's rows, live in svy on the fixture page with Burrow gone, then on: only plain Enter and Tab. Shift+Enter types a newline in the token, ⌘Enter toggles TODO on the block, Alt+Enter runs an svy extension's `{{[[∆]]:1+2}}` macro on the block (the same with Burrow gone), Ctrl+Enter, Alt+Tab and Ctrl+Tab do nothing. The drill panel consumes plain Enter and Tab and acts on its own visible row; the alias field and the delete confirm consume every key; hover tips take none and sit beside the picker; the previews cover Roam's preview, not its list. So the key list was the one overlay over Roam's list that let a picking key through.
 
-**Gates.** Six `live-gate` cases (on arm), each opening the list over a different highlight and checking the list closes, the popup (or panel) stays, the block keeps exactly its typed text, and no block or page was created anywhere in the graph (`createdSince`, a `:create/time` query, besides the new blocks on the fixture page and the new pages the gate already counts): Roam's `((` row, Enter; Roam's `((` row, F1 then Tab; Shift+Enter, ⌘Enter and Shift+Tab in turn; Roam's `[[` row, Enter; Burrow's row, Enter (the row stays selected); the drill panel, Enter (the panel stays on the same row). All six fail on 0.6.0 in svy (a new block, an inserted ref, a TODO and a newline) and pass on 0.6.1. The key runner sends `ctrl+` and `meta+` keys without text, as the keyboard does.
+**Gates.** Six `live-gate` cases (on arm), each opening the list over a different highlight and checking the list closes, the popup (or panel) stays, the block keeps exactly its typed text, and no block or page was created anywhere in the graph (`createdSince`, a `:create/time` query, besides the new blocks on the fixture page and the new pages the gate already counts): Roam's `((` row, Enter; Roam's `((` row, F1 then Tab; Shift+Enter, ⌘Enter and Shift+Tab in turn; Roam's `[[` row, Enter; Burrow's row, Enter (the row stays selected); the drill panel, Enter (the panel stays on the same row). All six fail on 0.6.0 in svy and in notes (a new block, an inserted ref, a TODO and a newline; notes run in BRW-10, §17) and pass on 0.6.1. The key runner sends `ctrl+` and `meta+` keys without text, as the keyboard does.
 
 **Light mode in notes.** notes' svy-theme Appearance is fixed (Dark). svy-theme's own switch (`applyAppearance`) sets `bp3-light` or `bp3-dark` and `data-bp-appearance` on `<html>` and the topbar toggle's icon, label and title; Better Tasks takes its `bt-theme-light|dark` class from that toggle's icon, Plexus drops `pxd-pdf-reader-dark` with `bp3-dark`. `setTheme` in `tools/cdp.mjs` does exactly that, in memory, when the emulated media does not reach the page; the stored setting is not written (it would be a graph write). Checked: during the switch notes' body, sidebar and topbar are `rgb(245, 248, 250)` and its text `rgb(24, 32, 38)`, as svy's own light, with `bt-theme-light`; afterwards every class, the toggle and Better Tasks' class are back. The page puts it back by itself 20 s after the run's last beat (every 3 s), so a crashed or killed run leaves notes as it was (a killed run was put back 19 s later). `live-gate` prints which switch it used and fails when the classes were not put back. `perf-gate` and `shots` use the same switch.
 
@@ -382,10 +382,27 @@ Text nodes in spans only, never `innerHTML`: a block `<img src=x onerror=…>` s
 
 **A flipped popover over a wrapped block.** notes, a 1200×800 window with a 508 px article column, `[[Burrow/Fixtures#alpha > never`: the block wraps to a second line. With Roam's preview open, Burrow's drill row and its preview fill the popover to Roam's 300 px, where Roam alone shows "No pages found" (67 px). 298 px are left below the text, so Roam's Popper flips the popover above. A flipped popover is anchored by its bottom on the caret's line, so it covered the block's first line: 24 px, Burrow's hint line, and in one run Roam's footer too. 0.6.1 does the same in that window (the text-box gate fails on both builds there); BRW-9's notes window was larger. Now, in a frame after Popper places it, a bottom-anchored popover whose bottom crosses the edited text gets a bottom margin of that overlap, never past the window top (`liftPop`). Popper does not count margins, so its placement is otherwise unchanged; the margin goes when the popover flips back below or closes. Unit-tested on jsdom with stubbed rects (`test/striplift.test.js`).
 
+**Gates (0.7.0).** New `live-gate` cases:
+- svy acceptance `((black pan` → `cs1PFq5go` first and pre-selected, no code rows (next to `((ant man` → `3XSu0IJ8f` and notes `((real time pcr` → `6ZtlGN-Np`);
+- code rows only for a code-looking query (`((zebra plot` none, `((zebra_plot` the R row and its code line);
+- rich rows on (marks, code, links, tags and block refs) and off (the 0.6.1 drawing);
+- macros and files as labels, images as labels, a long row cut around the match;
+- block text never HTML (no element made, the `onerror` never ran) and rich preview lines.
+
+The text-box check visits 32 states: rich rows, a code row and a cut row were added, preview closed and open. On the final build svy and notes pass dark and light, with 107 byte-for-byte case runs each and 0 overlapping text boxes (svy 1,165 boxes, notes 1,150).
+
+| Per key, p95 (budget 4 ms) | svy | notes |
+|---|---|---|
+| `((` | 1.5–1.6 ms | 1.8–2.0 ms |
+| `((` with Roam's preview open | 1.6 ms | 1.5–2.2 ms |
+| drill | 1.0 ms | 0.9–1.0 ms |
+
+Preview idle slices are at most 3.7 ms; the cold `[[plexus` preview has a p95 of 3.1 ms; the input-to-paint p95 delta is at most +3.0 ms. `tools/shots.mjs` scenarios 49–57 cover `((black pan` and the rich rows. The unit suite has 231 tests.
+
 **BRW-9 review leftovers.**
-1. BRW-8's report had one more ⇧⇥ screenshot with the pre-review drill hint line: notes, `⇧⇥` (BRW-9 had retaken the four svy ones). Retaken (below).
+1. BRW-8's report had one more ⇧⇥ screenshot with the pre-review drill hint line: notes, `⇧⇥` (BRW-9 had retaken the four svy ones). Retaken on the 0.6.0 build it reports, `tools/shots.mjs <notes> notes --only 38 --theme dark --code <0.6.0 extension.js>`, on the shipped line; the page as it was is kept with BRW-10's report.
 2. `test/stripkeys.test.js` drives `createStrip` on a jsdom DOM (dev dependency, 26.1.0): with the key list open, Enter, Tab, Shift+Enter, ⌘Enter, Ctrl+Enter and Shift+Tab only close it (event consumed, text unchanged, no commit, the row still selected), Esc closes it, a typed key closes it and goes on, and a control case shows a commit is visible to the harness. Deleting `onKeyDown`'s key-list line, or `helpKey`'s consume, fails it.
-3. §16 said the six key-list cases fail on 0.6.0 "in svy"; BRW-9's report said svy and notes. (below)
+3. §16 said the six key-list cases fail on 0.6.0 "in svy"; BRW-9's report said svy and notes, but only svy had been run. Run in notes now (0.6.0 build, 0.6.1 gates, `--arms on`): all six fail there too, the same way. Enter, and Tab after F1, over Roam's `((` row make a new block `real time pcr` through Roam's row; Shift+Enter, ⌘Enter and Shift+Tab make a newline and a TODO; Enter over Roam's `[[` row inserts the page; Enter over Burrow's row and over the drill panel inserts their block. They pass on 0.7.0 in notes. §16 now says svy and notes.
 
 ## Also noticed
 
