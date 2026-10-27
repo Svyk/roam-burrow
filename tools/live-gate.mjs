@@ -401,30 +401,34 @@ const CASES = [
   // Insert variants and the sidebar (0.8.0) on Burrow's block row, its alias
   // row, and Roam's row; each must equal Roam alone in the off arm.
   { name: "⇧↵ on Burrow's block row inserts the embed", keys: ["shift+Enter"], on: `${SEED}{{[[embed]]: ((${config.ref.uid}))}}` },
-  { name: "⌥↵ on Burrow's block row inserts [query](((uid)))", keys: ["alt+Enter"], on: `${SEED}[${qBody}](((${config.ref.uid})))` },
-  { name: "⌘⇧↵ on Burrow's block row opens it in the sidebar, text as typed", keys: ["sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"], on: open,
+  { name: "⌥↵ on Burrow's block row inserts [query](((uid)))", keys: ["swallow:alt+Enter"], on: `${SEED}[${qBody}](((${config.ref.uid})))` },
+  { name: "⌘⇧↵ on Burrow's block row opens it in the sidebar, text as typed", keys: ["sidebar-mark", "swallow:meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"], on: open,
     check: sidebarCheck("block", config.ref.uid, open) },
   { name: "⇧+click on Burrow's block row opens it in the sidebar, text as typed", keys: ["sidebar-mark", "shift-click:strip:", "wait:400", "sidebar-snap", "Escape"], on: open,
     check: sidebarCheck("block", config.ref.uid, open) },
   { name: "⇧↵ on the alias row inserts the page embed", query: config.preselect.query, keys: ["shift+Enter"], on: `${SEED}{{[[embed]]: [[${config.preselect.page}]]}}` },
   { name: "⌥↵ on the alias row inserts [alias]([[Page]]) whatever the link format", query: config.preselect.query, settings: { aliasLinkFormat: "[[Page]]" },
-    keys: ["alt+Enter"], on: `${SEED}${config.preselect.insert}` },
-  { name: "⌘⇧↵ on the alias row opens the page in the sidebar, text as typed", query: config.preselect.query, keys: ["sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"],
+    keys: ["swallow:alt+Enter"], on: `${SEED}${config.preselect.insert}` },
+  { name: "⌘⇧↵ on the alias row opens the page in the sidebar, text as typed", query: config.preselect.query, keys: ["sidebar-mark", "swallow:meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"],
     // No fixed result: Esc then the blur make Roam create the typed page, as without Burrow.
     check: (r) => sidebarCheck("outline", r.before.activeUid, `${SEED}${config.preselect.query}]]`)(r) },
   // Roam's row highlighted: the keys are Roam's (⇧↵ its newline).
   { name: "↓ past the strip then ⇧↵ is Roam's newline", keys: ["down-past-strip", "shift+Enter", "Escape"],
     check: ({ string }) => (string.includes("\n") ? null : `no newline: ${JSON.stringify(string)}`) },
-  { name: "↓ past the strip then ⌥↵ is Roam's", keys: ["down-past-strip", "alt+Enter", "Escape"] },
-  { name: "↓ past the strip then ⌘⇧↵ is Roam's", keys: ["down-past-strip", "sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"] },
+  { name: "↓ past the strip then ⌥↵ is Roam's", keys: ["down-past-strip", "swallow:alt+Enter", "Escape"],
+    check: ({ swallows }) => (swallows?.[0] === 1 ? null : `Burrow kept the key (${JSON.stringify(swallows)})`) },
+  { name: "↓ past the strip then ⌘⇧↵ is Roam's", keys: ["down-past-strip", "swallow:meta+shift+Enter", "Escape"],
+    check: ({ swallows }) => (swallows?.[0] === 1 ? null : `Burrow kept the key (${JSON.stringify(swallows)})`) },
   // The switches off: the same keys on Burrow's row are Roam's.
   { name: "variants off: ⇧↵ on Burrow's row is Roam's", settings: { insertVariants: false }, keys: ["shift+Enter", "Escape"] },
-  { name: "variants off: ⌥↵ on Burrow's row is Roam's", settings: { insertVariants: false }, keys: ["alt+Enter", "Escape"] },
-  { name: "sidebar off: ⌘⇧↵ on Burrow's row is Roam's", settings: { openInSidebar: false }, keys: ["sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"] },
+  { name: "variants off: ⌥↵ on Burrow's row is Roam's", settings: { insertVariants: false }, keys: ["swallow:alt+Enter", "Escape"],
+    check: ({ swallows }) => (swallows?.[0] === 1 ? null : `Burrow kept the key (${JSON.stringify(swallows)})`) },
+  { name: "sidebar off: ⌘⇧↵ on Burrow's row is Roam's", settings: { openInSidebar: false }, keys: ["swallow:meta+shift+Enter", "Escape"],
+    check: ({ swallows }) => (swallows?.[0] === 1 ? null : `Burrow kept the key (${JSON.stringify(swallows)})`) },
   // A pick Burrow cannot write: ⇧↵ and ⌥↵ stay Burrow's and write nothing.
   { name: "a refused ⇧↵ writes nothing and runs no Roam row", keys: ["refuse-focus", "shift+Enter", "restore-focus", "snap"], on: open,
     check: ({ snaps: [a] }) => (a?.popup ? null : "the popup closed") },
-  { name: "a refused ⌥↵ writes nothing and runs no Roam row", keys: ["refuse-focus", "alt+Enter", "restore-focus", "snap"], on: open,
+  { name: "a refused ⌥↵ writes nothing and runs no Roam row", keys: ["refuse-focus", "swallow:alt+Enter", "restore-focus", "snap"], on: open,
     check: ({ snaps: [a] }) => (a?.popup ? null : "the popup closed") },
   { name: "scorer throws", pre: "break", keys: ["Enter"] },
   { name: "unloaded mid-popup", keys: ["unload", "Enter"] },
@@ -439,9 +443,9 @@ const DRILL_CASES = [
   { name: "drill: Tab inserts the resolved block", query: DRILL_Q, keys: ["Tab"], on: (d) => `${SEED}((${d.never}))`, settings: { tabDrill: false } },
   { name: "drill: Escape", query: DRILL_Q, keys: ["Escape"] },
   { name: "drill: ⇧↵ inserts the resolved block's embed", query: DRILL_Q, keys: ["shift+Enter"], on: (d) => `${SEED}{{[[embed]]: ((${d.never}))}}` },
-  { name: "drill: ⌥↵ inserts [last step](((uid)))", query: DRILL_Q, keys: ["alt+Enter"], on: (d) => `${SEED}[never](((${d.never})))` },
-  { name: "drill: ⌘⇧↵ opens the resolved block in the sidebar", query: DRILL_Q, keys: ["sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"],
-    on: () => `${SEED}${DRILL_Q}]]`, check: (r) => sidebarCheck("block", fx.drill.never, `${SEED}${DRILL_Q}]]`)(r) },
+  { name: "drill: ⌥↵ inserts [last step](((uid)))", query: DRILL_Q, keys: ["swallow:alt+Enter"], on: (d) => `${SEED}[never](((${d.never})))` },
+  { name: "drill: ⌘⇧↵ opens the resolved block in the sidebar", query: DRILL_Q, keys: ["sidebar-mark", "swallow:meta+shift+Enter", "wait:400", "sidebar-snap", "Escape"],
+    check: (r) => sidebarCheck("block", fx.drill.never, `${SEED}${DRILL_Q}]]`)(r) },
   { name: "drill: ArrowDown and ArrowUp do nothing, then Enter", query: DRILL_Q, keys: ["ArrowDown", "ArrowUp", "Enter"], on: (d) => `${SEED}((${d.never}))` },
   { name: "drill: typing past >", query: DRILL_Q, keys: ["type: > gr", "Enter"], on: (d) => `${SEED}((${d.grand}))` },
   { name: "drill: empty # takes the first heading", query: `[[${DRILL_PAGE}#`, keys: ["Enter"], on: (d) => `${SEED}((${d.alpha}))` },
@@ -552,6 +556,28 @@ async function dropText(text) {
   if (!found) throw new Error("drop: no point on the textarea after dragEnter");
   const on = await c.evaluate(() => [...document.querySelectorAll(".dnd-drop-area")].filter((e) => e.getBoundingClientRect().height > 0).length);
   if (on) throw new Error("drop: Roam's drag mode stayed on");
+}
+
+// ⌥↵ and ⌘⇧↵ that Burrow does not take are swallowed: in svy other
+// extensions act on them (a move-block command moved the fixture away and
+// rearranged the sidebar), so the gate only records that the key got past
+// Burrow (a window capture listener added after Burrow's) and stops it there.
+let swallows = [];
+async function swallowKey(chord) {
+  const [, mods, key] = chord.match(/^((?:(?:alt|ctrl|meta|shift)\+)*)(.+)$/);
+  await c.evaluate(() => {
+    const g = window.__burrowGateSwallow = { seen: 0 };
+    g.fn = (e) => { if (e.key === "Enter") { g.seen += 1; e.preventDefault(); e.stopImmediatePropagation(); } };
+    window.addEventListener("keydown", g.fn, true);
+  });
+  await c.key(key, mods.split("+").filter(Boolean).reduce((m, name) => m | { alt: 1, ctrl: 2, meta: 4, shift: 8 }[name], 0));
+  await sleep(60);
+  swallows.push(await c.evaluate(() => {
+    const g = window.__burrowGateSwallow;
+    window.removeEventListener("keydown", g.fn, true);
+    window.__burrowGateSwallow = null;
+    return g.seen;
+  }));
 }
 
 async function shiftClick(point, what) {
@@ -687,6 +713,12 @@ async function runKeys(keys, snaps = []) {
     else if (k.startsWith("click:scope:")) await clickAt(await centerOf(".burrow-scope-list .burrow-row", k.slice(12)), k);
     else if (k.startsWith("click:crumb:")) await clickAt(await centerOf(`.burrow-crumb[data-level="${k.slice(12)}"]`, null), k);
     else if (k === "click-away") await neutralClick(c);
+    else if (k.startsWith("swallow:")) await swallowKey(k.slice(8));
+    else if (k.startsWith("hold:") || k.startsWith("release:")) {
+      const name = k.slice(k.indexOf(":") + 1);
+      const spec = { Alt: ["AltLeft", 18, 1], Shift: ["ShiftLeft", 16, 8], Meta: ["MetaLeft", 91, 4] }[name];
+      await c.call("Input.dispatchKeyEvent", { type: k.startsWith("hold:") ? "rawKeyDown" : "keyUp", key: name, code: spec[0], windowsVirtualKeyCode: spec[1], nativeVirtualKeyCode: spec[1], modifiers: k.startsWith("hold:") ? spec[2] : 0 });
+    }
     else if (k === "sidebar-mark") await sidebarMark();
     else if (k === "sidebar-snap") snaps.push(await sidebarSnap());
     else if (k.startsWith("shift-click:strip:")) await shiftClick(await centerOf(".burrow-strip:not([hidden]) .burrow-row", k.slice(18)), k);
@@ -735,15 +767,19 @@ async function runKeys(keys, snaps = []) {
 }
 
 // [[ alias cases, on arm only: Enter in Roam's own [[ could create a page.
-const variantsShown = ({ snaps: [a] }) => {
+// Held ⌥ for 300 ms: the variants are the line, all visible; released: the line is back.
+const variantsShown = ({ snaps: [a, b] }) => {
   const want = ["⇧↵ embed", "⌥↵ label", "⌘⇧↵ sidebar"];
-  return want.every((w) => a?.hintsVisible?.includes(w)) ? null : `variant hints not all visible: ${JSON.stringify(a?.hintsVisible)} (popover ${a?.popWidth} px)`;
+  if (JSON.stringify(a?.hintsVisible) !== JSON.stringify(want)) return `held ⌥: ${JSON.stringify(a?.hintsVisible)} (popover ${a?.popWidth} px)`;
+  return b?.hintsVisible?.some((h) => want.includes(h)) || !b?.hintsVisible?.length ? `released: ${JSON.stringify(b?.hintsVisible)}` : null;
 };
 const ALIAS_CASES = [
-  { name: "hint line shows the variants: block row", query: config.ref.query, keys: ["snap", "Escape"], check: variantsShown },
-  { name: "hint line shows the variants: alias row", query: config.preselect.query, keys: ["snap", "Escape"], mayCreatePage: true, check: variantsShown },
-  { name: "hint line shows the variants: drill row", query: `[[${FIXTURE_PAGE}#alpha > never`, keys: ["snap", "Escape"], mayCreatePage: true, check: variantsShown },
-  { name: "hint line shows the variants: drill panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "snap", "Escape", "Escape"], mayCreatePage: true, check: variantsShown },
+  { name: "hint line shows the variants while ⌥ is held: block row", query: config.ref.query, keys: ["hold:Alt", "wait:450", "snap", "release:Alt", "wait:100", "snap", "Escape"], check: variantsShown },
+  { name: "hint line shows the variants while ⌥ is held: alias row", query: config.preselect.query, keys: ["hold:Alt", "wait:450", "snap", "release:Alt", "wait:100", "snap", "Escape"], mayCreatePage: true, check: variantsShown },
+  { name: "hint line shows the variants while ⌥ is held: drill row", query: `[[${FIXTURE_PAGE}#alpha > never`, keys: ["hold:Alt", "wait:450", "snap", "release:Alt", "wait:100", "snap", "Escape"], mayCreatePage: true, check: variantsShown },
+  { name: "hint line shows the variants while ⌥ is held: drill panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450", "snap", "release:Alt", "wait:100", "snap", "Escape", "Escape"], mayCreatePage: true, check: variantsShown },
+  { name: "hint line: ⇧ held then a capital typed never shows the variants", query: config.ref.query, keys: ["hold:Shift", "type:Q", "release:Shift", "wait:450", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.hintsVisible?.some((h) => /embed|sidebar/.test(h)) ? `variants shown: ${JSON.stringify(a.hintsVisible)}` : null) },
   { name: "alias row: ArrowUp into the strip, Enter", query: config.alias.query, keys: ["ArrowUp", "Enter"], on: `${SEED}${config.alias.insert}` },
   {
     name: "alias listed by roam-aliases: Burrow row, its column folded", query: config.listed.query, keys: ["snap", "Escape"],
@@ -951,14 +987,12 @@ const ALIAS_CASES = [
   },
 ];
 
-// ⇧↵ ⌥↵ ⌘⇧↵ (insertVariants, openInSidebar) end the line on any Burrow row.
-const HINTS_VARIANTS = " · ⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar";
 // The pre-selected alias row's page has blocks, so Tab drills and the line says so.
-const HINTS_ROW = `↵ pick alias · ⌥↓ more aliases · ⇥ blocks on this page · ⌥A add alias${HINTS_VARIANTS}`;
+const HINTS_ROW = "↵ pick alias · ⌥↓ more aliases · ⇥ blocks on this page · ⌥A add alias";
 // The Chips page holds its alias block, so it can be drilled into too.
-const HINTS_CHIPS = `←→ alias · ⌥⌫ delete · ↵ insert · ⇥ blocks on this page · esc rows${HINTS_VARIANTS}`;
+const HINTS_CHIPS = "←→ alias · ⌥⌫ delete · ↵ insert · ⇥ blocks on this page · esc rows";
 // Two levels down (page, then a section): ⇧⇥ goes up a level.
-const HINTS_SCOPE = ["↵ insert", "⇥/> children", "⇧⇥ up", "esc results", "⌃O preview", "⇧↵ embed", "⌥↵ label", "⌘⇧↵ sidebar"];
+const HINTS_SCOPE = ["↵ insert", "⇥/> children", "⇧⇥ up", "esc results", "⌃O preview"];
 
 // (( block navigation and tasks (0.6.0), on the fixture's referenced blocks.
 const BLOCK_CASES = [
@@ -1098,7 +1132,7 @@ const BLOCK_CASES = [
     name: "(( ⇧⇥ goes up to the parent, ⇧⇥ again higher, Enter picks the highlighted parent", query: "((never grok",
     keys: ["snap", "shift+Tab", "snap", "shift+Tab", "snap", "Enter"],
     check: ({ snaps: [a, b, d], string }) => {
-      if (a?.hints !== `↵ insert ref · ⇥ children of this block · ⇧⇥ parent${HINTS_VARIANTS}`) return `hints ${JSON.stringify(a?.hints)}`;
+      if (a?.hints !== "↵ insert ref · ⇥ children of this block · ⇧⇥ parent") return `hints ${JSON.stringify(a?.hints)}`;
       if (!b?.scope?.crumb.includes("Alpha section") || !b.scope.what.includes("children of this block: Alpha section") || !b.scope.active?.includes("never grok for writing")) return `after ⇧⇥ ${JSON.stringify(b?.scope)}`;
       if (!d?.scope?.what.includes("blocks on this page") || !d.scope.active?.includes("Alpha section")) return `after ⇧⇥ ⇧⇥ ${JSON.stringify(d?.scope)}`;
       return string === `${SEED}((${fx.drill.alpha}))` ? null : `inserted ${JSON.stringify(string)}`;
@@ -1116,7 +1150,7 @@ const BLOCK_CASES = [
     name: "(( Up and down the outline off: ⇧⇥ is not Burrow's, Tab lists the block alone", query: "((never grok", settings: { refOutline: false },
     keys: ["snap", "Tab", "snap", "Escape", "Escape"],
     check: ({ snaps: [a, b] }) => {
-      if (a?.hints !== `↵ insert ref · ⇥ children of this block${HINTS_VARIANTS}`) return `hints ${JSON.stringify(a?.hints)}`;
+      if (a?.hints !== "↵ insert ref · ⇥ children of this block") return `hints ${JSON.stringify(a?.hints)}`;
       return b?.scope && !b.scope.crumb.includes(FIXTURE_PAGE) && b.scope.crumb.includes("never grok") ? null : `scope ${JSON.stringify(b?.scope)}`;
     },
   },
@@ -1420,9 +1454,9 @@ const TAB_CASES = [
   { name: "tab drill: ⇧↵ inserts the highlighted block's embed", query: `[[${DRILL_PAGE}`, loose: true,
     keys: ["Tab", "type:alpha", "snap", "shift+Enter"], on: (d) => `${SEED}{{[[embed]]: ((${d.alpha}))}}` },
   { name: "tab drill: ⌥↵ inserts [filter](((uid)))", query: `[[${DRILL_PAGE}`, loose: true,
-    keys: ["Tab", "type:alpha", "alt+Enter"], on: (d) => `${SEED}[alpha](((${d.alpha})))` },
+    keys: ["Tab", "type:alpha", "swallow:alt+Enter"], on: (d) => `${SEED}[alpha](((${d.alpha})))` },
   { name: "tab drill: ⌘⇧↵ opens the highlighted block in the sidebar, panel open", query: `[[${DRILL_PAGE}`, loose: true,
-    keys: ["Tab", "type:alpha", "sidebar-mark", "meta+shift+Enter", "wait:400", "sidebar-snap", "Escape", "Escape"], on: () => TYPED_PAGE,
+    keys: ["Tab", "type:alpha", "sidebar-mark", "swallow:meta+shift+Enter", "wait:400", "sidebar-snap", "Escape", "Escape"], on: () => TYPED_PAGE,
     expect: (snaps) => sidebarCheck("block", fx.drill.alpha, TYPED_PAGE, { scope: true })({ snaps }) },
   { name: "tab drill: ⇧+click opens a row in the sidebar, panel open", query: `[[${DRILL_PAGE}`, loose: true,
     keys: ["Tab", "type:alpha", "sidebar-mark", "shift-click:scope:Alpha section", "wait:400", "sidebar-snap", "Escape", "Escape"], on: () => TYPED_PAGE,
@@ -1646,6 +1680,7 @@ async function runCaseBody(arm, kase) {
     await c.evaluate(() => { const i = window.__BURROW.indexes; i.__saved = i.refs; Object.defineProperty(i, "refs", { configurable: true, get: () => ({ entries: null }) }); });
   }
   misses = [];
+  swallows = [];
   wheelSteps = 0;
   let before = null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -1668,7 +1703,7 @@ async function runCaseBody(arm, kase) {
   if (kase.pre === "break" && arm !== "gone") {
     await c.evaluate(() => { const i = window.__BURROW?.indexes; if (i) { delete i.refs; } });
   }
-  return { before, snaps, ...after, misses, wheelSteps };
+  return { before, snaps, ...after, misses, wheelSteps, swallows };
 }
 
 // ---- overlap ----

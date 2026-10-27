@@ -62,14 +62,20 @@ test("label helpers", () => {
   assert.deepEqual(sidebarWindow(block), { type: "block", "block-uid": "3XSu0IJ8f" });
 });
 
-test("the hint line and key list name the variants only while their switches are on", () => {
-  const state = (vars) => ({ kind: "((", row: { kind: "ref", drill: false }, on: { refOutline: true, ...vars } });
+test("holding a modifier turns the hint line into the variants; the key list names them while their switches are on", () => {
+  const state = (vars, held = true) => ({ kind: "((", held, row: { kind: "ref", drill: false }, on: { refOutline: true, ...vars } });
   const keys = (items) => items.map(([k, l]) => `${k} ${l}`);
-  assert.deepEqual(keys(pickerHints(state({ insertVariants: true, openInSidebar: true }), true)).slice(-3), ["⇧↵ embed", "⌥↵ label", "⌘⇧↵ sidebar"]);
-  assert.deepEqual(keys(pickerHints(state({ insertVariants: true, openInSidebar: true }), false)).slice(-3), ["Shift+↵ embed", "Alt+↵ label", "Ctrl+Shift+↵ sidebar"]);
-  assert.equal(keys(pickerHints(state({}), true)).some((k) => /embed|label|sidebar/.test(k)), false);
+  const both = { insertVariants: true, openInSidebar: true };
+  // A modifier held: the variants are the line.
+  assert.deepEqual(keys(pickerHints(state(both), true)), ["⇧↵ embed", "⌥↵ label", "⌘⇧↵ sidebar"]);
+  assert.deepEqual(keys(pickerHints(state(both), false)), ["Shift+↵ embed", "Alt+↵ label", "Ctrl+Shift+↵ sidebar"]);
+  assert.deepEqual(keys(pickerHints(state({ openInSidebar: true }), true)), ["⌘⇧↵ sidebar"]);
+  // Not held: the line as in 0.7.0.
+  assert.deepEqual(keys(pickerHints(state(both, false), true)), ["↵ insert ref", "⇧⇥ parent"]);
+  // Both switches off: holding changes nothing.
+  assert.deepEqual(keys(pickerHints(state({}), true)), ["↵ insert ref", "⇧⇥ parent"]);
   // Roam's row highlighted: none.
-  assert.equal(keys(pickerHints({ kind: "((", row: null, rowsAbove: true, on: { insertVariants: true, openInSidebar: true } }, true)).some((k) => /embed|sidebar/.test(k)), false);
+  assert.equal(keys(pickerHints({ kind: "((", held: true, row: null, rowsAbove: true, on: both }, true)).some((k) => /embed|sidebar/.test(k)), false);
   const sheet = (vals) => helpGroups((id) => (id in vals ? vals[id] : DEFAULTS[id]), true)[0].items.map(([k]) => k);
   assert.ok(sheet({}).includes("⇧↵") && sheet({}).includes("⌥↵") && sheet({}).includes("⌘⇧↵, ⇧click"));
   assert.ok(!sheet({ insertVariants: false, openInSidebar: false }).some((k) => /⇧↵|⌥↵/.test(k)));
@@ -179,4 +185,20 @@ test("⇧+click on a Burrow row opens the sidebar before Roam's own shift+moused
   } finally {
     for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) doc.removeEventListener(type, roam, true);
   }
+}));
+
+test("holding ⌥ on a Burrow row shows the variants on the hint line; a key or the release puts the line back", () => withStrip({}, async ({ key }) => {
+  const line = () => doc.querySelector(".burrow-hints-list")?.textContent;
+  const plain = line();
+  assert.ok(!/embed/.test(plain));
+  key({ key: "Alt", altKey: true });
+  await new Promise((r) => setTimeout(r, 350));
+  assert.match(line(), /embed.*label.*sidebar/);
+  win.dispatchEvent(new win.KeyboardEvent("keyup", { key: "Alt" }));
+  assert.equal(line(), plain);
+  // A capital typed with Shift never shows it.
+  key({ key: "Shift", shiftKey: true });
+  key({ key: "A", shiftKey: true });
+  await new Promise((r) => setTimeout(r, 350));
+  assert.equal(line(), plain);
 }));

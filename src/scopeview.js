@@ -140,7 +140,8 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
 
   let hintsShown = null;
   let hintItems = [];
-  // variants: { insertVariants, openInSidebar } (src/hints.js variantHints).
+  // variants: { insertVariants, openInSidebar, held } (src/hints.js variantHints);
+  // held: a modifier is held, and the variants take the line.
   function renderHints(scope, on, help, variants = {}) {
     hintsLine.hidden = !on;
     helpButton.hidden = !help;
@@ -156,7 +157,9 @@ export function createScopePanel({ doc, win, lifecycle, highlight, rich = null, 
       ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
       [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"],
     );
-    if (active?.more == null && !(active?.empty && active.drillable)) items.push(...variantHints({ kind: "scope", page: !active && level.isPage }, variants));
+    const held = variants.held && active?.more == null && !(active?.empty && active.drillable)
+      ? variantHints({ kind: "scope", page: !active && level.isPage }, variants) : [];
+    if (held.length) items.splice(0, items.length, ...held);
     const key = hintsKey(items);
     if (key === hintsShown) return;
     hintsShown = key;

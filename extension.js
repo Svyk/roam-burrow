@@ -1700,34 +1700,37 @@ function pickerHints(s, mac = IS_MAC) {
   if (s.prompt === "delete") return [["↵", "delete", "Remove only this alias from the page's alias block"], ["esc", "keep", "Keep the alias"]];
   const items = [];
   const row = s.row;
-  const variants = variantHints(row, on, mac);
+  if (s.held && row) {
+    const variants = variantHints(row, on, mac);
+    if (variants.length) return variants;
+  }
   if (row && s.chips) {
     items.push(["←→", "alias", "Choose another alias of this page"]);
     if (on.aliasDelete) items.push([k("altBackspace"), "delete", "Delete the selected alias from the page (asks first)"]);
     items.push(["↵", "insert", "Insert the page shown as the selected alias"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     items.push(["esc", "rows", "Back to the rows"]);
-    return [...items, ...variants];
+    return items;
   }
   if (row?.kind === "alias") {
     items.push(["↵", "pick alias", on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
     if (row.chips) items.push([k("altDown"), "more aliases", "Move into the page's other aliases: ←→ choose, ↵ inserts the page shown as that alias"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (row.aliasNew) items.push(addAlias);
-    return [...items, ...variants];
+    return items;
   }
   if (row?.kind === "ref") {
     items.push(["↵", "insert ref", "Insert this block's ((uid)): the original other blocks already reference"]);
     if (row.drill && on.tabDrill) items.push(drillHint(BLOCK));
     if (on.refOutline) items.push(upHint);
-    return [...items, ...variants];
+    return items;
   }
   if (row?.kind === "drill") {
     items.push(["↵", "insert block", "Insert the ((uid)) of the block the drill-down reaches"]);
     if (row.drill && on.tabDrill) items.push(["⇥/>", BLOCK, "Tab lists the children of this block; typing > goes one level down"]);
     else if (row.drill && on.drill) items.push([">", "next level", "Type > and a few words to reach one of its child blocks"]);
     if (on.refOutline && row.block) items.push(upHint);
-    return [...items, ...variants];
+    return items;
   }
   if (s.rowsAbove) items.push(["↑", s.kind === "((" ? "referenced" : "alias rows", "From Roam's first row, ↑ moves into Burrow's rows above it"]);
   if (s.kind === "[[" && s.native) {
@@ -2959,7 +2962,8 @@ function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice
       ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
       [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"]
     );
-    if (active?.more == null && !(active?.empty && active.drillable)) items.push(...variantHints({ kind: "scope", page: !active && level.isPage }, variants));
+    const held = variants.held && active?.more == null && !(active?.empty && active.drillable) ? variantHints({ kind: "scope", page: !active && level.isPage }, variants) : [];
+    if (held.length) items.splice(0, items.length, ...held);
     const key = hintsKey(items);
     if (key === hintsShown) return;
     hintsShown = key;
@@ -3283,7 +3287,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     chip: -1,
     scope: null,
     prompt: null,
-    help: false
+    help: false,
+    held: false
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -4153,7 +4158,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
         return source ? { drill: canDrill(source), aliasNew: aliasNew(source) } : null;
       })() : null,
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
-      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() }
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
+      held: Boolean(st.held)
     };
     return pickerHints(state);
   }
@@ -4438,6 +4444,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   }
   function reset(reason) {
     if (st.phase !== "IDLE" || st.rows.length) trace({ ev: "reset", reason });
+    if (holdTimer) {
+      win.clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    st.held = false;
     closeHelp();
     tips.hide();
     if (nudgeShown) nudgeSeen();
@@ -4538,6 +4549,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   const ACTION_KEYS = /* @__PURE__ */ new Set(["Enter", "Tab", "ArrowUp", "ArrowDown", "Escape"]);
   function onKeyDown(event) {
     if (tips.visible) tips.hide();
+    if (st.held || holdTimer || MODIFIER_KEYS.has(event.key)) holdKey(event);
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
     if (st.help && event.target === st.ta && helpKey(event)) return;
@@ -4688,7 +4700,32 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
     }
     return null;
   }
-  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar") });
+  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
+  const HOLD_MS = 300;
+  const MODIFIER_KEYS = /* @__PURE__ */ new Set(["Shift", "Alt", "Meta", "Control"]);
+  let holdTimer = null;
+  function setHeld(on) {
+    if (holdTimer) {
+      win.clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    if (Boolean(st.held) === on) return;
+    st.held = on;
+    if (st.phase === "SCOPE" && st.scope) scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false, variantsOn());
+    else if (st.phase !== "IDLE") layoutPop();
+  }
+  function holdKey(event) {
+    if (!MODIFIER_KEYS.has(event.key)) {
+      setHeld(false);
+      return;
+    }
+    const can = st.phase === "OWNED" && variantTarget(shown[st.active]) || st.phase === "SCOPE";
+    if (!can || st.held || holdTimer || !setting("keyHints") || !(setting("insertVariants") || setting("openInSidebar"))) return;
+    holdTimer = win.setTimeout(() => {
+      holdTimer = null;
+      setHeld(true);
+    }, HOLD_MS);
+  }
   const labelQuery = (row) => row?.kind === "drill" ? lastStep(st.token?.query) : st.token?.query ?? "";
   function variantKey(event, row, chip = -1) {
     const variant = variantOf(event, setting);
@@ -5516,6 +5553,15 @@ function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, sav
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
   for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) lifecycle.event(win, type, guarded(type, onShiftPointer), true);
+  lifecycle.event(win, "keyup", (event) => {
+    if (MODIFIER_KEYS.has(event.key) && (st.held || holdTimer)) setHeld(false);
+  }, true);
+  lifecycle.event(win, "blur", () => {
+    if (st.held || holdTimer) setHeld(false);
+  });
+  lifecycle.add(() => {
+    if (holdTimer) win.clearTimeout(holdTimer);
+  });
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
   return { state: st, debug, reset, tree };

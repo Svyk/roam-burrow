@@ -108,10 +108,10 @@ const SCENARIOS = [
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
   // 0.8.0: insert variants and the sidebar.
-  { id: "58-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed"] },
-  { id: "59-variants-alias-row", query: config.alias, keys: ["preview-closed"] },
+  { id: "58-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "59-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
   { id: "60-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
-  { id: "61-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "wait:300"], loose: true },
+  { id: "61-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
   { id: "62-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
   { id: "63-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
 ];
@@ -233,6 +233,7 @@ async function runKeys(keys) {
     } else if (k.startsWith("palette:")) await palette(k.slice(8));
     else if (k.startsWith("wait:")) await sleep(Number(k.slice(5)));
     else if (k.startsWith("type:")) await c.type(k.slice(5), TYPE_MS);
+    else if (k.startsWith("hold:")) await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Alt", code: "AltLeft", windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18, modifiers: 1 });
     else if (k === "sidebar-mark") await c.evaluate(() => { window.__burrowFixture.sidebarBase = window.roamAlphaAPI.ui.rightSidebar.getWindows().map((w) => w["window-id"]); });
     else if (modified) await c.key(modified[2], modified[1].split("+").filter(Boolean).reduce((m, name) => m | { alt: 1, ctrl: 2, meta: 4, shift: 8 }[name], 0));
     else await c.key(k);
@@ -260,6 +261,7 @@ async function captureRect() {
 // Out of the popup, block cleared, any page the typing made deleted, and any
 // sidebar window a scenario opened (after its sidebar-mark) closed.
 async function reset() {
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Alt", code: "AltLeft", windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18, modifiers: 0 });
   await c.evaluate(async () => {
     const g = window.__burrowFixture;
     if (!g?.sidebarBase) return;

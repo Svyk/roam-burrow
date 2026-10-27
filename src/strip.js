@@ -70,7 +70,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   const st = {
     phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null, prompt: null, help: false,
+    auto: false, chip: -1, scope: null, prompt: null, help: false, held: false,
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -997,6 +997,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       })() : null,
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
+      held: Boolean(st.held),
     };
     return pickerHints(state);
   }
@@ -1307,6 +1308,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function reset(reason) {
     if (st.phase !== "IDLE" || st.rows.length) trace({ ev: "reset", reason });
+    if (holdTimer) { win.clearTimeout(holdTimer); holdTimer = null; }
+    st.held = false;
     closeHelp();
     tips.hide();
     if (nudgeShown) nudgeSeen();
@@ -1411,6 +1414,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function onKeyDown(event) {
     if (tips.visible) tips.hide();
+    if (st.held || holdTimer || MODIFIER_KEYS.has(event.key)) holdKey(event);
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
     // The key list covers every row: first, so its Enter only closes it.
@@ -1555,7 +1559,28 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     return null;
   }
 
-  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar") });
+  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
+
+  // The hint line is full already, so the variants take its place while ⇧, ⌥
+  // or ⌘ is held on a Burrow row or the drill panel: after HOLD_MS with no
+  // other key, so typing a capital never flickers it. Any other key, the
+  // modifier's release or leaving the window puts the line back.
+  const HOLD_MS = 300;
+  const MODIFIER_KEYS = new Set(["Shift", "Alt", "Meta", "Control"]);
+  let holdTimer = null;
+  function setHeld(on) {
+    if (holdTimer) { win.clearTimeout(holdTimer); holdTimer = null; }
+    if (Boolean(st.held) === on) return;
+    st.held = on;
+    if (st.phase === "SCOPE" && st.scope) scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false, variantsOn());
+    else if (st.phase !== "IDLE") layoutPop();
+  }
+  function holdKey(event) {
+    if (!MODIFIER_KEYS.has(event.key)) { setHeld(false); return; }
+    const can = (st.phase === "OWNED" && variantTarget(shown[st.active])) || st.phase === "SCOPE";
+    if (!can || st.held || holdTimer || !setting("keyHints") || !(setting("insertVariants") || setting("openInSidebar"))) return;
+    holdTimer = win.setTimeout(() => { holdTimer = null; setHeld(true); }, HOLD_MS);
+  }
 
   // The label ⌥↵ takes from what was typed: a drill-down's last step.
   const labelQuery = (row) => (row?.kind === "drill" ? lastStep(st.token?.query) : st.token?.query ?? "");
@@ -2348,6 +2373,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
   for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) lifecycle.event(win, type, guarded(type, onShiftPointer), true);
+  lifecycle.event(win, "keyup", (event) => { if (MODIFIER_KEYS.has(event.key) && (st.held || holdTimer)) setHeld(false); }, true);
+  lifecycle.event(win, "blur", () => { if (st.held || holdTimer) setHeld(false); });
+  lifecycle.add(() => { if (holdTimer) win.clearTimeout(holdTimer); });
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 
