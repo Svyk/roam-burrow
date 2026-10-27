@@ -464,7 +464,9 @@ async function lateRun(arm, low) {
         if (!(taTop >= innerHeight - 200)) return { error: `placement did not take: text top ${taTop} of ${innerHeight}` };
       }
       await typeQuery(QUERY);
-      await settleStrip(false);
+      // Only the popup: waiting for a strip row (up to 2 s) can outlast a cold
+      // reply. The last snapshot before the band is 15 ms before it anyway.
+      await settleStrip(true);
       let before = null;
       let after = null;
       for (let t0 = Date.now(); Date.now() - t0 < (firstQuery ? 12000 : 6000);) {
