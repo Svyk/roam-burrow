@@ -404,6 +404,29 @@ Preview idle slices are at most 3.7 ms; the cold `[[plexus` preview has a p95 of
 2. `test/stripkeys.test.js` drives `createStrip` on a jsdom DOM (dev dependency, 26.1.0): with the key list open, Enter, Tab, Shift+Enter, ⌘Enter, Ctrl+Enter and Shift+Tab only close it (event consumed, text unchanged, no commit, the row still selected), Esc closes it, a typed key closes it and goes on, and a control case shows a commit is visible to the harness. Deleting `onKeyDown`'s key-list line, or `helpKey`'s consume, fails it.
 3. §16 said the six key-list cases fail on 0.6.0 "in svy"; BRW-9's report said svy and notes, but only svy had been run. Run in notes now (0.6.0 build, 0.6.1 gates, `--arms on`): all six fail there too, the same way. Enter, and Tab after F1, over Roam's `((` row make a new block `real time pcr` through Roam's row; Shift+Enter, ⌘Enter and Shift+Tab make a newline and a TODO; Enter over Roam's `[[` row inserts the page; Enter over Burrow's row and over the drill panel inserts their block. They pass on 0.7.0 in notes. §16 now says svy and notes.
 
+## 18. Query filters (BRW-18)
+
+Precedents: RefX R5 filters, Omnisearch (phrases, `-` exclusions, `path:`), Search+ (page scopes), Logseq's search in page (BRW-12 §2, §4). Switch `queryFilters`, on.
+
+**Grammar** (`src/filters.js`, `parseFilters`, pure). The token is read, never rewritten.
+- `"words"`: a phrase. Its words must stand together in order, each a whole word (`hasRun` over the key's tokens); with no closing quote yet the last word may be a prefix. The phrase's words also join the scorer's plan, so they rank as before.
+- `-word`, `-"two words"`: excluded. Only `-` at a word start followed by a letter or a quote: `ant-man`, `a - b` and `-20` stay text.
+- `in:here`: the page being edited (`st.pageTitle`, the edited block's `[data-page-title]`). `in:Title`: runs to the next filter (`in:` `ns:` `is:` `"` `-x`) or the end, so a title with spaces needs no quotes; `in:"Title"` ends at its quote. Resolved with the drill's title index (exact, case, separators, alias); a value that names no page is compared as typed.
+- `ns:A/B/`: the page `A/B` and pages under `A/B/` (trailing `/` optional). Same value rule as `in:`.
+- `is:todo`, `is:done`: the block's first task macro (`taskParts`, the checkbox reader: `{{[[TODO]]}}`, `{{TODO}}`, `{{[[DONE]]}}`, Better Tasks' `{{[[DONE]]:((uid))}}`; a SmartBlock button that starts like one is no task). A prefix names its state while typed (`is:t`); another value matches nothing.
+- Any other word is search text. A filter needs its colon, quotes or `-`. `in:` with nothing after it is taken out of the text and filters nothing yet, so typing `in:` does not change the rows.
+- Page filters (`in:here`, `in:`, `ns:`) add up: a block passes when any names its page. Every other filter must hold.
+
+**Where it applies.**
+- `((`: `rankRefs` takes `accept`, tested on the row's block after a quoter folds into its original (the page that counts is the original's). Phrases and exclusions read the prose key, and the code key when code is matched (`looksLikeCode` of the search words, or `refProse` off). The pool stays the referenced blocks (§3): the gate page `PhD/Cronobacter & Spore Control in PIF` has 20 blocks with `pcr`, 6 of them referenced; Roam's list has the rest. Reading a page's other blocks would be a pull of up to 28,570 blocks (377 ms on that page, §5), not a per-key cost.
+- `[[`: alias rows through `matchAliases`' `skip`. Phrases and exclusions read the alias and the title; `in:`/`ns:` test the row's page title; `is:` leaves no page row.
+- Drill (`[[Page#h > x`) parses first and is unchanged.
+- Search words without filters go to the plan, the code test, pick memory and highlighting; filter values are never highlighted. roam-aliases' fold-in keeps the raw query (roam-aliases filters on what is typed).
+
+**Label line.** With rows and at least one filter, `div.burrow-filters` is the strip's first child: the filters as typed joined by ` · `, `in:here` with its page in parentheses, 11 px at 0.6 opacity like the context line, 18 px counted in the strip's height. Not a `.burrow-row`, so keyboard indexes are unchanged. No match leaves no rows and so no line.
+
+**Cost.** One regex decides that a query holds no filter; with filters, the parse is a single pass over the token and the tests run only on blocks that already matched (the prefilter cache is keyed on the plan's words, unchanged).
+
 ## Also noticed
 
 - `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
