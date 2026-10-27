@@ -1078,9 +1078,11 @@ const BLOCK_CASES = [
       // The box is there, empty and full size, before the image: its first recorded state is "wait", without an img,
       // and every later state up to "ok" keeps its size and place.
       const log = b?.thumbLog || [];
-      if (!log[0] || log[0].state !== "wait" || log[0].img) return `not reserved before load: ${JSON.stringify(log)}`;
+      // (With Roam's preview already open the box can be drawn before the watch starts: then its first
+      // recorded state is "loading", still without an image.)
+      if (!log[0] || !["wait", "loading"].includes(log[0].state) || log[0].img) return `not reserved before load: ${JSON.stringify(log)}`;
       const seen = log.filter((e) => e.shown);
-      const box = seen.find((e) => e.state === "wait") || seen[0];
+      const box = seen.find((e) => !e.img) || seen[0];
       if (!box || box.w !== t.w || box.h !== t.h) return `no full-size box shown before the image: ${JSON.stringify(log)}`;
       if (!seen.some((e) => e.state === "ok")) return `never ok: ${JSON.stringify(log)}`;
       if (seen.some((e) => e.w !== box.w || e.h !== box.h || e.left !== box.left || e.top !== box.top)) return `layout shift while loading: ${JSON.stringify(log)}`;
