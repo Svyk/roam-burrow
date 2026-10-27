@@ -12,10 +12,10 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
   - `"quoted words"` must stand together, whole words in order (`(("black panther"` leaves out `the black cat and the panther`); while the closing quote is not typed yet, the last word may be a prefix.
   - `-word` (or `-"two words"`) leaves out blocks that have it.
   - `in:here` keeps blocks on the page being edited; `in:Page Title` keeps that page's blocks, the title running to the next filter or the end (`((pcr in:PhD/Cronobacter & Spore Control in PIF`), matched like a drill title (case and separators ignored) or by an alias; `in:"Title"` ends at its quote.
-  - `ns:Systems/` keeps pages under that namespace (and the page `Systems` itself).
+  - `ns:Systems/` keeps pages under that namespace (and the page `Systems` itself). `in:here` and `ns:` are one word (`ns:"Media Captures/"` for one with a space), so search words may follow them: `((in:here pcr`, `((ns:Systems/ grok`.
   - `is:todo` and `is:done` keep blocks whose first task macro is a TODO or a DONE (Better Tasks' `{{[[DONE]]:((uid))}}` counts), read as Burrow draws checkboxes; `is:t` already means todo while you type.
   - Several page filters add up (a block passes when any names its page); every other filter must hold.
-  - A word is a filter only with its colon (`in:`, `ns:`, `is:`), its quotes, or a leading `-` before a letter or quote: `in here`, `ant-man`, `a - b` and `-20` stay search text. Search words go before `in:` and `ns:`.
+  - A word is a filter only with its colon (`in:`, `ns:`, `is:`), its quotes, or a leading `-` before a letter or quote: `in here`, `ant-man`, `a - b` and `-20` stay search text. `in:`, `ns:` and `is:` need their value right after the colon, so `what it is: foo` is text. Search words go before `in:Page Title`.
   - Burrow never rewrites the token: Roam's own list searches the text as typed, and a Burrow pick replaces the whole token, filters included, with `((uid))` as before. A filter that matches nothing leaves no Burrow rows; Roam's list is untouched. `[[` rows are pages, so `is:` leaves none there, and `in:`/`ns:` keep the pages they name.
   - Burrow's rows show the filters in force as one quiet plain-text line above them (`is:todo · -closed`, `in:here (October 27th, 2026)`), no pills. The key list has a Filters group while the switch is on.
   - The pool is unchanged: Burrow's `((` rows are referenced blocks; filters narrow it, they do not read a page's other blocks.

@@ -424,7 +424,7 @@ const DRILL_CASES = [
   { name: "drill: preview caps children with +N more", query: `[[${DRILL_PAGE} > many`, keys: ["Enter"], on: (d) => `${SEED}((${d.many}))`, previewMore: "+39 more", line: true },
 ];
 
-// Query filters (0.8.0): Escape leaves the text alone, Enter on a filtered
+// Query filters (0.9.0): Escape leaves the text alone, Enter on a filtered
 // row replaces the whole token, filters included. Not in the drilloff arm.
 const FILTER_Q = "((zebra task is:todo";
 const FILTER_CASES = [
@@ -983,7 +983,7 @@ const BLOCK_CASES = [
       return missing.length ? `preview target lacks ${missing.join(", ")}: ${JSON.stringify(a?.preview)}` : null;
     },
   },
-  // 0.8.0: query filters (BRW-18), on the fixture's zebra blocks.
+  // 0.9.0: query filters (BRW-18), on the fixture's zebra blocks.
   ...(() => {
     const uidsOf = (a) => JSON.stringify(a?.uids);
     const noRowsCheck = ({ snaps: [a] }) => {

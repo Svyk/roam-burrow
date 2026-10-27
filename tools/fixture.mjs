@@ -26,7 +26,7 @@ export const DRILL_TREE = [
   // Referenced tasks, drawn as Roam's checkboxes in Burrow's rows (0.6.0).
   { key: "taskTodo", string: "{{[[TODO]]}} zebra task open" },
   { key: "taskDone", string: "{{[[DONE]]}} zebra task closed" },
-  // Contiguous vs scattered words for the "quoted phrase" filter (0.8.0).
+  // Contiguous vs scattered words for the "quoted phrase" filter (0.9.0).
   { key: "quiltRun", string: "zebra quilt pattern stitched" },
   { key: "quiltScatter", string: "zebra quilt with a bold pattern" },
   // A macro that only starts like a task (svy's SmartBlock button under a TODO on Patterns).

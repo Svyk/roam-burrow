@@ -137,7 +137,25 @@ test("pageFilter: phrases and excluded words on alias or title, ns: on the title
   assert.equal(pageFilter(parseFilters("bp \"black panther\""))(entry), true);
   assert.equal(pageFilter(parseFilters("bp -panther"))(entry), false);
   assert.equal(pageFilter(parseFilters("bp ns:Movies/"))(entry), false);
-  assert.equal(pageFilter(parseFilters("bp ns:Black Panther"))(entry), true);
+  assert.equal(pageFilter(parseFilters("bp ns:\"Black Panther\""))(entry), true);
   assert.equal(pageFilter(parseFilters("bp is:todo"))(entry), false);
   assert.equal(pageFilter(null), null);
+});
+
+test("in:here and ns: are one word, so search words may follow them", () => {
+  const f = parseFilters("in:here watch -closed is:todo");
+  assert.equal(f.here, true);
+  assert.deepEqual(f.pages, []);
+  assert.equal(f.text, "watch");
+  assert.deepEqual(parseFilters("in:here pcr").text, "pcr");
+  const g = parseFilters("ns:Systems/ grok");
+  assert.deepEqual(g.ns, ["Systems"]);
+  assert.equal(g.text, "grok");
+  assert.deepEqual(parseFilters("x ns:\"Media Captures/\" y").ns, ["Media Captures"]);
+  assert.deepEqual(parseFilters("x in:\"Here Comes the Sun\"").pages, ["Here Comes the Sun"]);
+});
+
+test("a colon followed by a space is prose, not a filter", () => {
+  assert.equal(parseFilters("what it is: foo"), null);
+  assert.equal(parseFilters("look in: the box"), null);
 });

@@ -107,7 +107,7 @@ const SCENARIOS = [
   { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
-  // 0.8.0: query filters. The filter line sits above the rows.
+  // 0.9.0: query filters. The filter line sits above the rows.
   { id: "58-filter-is-todo", query: "((zebra task is:todo", keys: ["preview-closed"] },
   { id: "59-filter-quoted-phrase", query: "((zebra \"quilt pattern\"", keys: ["preview-closed"] },
   { id: "60-filter-real-data", query: `((${config.filtered}`, keys: ["preview-closed"] },

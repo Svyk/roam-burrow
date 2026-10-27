@@ -7,10 +7,12 @@ import { taskParts } from "./tasks.js";
 // word is search text. Burrow reads them from the token, never rewrites it:
 // Roam's own search gets the same text.
 
-const NAMED = /^(in|ns|is):/i;
+// `in:` `ns:` `is:` count with their value right after the colon, or at the
+// end while it is typed; `what it is: foo` stays text.
+const NAMED = /^(in|ns|is):(?:\S|$)/i;
 // A filter starts here: `in:` `ns:` `is:`, a quote, or `-` before a letter
 // or a quote (`-20` and `a - b` stay text).
-const startsFilter = (s, at) => NAMED.test(s.slice(at, at + 3)) || s[at] === "\"" || (s[at] === "-" && /[\p{L}"]/u.test(s[at + 1] ?? ""));
+const startsFilter = (s, at) => NAMED.test(s.slice(at, at + 4)) || s[at] === "\"" || (s[at] === "-" && /[\p{L}"]/u.test(s[at + 1] ?? ""));
 const TASK_STATES = ["todo", "done"];
 
 // Returns null when the query holds no filter (the common case, one regex),
@@ -23,7 +25,7 @@ const TASK_STATES = ["todo", "done"];
 //   labels: each filter as typed, for the label line.
 export function parseFilters(query) {
   const s = String(query ?? "");
-  if (!/["]|(?:^|\s)(?:-[\p{L}"]|(?:in|ns|is):)/iu.test(s)) return null;
+  if (!/["]|(?:^|\s)(?:-[\p{L}"]|(?:in|ns|is):(?:\S|$))/iu.test(s)) return null;
   const words = [];
   const phrases = [];
   const excludes = [];
@@ -63,7 +65,7 @@ export function parseFilters(query) {
   while (at < s.length) {
     if (/\s/.test(s[at])) { at++; continue; }
     if (startsFilter(s, at)) consumed = true;
-    const head = s.slice(at, at + 3).toLowerCase();
+    const head = NAMED.test(s.slice(at, at + 4)) ? s.slice(at, at + 3).toLowerCase() : null;
     if (s[at] === "\"") {
       const q = quoted(at);
       const key = searchKey(q.value);
@@ -90,7 +92,9 @@ export function parseFilters(query) {
       }
       at = q.next;
     } else if (head === "in:" || head === "ns:") {
-      const q = longValue(at + 3);
+      // in:here and ns: are one word (ns:"A B/" quoted); only in:Title runs on.
+      const one = head === "ns:" || /^here(?:\s|$)/i.test(s.slice(at + 3));
+      const q = one && s[at + 3] !== "\"" ? word(at + 3) : longValue(at + 3);
       const value = q.value.trim();
       if (value) {
         if (head === "ns:") ns.push(value.replace(/\/+$/, ""));

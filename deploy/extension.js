@@ -1,4 +1,4 @@
-/* Burrow v0.7.0 | MIT | generated; edit src/ */
+/* Burrow v0.9.0 | MIT | generated; edit src/ */
 
 // src/search.js
 var NUM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
@@ -1690,12 +1690,12 @@ function checkbox(doc, state) {
 }
 
 // src/filters.js
-var NAMED = /^(in|ns|is):/i;
-var startsFilter = (s, at) => NAMED.test(s.slice(at, at + 3)) || s[at] === '"' || s[at] === "-" && /[\p{L}"]/u.test(s[at + 1] ?? "");
+var NAMED = /^(in|ns|is):(?:\S|$)/i;
+var startsFilter = (s, at) => NAMED.test(s.slice(at, at + 4)) || s[at] === '"' || s[at] === "-" && /[\p{L}"]/u.test(s[at + 1] ?? "");
 var TASK_STATES = ["todo", "done"];
 function parseFilters(query) {
   const s = String(query ?? "");
-  if (!/["]|(?:^|\s)(?:-[\p{L}"]|(?:in|ns|is):)/iu.test(s)) return null;
+  if (!/["]|(?:^|\s)(?:-[\p{L}"]|(?:in|ns|is):(?:\S|$))/iu.test(s)) return null;
   const words = [];
   const phrases = [];
   const excludes = [];
@@ -1740,7 +1740,7 @@ function parseFilters(query) {
       continue;
     }
     if (startsFilter(s, at)) consumed = true;
-    const head = s.slice(at, at + 3).toLowerCase();
+    const head = NAMED.test(s.slice(at, at + 4)) ? s.slice(at, at + 3).toLowerCase() : null;
     if (s[at] === '"') {
       const q = quoted(at);
       const key = searchKey(q.value);
@@ -1766,7 +1766,8 @@ function parseFilters(query) {
       }
       at = q.next;
     } else if (head === "in:" || head === "ns:") {
-      const q = longValue(at + 3);
+      const one = head === "ns:" || /^here(?:\s|$)/i.test(s.slice(at + 3));
+      const q = one && s[at + 3] !== '"' ? word(at + 3) : longValue(at + 3);
       const value = q.value.trim();
       if (value) {
         if (head === "ns:") ns.push(value.replace(/\/+$/, ""));
@@ -5601,7 +5602,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.7.0";
+var VERSION = "0.9.0";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 function safeLocalStorage() {

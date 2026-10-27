@@ -412,7 +412,8 @@ Precedents: RefX R5 filters, Omnisearch (phrases, `-` exclusions, `path:`), Sear
 - `"words"`: a phrase. Its words must stand together in order, each a whole word (`hasRun` over the key's tokens); with no closing quote yet the last word may be a prefix. The phrase's words also join the scorer's plan, so they rank as before.
 - `-word`, `-"two words"`: excluded. Only `-` at a word start followed by a letter or a quote: `ant-man`, `a - b` and `-20` stay text.
 - `in:here`: the page being edited (`st.pageTitle`, the edited block's `[data-page-title]`). `in:Title`: runs to the next filter (`in:` `ns:` `is:` `"` `-x`) or the end, so a title with spaces needs no quotes; `in:"Title"` ends at its quote. Resolved with the drill's title index (exact, case, separators, alias); a value that names no page is compared as typed.
-- `ns:A/B/`: the page `A/B` and pages under `A/B/` (trailing `/` optional). Same value rule as `in:`.
+- `ns:A/B/`: the page `A/B` and pages under `A/B/` (trailing `/` optional). One word, like `in:here`; `ns:"A B/"` for a namespace with a space. So `((in:here pcr` and `((ns:Systems/ grok` search `pcr` and `grok`.
+- A named filter needs its value right after the colon (or the colon at the end, while typing): `what it is: foo` is text.
 - `is:todo`, `is:done`: the block's first task macro (`taskParts`, the checkbox reader: `{{[[TODO]]}}`, `{{TODO}}`, `{{[[DONE]]}}`, Better Tasks' `{{[[DONE]]:((uid))}}`; a SmartBlock button that starts like one is no task). A prefix names its state while typed (`is:t`); another value matches nothing.
 - Any other word is search text. A filter needs its colon, quotes or `-`. `in:` with nothing after it is taken out of the text and filters nothing yet, so typing `in:` does not change the rows.
 - Page filters (`in:here`, `in:`, `ns:`) add up: a block passes when any names its page. Every other filter must hold.
