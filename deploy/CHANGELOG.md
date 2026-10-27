@@ -4,6 +4,19 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-27
+
+### Added
+
+- **Order alias chips by use** (`aliasUsage`, on; BRW-19). Chips under an alias row start with the alias you link most: each is counted by how many times `[alias]([[Page]])` appears in the graph (the link must be that page's exact title, the alias text is read without case), most used first, ties in the alias block's order. A chip's tip adds a quiet `×N` when N is above 0 (`zq used three ×3`). ⌥↓ still enters the chips on the alias that matched, wherever it now sits. Off: the alias block's order and plain tips.
+- **`alias:` prefix** (`aliasPrefix`, on). `[[alias:lo` lists only alias rows for `lo` (up to three, one character is enough), then Roam's list as usual below. Enter inserts `[alias]([[Page]])` (or `[[Page]]`, per the link format) in place of the whole `[[alias:lo]]`. No recent rows, page rows or drill-down for that text, and an empty `[[alias:` shows nothing of Burrow's. The first row is selected by the usual alias rule, judged on `lo`. Off: `[[alias:lo` is an ordinary search. The key list names it. **Disable all features** also turns off both new switches.
+
+### Changed
+
+- **Shared aliases, checked and tested.** When two pages carry the same alias, Burrow shows one row per page, never merged and never guessed, each with its own reference count and, on its chips, its own use count. That was already so (with `aliasInline` on and off); 0.9.0 adds the unit cases.
+- Cost: the chip order costs one more idle query in the build, next to the reference counts (`[:find ?u ?r ?s … includes? ?s "]([["]`, 56 ms async for 8 alias pages in notes, read-only), counted in `__BURROW_PERF` as `aliasUses`. An alias edit carries the counts over to the refreshed index; a keystroke reads a ready list: 0 queries, 0 pulls. Turning the switch on without counts read schedules a build.
+- Live gates: chips in use order with `×N` tips on a scratch fixture page (notes has 8 alias pages, none with three aliases, and no `[alias]([[Page]])` links), `[[alias:` rows only, shared-alias fixture with two rows.
+
 ## [0.8.1] - 2026-10-27
 
 ### Added

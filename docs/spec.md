@@ -160,6 +160,8 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `aliasInline` | switch | on | BRW-5: one alias row per page with its ref count, roam-aliases' duplicates folded |
 | `aliasPreselect` | switch | on | BRW-5: the alias row starts selected when the alias starts with the query and no page has that exact title |
 | `aliasChips` | switch | on | BRW-5: the selected alias row's aliases as chips (⌥↓) |
+| `aliasUsage` | switch | on | BRW-19: chips ordered by how often `[alias]([[Page]])` appears in the graph, `×N` in the tip (§19) |
+| `aliasPrefix` | switch | on | BRW-19: `[[alias:lo` lists only alias rows for `lo` (§19) |
 | `tabDrill` | switch | on | BRW-5: Tab / Shift+Tab drill into the highlighted row's children |
 | `paneLayout` | switch | on | BRW-5: roam-aliases' column, Roam's list and Roam's preview each in their own space |
 | `keyHints` | switch | on | BRW-5: key-hint line under Roam's list and in the drill panel (BRW-6: RefX wording; BRW-7: only keys that apply to the highlighted row) |
@@ -424,6 +426,22 @@ Two switches, both on: `recentRows` and `frecency`. They replace pick memory (`p
 **Per key.** `rank()` → `mainRows` as before, then `recentRows`: `frecency.recent()` (cached array), 10 + 30 candidates merged, a word-start test on cached tokens, at most six rows built. 0 queries, 0 pulls; the perf gate's `((` opener and first two typed characters are these keys.
 
 **Forget.** The command palette entry `Burrow: forget recent picks` (also `window.__BURROW.forgetPicks()` for the gates) clears the store and the in-memory pick rows. `Disable all features` turns `recentRows` and `frecency` off.
+
+## 19. Alias polish (BRW-19)
+
+Two switches, both on: `aliasUsage` and `aliasPrefix`. `Disable all features` turns both off.
+
+**Use count.** Per alias page, the number of `[alias]([[Page]])` links in the graph. In the idle build (`src/indexes.js` `build()`, beside the reference counts, same alias page uids, only with `aliasUsage` on): `[:find ?u ?r ?s :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p] [?r :block/string ?s] [(clojure.string/includes? ?s "]([[")]]`. `?r` is in `:find` so equal strings in different blocks are not collapsed. Measured read-only in notes 2026-10-27: 56 ms async for 8 alias pages; timed as `perf.push("aliasUses", ms)`. `countAliasUses(index, rows)` (`src/aliases.js`, pure) matches every `/\[([^\[\]]+)\]\(\[\[([^\]]+)\]\]\)/g` in each string, and counts it for the row's page uid when the link title equals that page's title exactly and the text, trimmed and lowercased, is one of that page's aliases. Two links in one block count twice; links to other titles, non-alias text and plain `[x](url)` do not count. The result is a Map keyed `pageUid\u0000aliasLower`.
+
+**Where it lives.** `setAliasUses(index, uses)` stores `index.usesByAlias` (that Map, at `window.__BURROW.indexes.aliases.usesByAlias`) and precomputes `index.aliasesByUse`: page uid → the page's aliases, most used first, ties in the alias block's order (a stable sort of `pageAliases`). `aliasUses(index, uid, alias)` is the lookup for a tip. `swapAliases` (an alias edit) carries the counts to the new index with `setAliasUses(next, aliases.usesByAlias)`, as `refsByPage` is carried; a new alias has none until the next build. Turning `aliasUsage` on while no count was read (`indexes.usesRead` false) schedules a build.
+
+**Per key.** `groupAliasHits(hits, index, { byUse })` takes `aliasesByUse.get(uid)` when `byUse` (the setting) and the list exists, else `pageAliases`. A chip's `title` and the hover tip's heading are `<alias>` or `<alias> ×N` (N > 0, switch on), from one Map lookup. `chipRow` and `chipKey` read `row.aliases`, so keys follow the new order: ⌥↓ enters on `row.aliases.indexOf(row.alias)`, ←/→ move, Enter inserts that chip. `foldedByRow` tests membership in `row.aliases`, which reordering does not change, so no alias shows twice (Burrow row and roam-aliases item). No query, no pull.
+
+**Shared aliases.** An alias on two pages gives two rows, never merged and never guessed: `groupAliasHits` dedups by page uid, not by alias text, and with `aliasInline` off the keys are `alias:<uid>:<alias>`; each row carries its own `refs`, and its chips its own use counts. Checked in `groupAliasHits`, `matchAliases`, `visibleRows` and `foldedByRow`; nothing needed fixing.
+
+**`alias:` prefix.** In `rank()`, before drill and recent rows: a `[[` token (not right after `#`) whose query matches `/^alias:\s*(.*)$/is`, with `aliasPrefix` and `aliasPages` on, is in prefix mode; `st.aliasOnly` holds the rest (else `null`, reset each `rank()`). An empty rest (after trim) gives no rows. Otherwise `mainRows` ranks aliases for the rest alone, with no minimum length (one character works), the usual `matchAliases` / `groupAliasHits` / `aliasInsertion`, so Enter inserts `[alias]([[Page]])` or `[[Page]]`; `applyToken` replaces from the token start through the closer, so `alias:` does not survive. No recent rows, page rows or drill for the token. `visibleRows` in prefix mode only slices to `ROW_LIMIT`: no filtering against Roam's titles or roam-aliases (roam-aliases searches the literal `alias:lo` and lists nothing, so nothing can repeat). Pre-select: the usual `aliasPreselect` rule on the rest, `aliasStarts(rows[0].alias, rest) && !exactTitle(rest)`. Highlight uses the rest too. One regex on the query per key.
+
+**Data note.** In notes (checked read-only 2026-10-27) there are 8 alias pages, none with three or more aliases, and 0 `[alias]([[Page]])` links, so the live gate builds a scratch fixture page for the order.
 
 ## Also noticed
 
