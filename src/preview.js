@@ -128,7 +128,9 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
   // node costs about 0.06 ms to insert, a rewrite next to nothing); only
   // lines past the last outline's count are made.
   // Returns how many items were written; `min` of them whatever the deadline.
-  function writeLines(items, from, deadline = Infinity, min = 0) {
+  // A table line is never written here from a key's draw (`tables` false): it
+  // stops the draw and waits for more(), at idle (30 cells cost ~2 ms in svy).
+  function writeLines(items, from, deadline = Infinity, min = 0, tables = false) {
     const kids = outline.children;
     const made = [];
     let lastTarget = -1;
@@ -137,6 +139,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
     for (; wrote < items.length; wrote++) {
       if (deadline !== Infinity && wrote >= min && wrote > lastTarget && performance.now() > deadline) break;
       const item = items[wrote];
+      if (item.table && !tables && wrote >= min) break;
       const row = kids[from + wrote] || doc.createElement("div");
       let cls = "burrow-node";
       if (item.more != null) cls += " burrow-more";
@@ -314,7 +317,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
     more(lines = Infinity, budgetMs = Infinity) {
       if (!rest || pane.hidden) return;
       const items = rest.slice(0, lines);
-      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1);
+      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1, true);
       rest = wrote < rest.length ? rest.slice(wrote) : null;
       restAt += wrote;
     },

@@ -192,6 +192,11 @@ test("the preview draws a 6x5 grid, clipped rich cells and a footer, with no han
   const popover = doc.createElement("div");
   doc.body.append(popover);
   preview.show(m, popover);
+  // A key's draw leaves the table to more(), at idle.
+  assert.equal(preview.node.querySelector(".burrow-table"), null);
+  assert.equal(preview.pending, true);
+  preview.more();
+  assert.equal(preview.pending, false);
   const cells = [...preview.node.querySelectorAll(".burrow-cell")];
   assert.equal(cells.length, 30, "6 rows x 5 columns, rectangular");
   assert.equal(preview.node.querySelector(".burrow-table").style.getPropertyValue("--burrow-cols"), "5");
@@ -205,6 +210,7 @@ test("the preview draws a 6x5 grid, clipped rich cells and a footer, with no han
   // same table again: the line is not rebuilt
   const grid = preview.node.querySelector(".burrow-table");
   preview.show({ ...m, key: "again" }, popover);
+  preview.more();
   assert.equal(preview.node.querySelector(".burrow-table"), grid);
 });
 
@@ -214,6 +220,7 @@ test("plain cells (no rich) are cut at 40 characters", () => {
   doc.body.append(popover);
   const m = { key: "p", trail: ["P"], items: [{ uid: "T", table: { uid: "T", rows: [[{ uid: "a", string: "z".repeat(60) }, { uid: "b", string: "ok" }], [{ uid: "c", string: "x" }]], cols: 2, moreRows: 0, moreCols: 0 }, depth: 1 }] };
   preview.show(m, popover);
+  preview.more();
   const cells = [...preview.node.querySelectorAll(".burrow-cell")];
   assert.equal(cells.length, 4, "the short row is padded");
   assert.equal(cells[0].textContent, `${"z".repeat(40)}…`);

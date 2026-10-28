@@ -441,9 +441,10 @@ const CASES = [
 const DRILL_PAGE = FIXTURE_PAGE;
 const DRILL_Q = `[[${DRILL_PAGE}#alpha > never`;
 const TABLE_Q = `[[${DRILL_PAGE} > tables section > `;
+// The table line is drawn at idle after the key (src/preview.js), so the checks read a snap taken after a wait.
 const tableCellsCheck = (on) => {
-  const t = on.before?.preview?.table;
-  if (!t) return `no table in the preview ${JSON.stringify(on.before?.preview)}`;
+  const t = on.snaps?.[0]?.preview?.table;
+  if (!t) return `no table in the preview ${JSON.stringify(on.snaps?.[0]?.preview)}`;
   const long = t.cells.find((x) => x.startsWith("zebra long cell"));
   const bad = [];
   if (t.cells.length !== 30) bad.push(`${t.cells.length} cells`);
@@ -459,7 +460,7 @@ const tableCellsCheck = (on) => {
   return bad.length ? bad.join("; ") : null;
 };
 const tableOffCheck = (on) => {
-  const p = on.before?.preview;
+  const p = on.snaps?.[0]?.preview;
   if (!p) return "no preview";
   if (p.table) return `a table was drawn with previewTables off ${JSON.stringify(p.table.footer)}`;
   return p.linesAfterTarget > 0 ? null : `no outline lines after the target (${p.linesAfterTarget})`;
@@ -491,9 +492,9 @@ const DRILL_CASES = [
   // BRW-20: a highlighted {{[[table]]}} block draws its first 6x5 cells under it. The empty last
   // step takes the table: it is the only child of the section, and drillEmpty keeps an empty-text
   // block that has children (src/drill.js bestMatch; stripRoamMarkup drops the macro, so "table" would not match).
-  { name: "table: drill preview draws the first 6x5 cells", query: TABLE_Q, keys: ["Enter"], on: (d) => `${SEED}((${d.tableSmall}))`, check: tableCellsCheck },
+  { name: "table: drill preview draws the first 6x5 cells", query: TABLE_Q, keys: ["wait:600", "snap", "Enter"], on: (d) => `${SEED}((${d.tableSmall}))`, check: tableCellsCheck },
   { name: "table: Escape on a drilled table", query: TABLE_Q, keys: ["Escape"] },
-  { name: "table: switch off draws the outline", query: TABLE_Q, keys: ["Enter"], settings: { previewTables: false }, on: (d) => `${SEED}((${d.tableSmall}))`, check: tableOffCheck },
+  { name: "table: switch off draws the outline", query: TABLE_Q, keys: ["wait:600", "snap", "Enter"], settings: { previewTables: false }, on: (d) => `${SEED}((${d.tableSmall}))`, check: tableOffCheck },
   { name: "table: a 200-row table reads 6 rows' chains", query: `[[${DRILL_PAGE} > big table section`, keys: ["snap", "type: > ", "wait:800", "snap", "Escape"], check: tableBigCheck },
 ];
 
@@ -2496,6 +2497,7 @@ if (flags.includes("--json")) {
   const p = report.arms.on?.[DRILL_CASES[0].name]?.before?.preview;
   console.log(`  drill preview: trail ${JSON.stringify(p?.trail)}, highlighted ${JSON.stringify(p?.target)}, in view ${p?.targetVisible}`);
   const tableOn = report.arms.on?.[DRILL_CASES.find((k) => k.name.startsWith("table: drill preview"))?.name];
+  if (tableOn) tableOn.before = tableOn.snaps?.[0] ?? tableOn.before;
   const bigOn = report.arms.on?.[DRILL_CASES.find((k) => k.name.startsWith("table: a 200-row"))?.name];
   console.log(`  table preview: cells ${tableOn?.before?.preview?.table?.cells.length ?? "none"}, footer ${JSON.stringify(tableOn?.before?.preview?.table?.footer ?? null)}, chains for the 200-row table ${bigOn?.snaps ? (bigOn.snaps[1]?.tableChains ?? 0) - (bigOn.snaps[0]?.tableChains ?? 0) : "n/a"}`);
   console.log(`  fast typing then Enter: ${JSON.stringify(report.fast?.string)}`);

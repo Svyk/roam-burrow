@@ -3155,7 +3155,7 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
     while (kids.length > model.items.length) kids[kids.length - 1].remove();
     for (let i = wrote; i < kids.length; i++) kids[i].hidden = true;
   }
-  function writeLines(items, from, deadline = Infinity, min = 0) {
+  function writeLines(items, from, deadline = Infinity, min = 0, tables = false) {
     const kids = outline.children;
     const made = [];
     let lastTarget = -1;
@@ -3166,6 +3166,7 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
     for (; wrote < items.length; wrote++) {
       if (deadline !== Infinity && wrote >= min && wrote > lastTarget && performance.now() > deadline) break;
       const item = items[wrote];
+      if (item.table && !tables && wrote >= min) break;
       const row = kids[from + wrote] || doc.createElement("div");
       let cls = "burrow-node";
       if (item.more != null) cls += " burrow-more";
@@ -3351,7 +3352,7 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
     more(lines = Infinity, budgetMs = Infinity) {
       if (!rest || pane.hidden) return;
       const items = rest.slice(0, lines);
-      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1);
+      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1, true);
       rest = wrote < rest.length ? rest.slice(wrote) : null;
       restAt += wrote;
     },
