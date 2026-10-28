@@ -10,7 +10,7 @@ export const VERSION = "0.10.0";
 
 let activeLifecycle = null;
 
-const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 
 function safeLocalStorage() {
   try { return globalThis.localStorage ?? null; } catch { return null; }
@@ -96,6 +96,10 @@ export async function onload({ extensionAPI, extension }) {
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       onChange: (id, event) => {
         if (id === "aliasKeyword") indexes?.schedule();
+        if (id === "aliasUsage") {
+          const on = typeof event === "boolean" ? event : event?.target?.checked;
+          if (on !== false && indexes && !indexes.usesRead) indexes.schedule();
+        }
         if (id !== "refSearch") return;
         const value = typeof event === "boolean" ? event : event?.target?.checked;
         if (typeof value === "boolean") void syncRefCommand(value);

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles, waitAliasFixtures } from "./fixture.mjs";
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
@@ -27,7 +27,7 @@ const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
-  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
+  "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "insertVariants", "openInSidebar"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
@@ -117,13 +117,17 @@ const SCENARIOS = [
   { id: "63-filter-is-todo", query: "((zebra task is:todo", keys: ["preview-closed"] },
   { id: "64-filter-quoted-phrase", query: "((zebra \"quilt pattern\"", keys: ["preview-closed"] },
   { id: "65-filter-real-data", query: `((${config.filtered}`, keys: ["preview-closed"] },
+  // 0.9.1: chips ordered by use (the hovered chip's tip carries its count), two pages sharing an alias, the `alias:` prefix.
+  { id: "66-chips-by-use", query: "[[zq used", keys: ["alt+ArrowDown", "hover:.burrow-chips .burrow-chip", "wait:700"] },
+  { id: "67-shared-alias-rows", query: "[[zq twin sh", keys: [] },
+  { id: "68-alias-prefix-rows", query: "[[alias:zq", keys: [] },
   // 0.10.0: insert variants and the sidebar.
-  { id: "66-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "67-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "68-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
-  { id: "69-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
-  { id: "70-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
-  { id: "71-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
+  { id: "69-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "70-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "71-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "72-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
+  { id: "73-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
+  { id: "74-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
 ];
 
 const c = await connect(title);
@@ -337,6 +341,7 @@ try {
   fixture = await setupFixture(c, { drillTree: true });
   const loaded = await setArm("on");
   if (!loaded.refs) throw new Error("index not built");
+  await waitAliasFixtures(c);
   const stamp = `${label}-${theme || "default"}`;
   for (const scenario of SCENARIOS.filter((x) => !only || only.some((id) => x.id.startsWith(id)))) {
     await c.evaluate((settings) => {

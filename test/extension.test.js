@@ -64,7 +64,7 @@ test("a second load disposes the previous runtime before registering again", asy
 
 test("every feature has its own switch in the settings panel", () => {
   const ids = createSettingsPanel().settings.filter((s) => s.action.type === "switch").map((s) => s.id);
-  assert.deepEqual(ids.sort(), ["aliasChips", "aliasCreate", "aliasDelete", "aliasExpand", "aliasInline", "aliasPages", "aliasPreselect", "betterMatch", "drill", "drillCap", "drillEmpty", "drillOrdinals", "drillPreview", "frecency", "helpNudge", "helpSheet", "helpTips", "insertVariants", "keyHints", "openInSidebar", "pageBoost", "paneLayout", "perfHud", "queryFilters", "recentRows", "refContext", "refOutline", "refPreselect", "refProse", "refRanking", "refSearch", "refSearchHotkey", "richRows", "rowPreview", "tabDrill"].sort());
+  assert.deepEqual(ids.sort(), ["aliasChips", "aliasCreate", "aliasDelete", "aliasExpand", "aliasInline", "aliasPages", "aliasPrefix", "aliasPreselect", "aliasUsage", "betterMatch", "drill", "drillCap", "drillEmpty", "drillOrdinals", "drillPreview", "frecency", "helpNudge", "helpSheet", "helpTips", "insertVariants", "keyHints", "openInSidebar", "pageBoost", "paneLayout", "perfHud", "queryFilters", "recentRows", "refContext", "refOutline", "refPreselect", "refProse", "refRanking", "refSearch", "refSearchHotkey", "richRows", "rowPreview", "tabDrill"].sort());
   assert.equal(DEFAULTS.refPreselect, true);
   assert.equal("pickMemory" in DEFAULTS, false);
 });
@@ -76,7 +76,7 @@ test("0.10.0 defaults: writes and the hotkey are off, the help, block navigation
   assert.equal(DEFAULTS.recentRows, true);
   assert.equal(DEFAULTS.frecency, true);
   assert.equal(DEFAULTS.queryFilters, true);
-  for (const id of ["rowPreview", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "insertVariants", "openInSidebar"]) assert.equal(DEFAULTS[id], true, id);
+  for (const id of ["aliasUsage", "aliasPrefix", "rowPreview", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "insertVariants", "openInSidebar"]) assert.equal(DEFAULTS[id], true, id);
   for (const id of ["aliasCreate", "aliasDelete", "refSearchHotkey", "helpNudgeSeen"]) assert.equal(DEFAULTS[id], false, id);
   // The seen flag is stored, not shown as a switch.
   assert.equal(createSettingsPanel().settings.some((s) => s.id === "helpNudgeSeen"), false);

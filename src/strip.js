@@ -1,4 +1,4 @@
-import { aliasInsertion, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
+import { aliasInsertion, aliasUses, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
@@ -43,6 +43,8 @@ const POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
 const HAS_KIDS = "[(limit :block/children 1)]";
 const MIN_REF_QUERY = 3;
 const MIN_ALIAS_QUERY = 2;
+// `[[alias:lo`: only alias rows for what follows the prefix (spec §20).
+const ALIAS_PREFIX = /^alias:\s*(.*)$/is;
 // Recent rows show with this many characters typed or fewer (spec §18).
 const RECENT_QUERY = 2;
 // Roam's own placeholder rows: titles that are not pages.
@@ -78,7 +80,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const st = {
     phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null, prompt: null, help: false, held: false,
+    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, held: false,
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -182,7 +184,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   function rank(token) {
     st.drill = null;
+    st.aliasOnly = null;
     st.filters = null;
+    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
+      const m = ALIAS_PREFIX.exec(token.query);
+      if (m) {
+        st.aliasOnly = m[1];
+        return m[1].trim() ? mainRows(token, setting("betterMatch"), m[1]) : [];
+      }
+    }
     if (indexes.refs !== richRefs) { richRefs = indexes.refs; richCache.clear(); }
     const recall = setting("betterMatch");
     if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
@@ -204,11 +214,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   const frequent = (kind) => (setting("frecency") ? frecency?.scores(kind) : null);
 
-  function mainRows(token, recall) {
-    const filters = setting("queryFilters") ? parseFilters(token.query) : null;
+  // query: the text ranked on (after `alias:` in prefix mode, spec §20).
+  function mainRows(token, recall, query = token.query) {
+    const filters = setting("queryFilters") ? parseFilters(query) : null;
     st.filters = filters;
-    const searchText = filters ? filters.text : token.query;
-    const planText = filters ? filters.planText : token.query;
+    const searchText = filters ? filters.text : query;
+    const planText = filters ? filters.planText : query;
     const plan = searchPlan(planText);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
@@ -230,7 +241,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
           rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
         }));
     }
-    if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
+    if (!setting("aliasPages") || (compact < MIN_ALIAS_QUERY && st.aliasOnly == null)) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
     const format = setting("aliasLinkFormat");
     // No cut here: visibleRows drops rows Roam or roam-aliases already show,
@@ -241,7 +252,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       skip: accepted ? (entry) => !accepted(entry) : undefined,
     });
     if (setting("aliasInline")) {
-      return groupAliasHits(hits, indexes.aliases).map((hit) => ({
+      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit) => ({
         kind: "alias", key: `alias:${hit.uid}`, uid: hit.uid, alias: hit.alias, title: hit.title, aliases: hit.aliases,
         refs: hit.refs, level: hit.level, insertion: aliasInsertion(hit, format),
       }));
@@ -443,6 +454,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (!st.pop) return [];
     const inline = setting("aliasInline");
     const pages = st.rows.some((row) => row.kind === "page");
+    if (st.aliasOnly != null) return st.rows.slice(0, ROW_LIMIT);
     if (st.token?.kind !== "[[" || st.drill || (inline && !pages)) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
@@ -481,7 +493,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.prompt?.kind === "add") { renderPrompt(); return; }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
-    const searchText = st.filters ? st.filters.planText : query;
+    const searchText = st.filters ? st.filters.planText : (st.aliasOnly ?? query);
     const filterText = rows.length ? filtersText() : "";
     const same = query === shownQuery && filterText === shownFilters && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
@@ -728,7 +740,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   }
 
   // What the rows are searched and highlighted on: the query without its filters.
-  const searchWords = () => (st.filters ? st.filters.planText : st.token?.query);
+  const searchWords = () => (st.filters ? st.filters.planText : (st.aliasOnly ?? st.token?.query));
 
   // The query's words as one pattern, made once per query (rows render per key).
   let highlightFor = null;
@@ -850,6 +862,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   let revealedChip = -1;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
 
+  // The alias, and ×N when the graph links it that often (aliasUsage).
+  const chipTitle = (row, alias) => {
+    const n = setting("aliasUsage") ? aliasUses(indexes.aliases, row.uid, alias) : 0;
+    return n > 0 ? `${alias} ×${n}` : alias;
+  };
+
   function paintChips() {
     const row = shown[st.active];
     const show = chipsAvailable(row);
@@ -879,7 +897,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
           chipsNode.replaceChildren(
             Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
             ...row.aliases.map((alias, i) => {
-              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: alias });
+              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: chipTitle(row, alias) });
               chip.dataset.index = String(i);
               return chip;
             }),
@@ -2362,7 +2380,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const active = shown[st.active];
     if (chip && active?.kind === "alias") {
       const i = Number(chip.dataset.index);
-      return { el: chip, title: active.aliases[i], lines: [
+      return { el: chip, title: chipTitle(active, active.aliases[i]), lines: [
         ["↵", `or click: insert ${chipRow(active, i).insertion}`],
         ...rowVariantLines(active, i),
         ["←→", "move between the aliases"],
