@@ -164,4 +164,7 @@ test("pickerHints: ⌥R names the Related rows while the band has rows; inside i
   // The alias chips' line names only the chip keys (notes live gate, [[zq chip al has a band).
   const chips = { kind: "[[", chips: true, row: { kind: "alias", chips: true, drill: false }, on: ON, related: "available" };
   assert.equal(keys(pickerHints(chips, true)), "←→ alias · ↵ insert · esc rows");
+  // A held modifier shows the insert variants alone.
+  const held = { ...ref, held: true, on: { ...ref.on, insertVariants: true, openInSidebar: true } };
+  assert.equal(keys(pickerHints(held, true)).includes("⌥R"), false);
 });

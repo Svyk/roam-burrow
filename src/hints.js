@@ -8,6 +8,9 @@ const NAMED = {
   altSlash: ["⌥/", "Alt+/"],
   altR: ["⌥R", "Alt+R"],
   altShift9: ["⌥⇧9", "Alt+Shift+9"],
+  shiftEnter: ["⇧↵", "Shift+↵"],
+  altEnter: ["⌥↵", "Alt+↵"],
+  sidebarEnter: ["⌘⇧↵", "Ctrl+Shift+↵"],
 };
 
 export function keyLabel(name, mac = IS_MAC) {
@@ -37,15 +40,17 @@ export function hintsKey(items) {
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
 //   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them (s.recentAbove: all of them recent rows);
 //   s.related: "available" (the Related band has rows) | "active" (one of them holds the selection) | null;
-//   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline }.
+//   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline,
+//     insertVariants, openInSidebar }; s.held: ⇧, ⌥ or ⌘ held on a Burrow row (the line
+//     is full already, so the variants take its place while a modifier is held).
 // The drill key names what Tab lists: a page's blocks or a block's children.
 export function pickerHints(s, mac = IS_MAC) {
   if (s.related === "active") {
     return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
   }
   const items = baseHints(s, mac);
-  // Not in the alias chips or a prompt: those lines name only their own keys.
-  if (s.related === "available" && !s.prompt && !s.chips) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
+  // Not in the alias chips, a prompt or the held-modifier variants: those lines name only their own keys.
+  if (s.related === "available" && !s.prompt && !s.chips && !s.held) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
   return items;
 }
 
@@ -61,6 +66,10 @@ function baseHints(s, mac) {
   if (s.prompt === "delete") return [["↵", "delete", "Remove only this alias from the page's alias block"], ["esc", "keep", "Keep the alias"]];
   const items = [];
   const row = s.row;
+  if (s.held && row) {
+    const variants = variantHints(row, on, mac);
+    if (variants.length) return variants;
+  }
   if (row && s.chips) {
     items.push(["←→", "alias", "Choose another alias of this page"]);
     if (on.aliasDelete) items.push([k("altBackspace"), "delete", "Delete the selected alias from the page (asks first)"]);
@@ -100,6 +109,22 @@ function baseHints(s, mac) {
     if (s.native.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (s.native.aliasNew) items.push(addAlias);
   }
+  return items;
+}
+
+// ⇧↵ ⌥↵ ⌘⇧↵ on a highlighted Burrow row (insertVariants, openInSidebar): the
+// whole line while ⇧, ⌥ or ⌘ is held; the tips and key list name them too.
+// row.page: it is a page (alias row, a drill-down that reached only its page).
+export function variantHints(row, on, mac = IS_MAC) {
+  if (!row) return [];
+  const items = [];
+  const page = row.kind === "alias" || row.page;
+  if (on.insertVariants) {
+    items.push([keyLabel("shiftEnter", mac), "embed", page ? "Insert {{[[embed]]: [[Page]]}}" : "Insert {{[[embed]]: ((uid))}}"]);
+    items.push([keyLabel("altEnter", mac), "label", row.kind === "alias" ? "Insert [alias]([[Page]]), whatever the Alias link format says"
+      : page ? "Insert [what you typed]([[Page]])" : "Insert [what you typed](((uid))), or the block's first 40 characters when you typed nothing"]);
+  }
+  if (on.openInSidebar) items.push([keyLabel("sidebarEnter", mac), "sidebar", "Open it in Roam's right sidebar (or ⇧+click); the text stays as you typed it"]);
   return items;
 }
 

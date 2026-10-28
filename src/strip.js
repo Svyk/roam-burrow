@@ -19,6 +19,7 @@ import { isDarkHost } from "./theme.js";
 import { createThumbs } from "./thumbs.js";
 import { createTips } from "./tips.js";
 import { applyToken, findToken, tokenStillValid } from "./token.js";
+import { lastStep, sidebarWindow, variantInsertion, variantOf } from "./variants.js";
 import { wheelPlan } from "./wheel.js";
 
 const POPUP = ".rm-autocomplete__results";
@@ -104,7 +105,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const st = {
     phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1,
+    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1, held: false,
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -1168,6 +1169,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       row: row ? {
         kind: row.kind, chips: chipsAvailable(row), aliasNew: aliasNew(row.kind === "alias" || row.kind === "page"),
         drill: canDrill(ownedSource(row, st.chip)), block: Boolean(ownedSource(row, -1)?.block),
+        page: variantType(row) === "page",
       } : null,
       native: !row && kind === "[[" ? (() => {
         const source = armedSource();
@@ -1176,7 +1178,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
-      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline") },
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
+      held: Boolean(st.held),
     };
     return pickerHints(state);
   }
@@ -1795,6 +1798,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   function reset(reason) {
     if (st.phase !== "IDLE" || st.rows.length) trace({ ev: "reset", reason });
+    if (holdTimer) { win.clearTimeout(holdTimer); holdTimer = null; }
+    st.held = false;
     closeHelp();
     tips.hide();
     if (nudgeShown) nudgeSeen();
@@ -1911,6 +1916,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   function onKeyDown(event) {
     if (tips.visible) tips.hide();
+    if (st.held || holdTimer || MODIFIER_KEYS.has(event.key)) holdKey(event);
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
     // The key list covers every row: first, so its Enter only closes it.
@@ -1944,6 +1950,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       if (bandRows().length) { enterRelated(0); consume(event); return; }
     }
     if (st.phase === "RELATED") { relatedKeyDown(event); return; }
+    if (st.phase === "OWNED" && variantKey(event, shown[st.active], st.chip)) return;
     if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
       const page = aliasSource();
       if (page) { openPrompt(page); consume(event); return; }
@@ -2026,6 +2033,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       consume(event);
       return true;
     }
+    if (variantKey(event, row, st.chip)) return true;
     const last = row.aliases.length - 1;
     if (plain && (key === "ArrowLeft" || key === "ArrowUp")) st.chip = Math.max(0, st.chip - 1);
     else if (plain && (key === "ArrowRight" || key === "ArrowDown")) st.chip = Math.min(last, st.chip + 1);
@@ -2045,6 +2053,99 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     paintActive();
     consume(event);
+    return true;
+  }
+
+  // ---- insert variants and the sidebar (src/variants.js) ----
+
+  // The kind of target a row has, for the hint line on every key: no block
+  // text is read (variantTarget resolves refs in it, only on a key or hover).
+  function variantType(row) {
+    if (row?.kind === "alias" || row?.kind === "page") return "page";
+    if (row?.kind === "ref") return "block";
+    if (row?.kind === "drill" && st.drill) return st.drill.target ? "block" : "page";
+    return null;
+  }
+
+  // What ⇧↵ ⌥↵ ⌘⇧↵ act on for a strip row (`chip`: the selected alias chip).
+  function variantTarget(row, chip = -1) {
+    if (row?.kind === "alias") return { type: "page", uid: row.uid, title: row.title, alias: chip >= 0 ? row.aliases[chip] : row.alias };
+    if (row?.kind === "page") return { type: "page", uid: row.uid, title: row.title };
+    if (row?.kind === "ref") return { type: "block", uid: row.uid, text: resolveRefs(indexes.refs?.byUid.get(row.uid)?.string ?? row.text) };
+    if (row?.kind === "drill" && st.drill) {
+      return st.drill.target ? { type: "block", uid: row.uid, text: resolveRefs(st.drill.target.string ?? row.text) } : { type: "page", uid: st.drill.page.uid, title: st.drill.page.title };
+    }
+    return null;
+  }
+
+  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
+
+  // The hint line is full already, so the variants take its place while ⇧, ⌥
+  // or ⌘ is held on a Burrow row or the drill panel: after HOLD_MS with no
+  // other key, so typing a capital never flickers it. Any other key, the
+  // modifier's release or leaving the window puts the line back.
+  const HOLD_MS = 300;
+  const MODIFIER_KEYS = new Set(["Shift", "Alt", "Meta", "Control"]);
+  let holdTimer = null;
+  function setHeld(on) {
+    if (holdTimer) { win.clearTimeout(holdTimer); holdTimer = null; }
+    if (Boolean(st.held) === on) return;
+    st.held = on;
+    if (st.phase === "SCOPE" && st.scope) scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false, variantsOn());
+    else if (st.phase !== "IDLE") layoutPop();
+  }
+  function holdKey(event) {
+    if (!MODIFIER_KEYS.has(event.key)) { setHeld(false); return; }
+    const can = (st.phase === "OWNED" && variantType(shown[st.active])) || st.phase === "SCOPE";
+    if (!can || st.held || holdTimer || !setting("keyHints") || !(setting("insertVariants") || setting("openInSidebar"))) return;
+    holdTimer = win.setTimeout(() => { holdTimer = null; setHeld(true); }, HOLD_MS);
+  }
+
+  // The label ⌥↵ takes from what was typed: a drill-down's last step; with
+  // query filters, the search words without the filters.
+  function labelQuery(row) {
+    if (row?.kind === "drill") return lastStep(st.token?.query);
+    const query = st.token?.query ?? "";
+    const filters = setting("queryFilters") ? parseFilters(query) : null;
+    return filters ? filters.planText : query;
+  }
+
+  // Returns true when the key was one of the variants and is consumed.
+  function variantKey(event, row, chip = -1) {
+    const variant = variantOf(event, setting);
+    const target = variant ? variantTarget(row, chip) : null;
+    if (!target) return false;
+    consume(event);
+    runVariant(variant, target, labelQuery(row), row);
+    return true;
+  }
+
+  function runVariant(variant, target, query, row = null) {
+    if (variant === "sidebar") { if (!openSidebar(target)) refused(); return; }
+    const insertion = variantInsertion(variant, target, query);
+    // kind "variant": the pick still counts for frecency (recordPick), by its target.
+    if (!commit({ kind: "variant", target, key: `${variant}:${target.uid}`, insertion })) refused();
+  }
+
+  // Opens the page or block in Roam's right sidebar and leaves the block, its
+  // caret and the popup as they are. Same checks as a commit, no write.
+  function openSidebar(target) {
+    const ta = st.ta;
+    const token = st.token;
+    const fail = (reason) => {
+      debug.lastFailure = { reason, at: Date.now(), row: target.uid, value: ta?.value, token };
+      trace({ ev: "sidebar-fail", reason });
+      return false;
+    };
+    const add = api.ui?.rightSidebar?.addWindow;
+    if (!add) return fail("no-sidebar");
+    if (!ta || !token || !ta.isConnected) return fail("textarea-gone");
+    if (doc.activeElement !== ta) return fail("not-focused");
+    if (!tokenStillValid(ta.value, ta.selectionStart, ta.selectionEnd, token)) return fail("token-changed");
+    const window = sidebarWindow(target);
+    debug.sidebar = { at: Date.now(), window };
+    trace({ ev: "sidebar", uid: target.uid });
+    Promise.resolve(add({ window })).catch((error) => console.error("[burrow] sidebar failed", error));
     return true;
   }
 
@@ -2332,7 +2433,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (on >= 0) level.active = on;
     else if (keepActive && level.active != null) level.active = Math.min(level.active, Math.max(0, st.scope.rows.length - 1));
     else level.active = level.query ? 0 : firstReal(st.scope.rows);
-    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
+    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"), variantsOn());
     placeScope();
   }
 
@@ -2342,7 +2443,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     level.limit += CAP;
     st.scope.rows = capRows(st.scope.all, level.limit);
     level.active = Math.min(at, st.scope.rows.length - 1);
-    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
+    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"), variantsOn());
     placeScope();
   }
 
@@ -2385,7 +2486,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     perf.time("scope.key", () => {
       const level = scopeLevel();
       level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
-      scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
+      scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), true, variantsOn());
       if (scopeFrame == null) {
         scopeFrame = win.requestAnimationFrame(() => {
           scopeFrame = null;
@@ -2422,6 +2523,25 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       : { kind: "scope", key: `scope:${level.uid}`, insertion: level.insertion });
   }
 
+  // What a variant acts on in the drill panel: the highlighted block, or the
+  // level itself when its list is empty. Not a +N more or an empty block
+  // that only opens.
+  function scopeTarget(row) {
+    const level = scopeLevel();
+    if (row?.more != null || (row?.empty && row.drillable)) return null;
+    if (row) return { type: "block", uid: row.uid, text: resolveRefs(row.node?.string ?? row.text ?? "") };
+    return level.isPage ? { type: "page", uid: level.uid, title: level.page.title } : { type: "block", uid: level.uid, text: level.label };
+  }
+
+  function scopeVariant(event) {
+    const variant = variantOf(event, setting);
+    const target = variant ? scopeTarget(st.scope.rows[scopeLevel().active]) : null;
+    if (!target) return false;
+    consume(event);
+    runVariant(variant, target, scopeLevel().query);
+    return true;
+  }
+
   function scopeKey(event) {
     const key = event.key;
     if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.code === "KeyO") {
@@ -2430,6 +2550,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       showScopePreview();
       return;
     }
+    if (key === "Enter" && scopeVariant(event)) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const level = scopeLevel();
     if (key === "Tab") {
@@ -2508,7 +2629,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function recordPick(row) {
     if (!frecency || !(setting("frecency") || setting("recentRows"))) return;
     const block = /^\(\(([\w-]{9})\)\)$/.exec(row.insertion);
-    if (block) frecency.record("block", block[1]);
+    if (row.kind === "variant") frecency.record(row.target.type, row.target.uid);
+    else if (block) frecency.record("block", block[1]);
     else if (row.uid && (row.kind === "alias" || row.kind === "page" || row.kind === "drill")) frecency.record("page", row.uid);
     else return;
     pickInfo?.refresh();
@@ -2561,15 +2683,33 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     event.stopPropagation();
     if (st.prompt) return;
     const chip = event.target.closest?.(".burrow-chip");
+    const sidebar = event.shiftKey && setting("openInSidebar");
     if (chip) {
       const row = shown[st.active];
+      if (row && sidebar) { if (!openSidebar(variantTarget(row, Number(chip.dataset.index)))) refused(); return; }
       if (row && !commit(chipRow(row, Number(chip.dataset.index)))) reset("click-refused");
       return;
     }
     const node = event.target.closest?.(".burrow-row");
     if (!node) return;
     const row = shown[Number(node.dataset.index)];
+    const target = sidebar ? variantTarget(row) : null;
+    if (target) { if (!openSidebar(target)) refused(); return; }
     if (row && !commit(row)) reset("click-refused");
+  }
+
+  // ⇧+click (openInSidebar): Roam takes a shift+mousedown anywhere as its
+  // block-range selection and ends the edit before the strip's own listener
+  // runs, so on Burrow's rows and panel the shifted pointer events stop at
+  // the window, and the mousedown opens the sidebar from here.
+  function onShiftPointer(event) {
+    if (!event.shiftKey || st.phase === "IDLE" || !setting("openInSidebar")) return;
+    const inStrip = strip.contains(event.target);
+    if (!inStrip && !scopePanel.node.contains(event.target)) return;
+    // preventDefault on a pointerdown would cancel the mousedown that follows.
+    if (event.type.startsWith("pointer")) { event.stopPropagation(); event.stopImmediatePropagation(); return; }
+    consume(event);
+    if (event.type === "mousedown") (inStrip ? onStripMouseDown : onScopeMouseDown)(event);
   }
 
   function onScopeMouseDown(event) {
@@ -2587,6 +2727,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const level = scopeLevel();
     level.active = Number(row.dataset.index);
     const clicked = st.scope.rows[level.active];
+    const target = event.shiftKey && setting("openInSidebar") ? scopeTarget(clicked) : null;
+    if (target) { if (!openSidebar(target)) refused(); else scopeMove(0); return; }
     if (clicked?.more != null) scopeMore();
     else if (clicked?.empty && clicked.drillable) scopeDeeper();
     else if (!scopeCommit()) reset("click-refused");
@@ -2617,6 +2759,17 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const guardedTip = (resolve) => (target) => {
     try { return resolve(target); } catch (error) { console.error("[burrow] tip failed", error); return null; }
   };
+  // The variants a tip names, each with exactly what it would insert.
+  function variantLines(target, query) {
+    if (!target) return [];
+    const lines = [];
+    if (setting("insertVariants")) {
+      lines.push([keyLabel("shiftEnter"), `insert ${variantInsertion("embed", target, query)}`], [keyLabel("altEnter"), `insert ${variantInsertion("label", target, query)}`]);
+    }
+    if (setting("openInSidebar")) lines.push([`${keyLabel("sidebarEnter")}, ⇧click`, "open it in the right sidebar"]);
+    return lines;
+  }
+  const rowVariantLines = (row, chip = -1) => variantLines(variantTarget(row, chip), labelQuery(row));
   const drillLine = (uid, what) => (setting("tabDrill") && hasKids(uid) ? ["⇥", what] : null);
 
   function stripTip(target) {
@@ -2626,6 +2779,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       const i = Number(chip.dataset.index);
       return { el: chip, title: chipTitle(active, active.aliases[i]), lines: [
         ["↵", `or click: insert ${chipRow(active, i).insertion}`],
+        ...rowVariantLines(active, i),
         ["←→", "move between the aliases"],
         setting("aliasDelete") ? [keyLabel("altBackspace"), "delete the selected alias (asks first)"] : null,
       ].filter(Boolean) };
@@ -2650,6 +2804,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (row.kind === "alias") {
       return { el: node, title: `${row.alias} ↳ ${row.title}`, lines: [
         ["↵", `or click: insert ${row.insertion}`],
+        ...rowVariantLines(row),
         setting("aliasChips") && row.aliases.length > 1 ? [keyLabel("altDown"), `pick one of its ${row.aliases.length} aliases`] : null,
         drillLine(row.uid, "list the blocks on this page"),
         setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null,
@@ -2667,6 +2822,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (row.kind === "ref") {
       return { el: node, title: row.text, lines: [
         ["↵", `or click: insert ((${row.uid}))`],
+        ...rowVariantLines(row),
         row.recent ? ["", row.recent === "pick" ? "Recent pick" : "Edited recently"] : null,
         row.refs > 0 ? ["", `${row.refs} block${row.refs === 1 ? "" : "s"} reference it`] : null,
         drillLine(row.uid, "list the children of this block"),
@@ -2675,6 +2831,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     return { el: node, title: row.crumb ? `${row.crumb} › ${row.text}` : row.text, lines: [
       ["↵", "insert the block the drill-down reaches"],
+      ...rowVariantLines(row),
       drillLine(row.uid, "list the children of this block"),
       ownedSource(row, -1)?.block ? upLine : null,
     ].filter(Boolean) };
@@ -2705,6 +2862,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (row.more != null) return { el: node, title: `${row.more} more blocks`, lines: [["↵", "or click: list the next 50"]] };
     return { el: node, title: row.text || "(empty)", lines: [
       row.empty && row.drillable ? ["↵", "or click: go into it"] : ["↵", `or click: insert ((${row.uid}))`],
+      ...variantLines(scopeTarget(row), scopeLevel().query),
       row.drillable ? ["⇥ or >", "go into it"] : null,
     ].filter(Boolean) };
   }
@@ -2783,7 +2941,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const level = scopeLevel();
     if (!st.scope.rows[index] || level.active === index) return;
     level.active = index;
-    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false);
+    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false, variantsOn());
     showScopePreview();
   }
 
@@ -2824,6 +2982,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   });
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) lifecycle.event(win, type, guarded(type, onShiftPointer), true);
+  lifecycle.event(win, "keyup", (event) => { if (MODIFIER_KEYS.has(event.key) && (st.held || holdTimer)) setHeld(false); }, true);
+  lifecycle.event(win, "blur", () => { if (st.held || holdTimer) setHeld(false); });
+  lifecycle.add(() => { if (holdTimer) win.clearTimeout(holdTimer); });
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 

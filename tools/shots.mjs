@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "semanticRows"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -129,10 +129,17 @@ const SCENARIOS = [
   // BRW-20: the highlighted {{[[table]]}} block draws its first 6x5 cells in Burrow's drill preview.
   { id: "73-table-preview", query: `[[${FIXTURE_PAGE} > tables section > `, keys: ["wait:600"], loose: true },
   { id: "74-table-preview-big", query: `[[${FIXTURE_PAGE} > big table section > `, keys: ["wait:600"], loose: true },
-  // 0.10.0: the Related band (Roam's semantic search); waitband waits for it, up to 8 s.
-  { id: "75-related", query: `((${config.related}`, keys: ["preview-closed", "waitband"], loose: true },
-  { id: "76-related-active", query: `((${config.related}`, keys: ["preview-closed", "waitband", "alt+r", "ArrowDown"], loose: true },
-  { id: "77-related-page", query: "[[how to stay focused", keys: ["preview-closed", "waitband"], loose: true },
+  // 0.10.0: insert variants and the sidebar.
+  { id: "75-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "76-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "77-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "78-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
+  { id: "79-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
+  { id: "80-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
+  // 0.11.0: the Related band (Roam's semantic search); waitband waits for it, up to 8 s.
+  { id: "81-related", query: `((${config.related}`, keys: ["preview-closed", "waitband"], loose: true },
+  { id: "82-related-active", query: `((${config.related}`, keys: ["preview-closed", "waitband", "alt+r", "ArrowDown"], loose: true },
+  { id: "83-related-page", query: "[[how to stay focused", keys: ["preview-closed", "waitband"], loose: true },
 ];
 
 const c = await connect(title);
@@ -251,7 +258,7 @@ async function palette(name) {
 
 async function runKeys(keys) {
   for (const k of keys) {
-    const modified = k.match(/^(alt|shift)\+(.+)$/);
+    const modified = k.match(/^((?:(?:alt|ctrl|meta|shift)\+)+)(.+)$/);
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
     else if (k === "preview-closed") { if (await isExpanded()) await ctrlO(); }
     else if (k === "alt+slash") await altSlash();
@@ -278,7 +285,9 @@ async function runKeys(keys) {
     } else if (k.startsWith("palette:")) await palette(k.slice(8));
     else if (k.startsWith("wait:")) await sleep(Number(k.slice(5)));
     else if (k.startsWith("type:")) await c.type(k.slice(5), TYPE_MS);
-    else if (modified) await c.key(modified[2], modified[1] === "alt" ? 1 : 8);
+    else if (k.startsWith("hold:")) await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Alt", code: "AltLeft", windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18, modifiers: 1 });
+    else if (k === "sidebar-mark") await c.evaluate(() => { window.__burrowFixture.sidebarBase = window.roamAlphaAPI.ui.rightSidebar.getWindows().map((w) => w["window-id"]); });
+    else if (modified) await c.key(modified[2], modified[1].split("+").filter(Boolean).reduce((m, name) => m | { alt: 1, ctrl: 2, meta: 4, shift: 8 }[name], 0));
     else await c.key(k);
     if (!k.startsWith("wait:") && !k.startsWith("wait-thumb:")) await sleep(120);
   }
@@ -301,8 +310,19 @@ async function captureRect() {
   });
 }
 
-// Out of the popup, block cleared, and any page the typing made deleted.
+// Out of the popup, block cleared, any page the typing made deleted, and any
+// sidebar window a scenario opened (after its sidebar-mark) closed.
 async function reset() {
+  await c.call("Input.dispatchKeyEvent", { type: "keyUp", key: "Alt", code: "AltLeft", windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18, modifiers: 0 });
+  await c.evaluate(async () => {
+    const g = window.__burrowFixture;
+    if (!g?.sidebarBase) return;
+    const base = new Set(g.sidebarBase);
+    g.sidebarBase = null;
+    for (const w of window.roamAlphaAPI.ui.rightSidebar.getWindows().filter((x) => !base.has(x["window-id"]))) {
+      await window.roamAlphaAPI.ui.rightSidebar.removeWindow({ window: { type: w.type, "block-uid": w["block-uid"] ?? w["page-uid"] } });
+    }
+  });
   await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 2, y: 2 });
   for (let i = 0; i < 3; i++) { await c.key("Escape"); await sleep(150); }
   await guardReport(c);
@@ -390,7 +410,7 @@ try {
       }
       await runKeys(scenario.keys);
       await sleep(400);
-      const rect = await captureRect();
+      const rect = scenario.full ? await c.evaluate(() => ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight })) : await captureRect();
       if (!rect) { console.error(`${scenario.id}: nothing on screen, skipped`); continue; }
       const file = join(outDir, `${stamp}-${scenario.id}.png`);
       await writeFile(file, await c.screenshot(rect));

@@ -1,4 +1,4 @@
-/* Burrow v0.10.0 | MIT | generated; edit src/ */
+/* Burrow v0.11.0 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -1546,6 +1546,8 @@ var DEFAULTS = Object.freeze({
   helpNudge: true,
   refContext: true,
   refOutline: true,
+  insertVariants: true,
+  openInSidebar: true,
   previewTables: true,
   semanticRows: true,
   // Not a switch: set once the first-run line has been shown.
@@ -1578,6 +1580,8 @@ var SWITCHES = [
   ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["refContext", "Where the block lives", "Under the highlighted referenced block in ((, a line with its page and parent (Page › … › Parent) and how many children Tab lists."],
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
+  ["insertVariants", "Insert variants (⇧↵ embed, ⌥↵ label)", "On a highlighted Burrow row, drill row or drill panel row: Shift+Enter inserts an embed ({{[[embed]]: ((uid))}} for a block, {{[[embed]]: [[Page]]}} for a page); Alt+Enter inserts a labelled link: [label](((uid))) for a block, where the label is what you typed (or the block's first 40 characters when you typed nothing), and [alias]([[Page]]) for an alias row whatever the Alias link format says. On Roam's own rows these keys stay Roam's."],
+  ["openInSidebar", "Open in sidebar (⌘⇧↵ or ⇧+click)", "On a highlighted Burrow row, drill row or drill panel row, Cmd+Shift+Enter (Ctrl+Shift+Enter off a Mac) or Shift+click opens that page or block in Roam's right sidebar. The block you are typing in keeps its text and the picker stays open."],
   ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
   ["semanticRows", "Related rows (Roam semantic search)", "When Roam's semantic search is on for the graph (Settings > Graph), up to three Related rows from it show under Roam's results in (( and [[, after you pause typing a phrase of two or more words. Each lookup sends what you typed after the (( or [[ to the embedding provider set in Settings > Graph; in an encrypted graph the query text still goes to that provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. ⌥R (Alt+R) moves into the Related rows, ↑/↓ move inside them, Esc goes back to Roam's rows. Enter inserts a Related row only when it is highlighted, by those keys or by the mouse; otherwise it does what it did before."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
@@ -2150,7 +2154,10 @@ var NAMED2 = {
   ctrlO: ["⌃O", "Ctrl+O"],
   altSlash: ["⌥/", "Alt+/"],
   altR: ["⌥R", "Alt+R"],
-  altShift9: ["⌥⇧9", "Alt+Shift+9"]
+  altShift9: ["⌥⇧9", "Alt+Shift+9"],
+  shiftEnter: ["⇧↵", "Shift+↵"],
+  altEnter: ["⌥↵", "Alt+↵"],
+  sidebarEnter: ["⌘⇧↵", "Ctrl+Shift+↵"]
 };
 function keyLabel(name, mac = IS_MAC) {
   const pair = NAMED2[name];
@@ -2167,7 +2174,7 @@ function pickerHints(s, mac = IS_MAC) {
     return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
   }
   const items = baseHints(s, mac);
-  if (s.related === "available" && !s.prompt && !s.chips) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
+  if (s.related === "available" && !s.prompt && !s.chips && !s.held) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
   return items;
 }
 function baseHints(s, mac) {
@@ -2182,6 +2189,10 @@ function baseHints(s, mac) {
   if (s.prompt === "delete") return [["↵", "delete", "Remove only this alias from the page's alias block"], ["esc", "keep", "Keep the alias"]];
   const items = [];
   const row = s.row;
+  if (s.held && row) {
+    const variants = variantHints(row, on, mac);
+    if (variants.length) return variants;
+  }
   if (row && s.chips) {
     items.push(["←→", "alias", "Choose another alias of this page"]);
     if (on.aliasDelete) items.push([k("altBackspace"), "delete", "Delete the selected alias from the page (asks first)"]);
@@ -2223,6 +2234,17 @@ function baseHints(s, mac) {
   }
   return items;
 }
+function variantHints(row, on, mac = IS_MAC) {
+  if (!row) return [];
+  const items = [];
+  const page = row.kind === "alias" || row.page;
+  if (on.insertVariants) {
+    items.push([keyLabel("shiftEnter", mac), "embed", page ? "Insert {{[[embed]]: [[Page]]}}" : "Insert {{[[embed]]: ((uid))}}"]);
+    items.push([keyLabel("altEnter", mac), "label", row.kind === "alias" ? "Insert [alias]([[Page]]), whatever the Alias link format says" : page ? "Insert [what you typed]([[Page]])" : "Insert [what you typed](((uid))), or the block's first 40 characters when you typed nothing"]);
+  }
+  if (on.openInSidebar) items.push([keyLabel("sidebarEnter", mac), "sidebar", "Open it in Roam's right sidebar (or ⇧+click); the text stays as you typed it"]);
+  return items;
+}
 function renderHints(doc, node, items) {
   const span = (className, textContent) => Object.assign(doc.createElement("span"), { className, textContent });
   const parts = [];
@@ -2251,7 +2273,10 @@ function helpGroups(setting, mac = IS_MAC) {
   const groups = [];
   const pick = { title: "Pick", items: [], notes: [] };
   if (on("aliasPages") || on("refRanking")) pick.items.push(["↑ ↓", "move; ↑ on Roam's first row enters Burrow's"]);
-  pick.items.push(["↵", "insert the selected row, or click it"], ["esc", "back to Roam's rows"]);
+  pick.items.push(["↵", "insert the selected row, or click it"]);
+  if (on("insertVariants")) pick.items.push([k("shiftEnter"), "insert it as an embed"], [k("altEnter"), "insert [label](((uid))) or [alias]([[Page]])"]);
+  if (on("openInSidebar")) pick.items.push([`${k("sidebarEnter")}, ⇧click`, "open it in the right sidebar"]);
+  pick.items.push(["esc", "back to Roam's rows"]);
   if (on("refRanking")) pick.items.push(["((", "referenced blocks first"]);
   if (on("refSearch") && on("refSearchHotkey")) pick.items.push([k("altShift9"), "open (( at the caret"]);
   groups.push(pick);
@@ -4002,7 +4027,7 @@ function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice
   lifecycle.add(cancelUpgrade);
   let hintsShown = null;
   let hintItems = [];
-  function renderHints2(scope, on, help) {
+  function renderHints2(scope, on, help, variants = {}) {
     hintsLine.hidden = !on;
     helpButton.hidden = !help;
     if (!on) return;
@@ -4015,13 +4040,15 @@ function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice
       ["esc", "results", "Back to Roam's results; the text stays as you typed it"],
       [keyLabel("ctrlO"), "preview", "Show or hide the preview of the highlighted block"]
     );
+    const held = variants.held && active?.more == null && !(active?.empty && active.drillable) ? variantHints({ kind: "scope", page: !active && level.isPage }, variants) : [];
+    if (held.length) items.splice(0, items.length, ...held);
     const key = hintsKey(items);
     if (key === hintsShown) return;
     hintsShown = key;
     hintItems = items;
     renderHints(doc, hintsList, items);
   }
-  function paintActive(scope, hintsOn, helpOn = false, scroll = true) {
+  function paintActive(scope, hintsOn, helpOn = false, scroll = true, variants = {}) {
     const level = scope.levels[scope.levels.length - 1];
     list.querySelectorAll(".burrow-row").forEach((item, i) => {
       const on = i === level.active;
@@ -4029,7 +4056,7 @@ function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice
       item.setAttribute("aria-selected", String(on));
       if (on && scroll) item.scrollIntoView?.({ block: "nearest" });
     });
-    renderHints2(scope, hintsOn, helpOn);
+    renderHints2(scope, hintsOn, helpOn, variants);
   }
   function place(anchor, popRect, taRect) {
     const above = popRect.top + popRect.height / 2 < taRect.top;
@@ -4045,11 +4072,11 @@ function createScopePanel({ doc, win, lifecycle, highlight, rich = null, onSlice
   }
   return {
     node,
-    show(scope, hintsOn, helpOn = false) {
+    show(scope, hintsOn, helpOn = false, variants = {}) {
       renderCrumb(scope);
       renderList(scope);
       node.hidden = false;
-      paintActive(scope, hintsOn, helpOn);
+      paintActive(scope, hintsOn, helpOn, true, variants);
     },
     get hintItems() {
       return hintItems;
@@ -4257,6 +4284,32 @@ function tokenStillValid(value, selStart, selEnd, token) {
   return true;
 }
 
+// src/variants.js
+var LABEL_MAX = 40;
+function variantOf(event, setting, mac = IS_MAC) {
+  if (event.key !== "Enter") return null;
+  const primary = mac ? event.metaKey : event.ctrlKey;
+  if (mac ? event.ctrlKey : event.metaKey) return null;
+  const { shiftKey: shift, altKey: alt } = event;
+  if (shift && !alt && !primary) return setting("insertVariants") ? "embed" : null;
+  if (alt && !shift && !primary) return setting("insertVariants") ? "label" : null;
+  if (primary && shift && !alt) return setting("openInSidebar") ? "sidebar" : null;
+  return null;
+}
+var clean2 = (text) => String(text ?? "").replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
+function blockLabel(text) {
+  const prose = String(text ?? "").replace(/```[^\n`]*\n?/g, " ").replace(/`/g, "").replace(/!?\[([^\]]*)\]\((?!\(|\[\[)[^)]*\)/g, "$1");
+  const plain = stripRoamMarkup(prose);
+  return [...clean2(plain)].slice(0, LABEL_MAX).join("").trim();
+}
+var lastStep = (query) => String(query ?? "").split(/[#>]/).pop().trim();
+function variantInsertion(variant, target, query) {
+  if (variant === "embed") return target.type === "page" ? `{{[[embed]]: [[${target.title}]]}}` : `{{[[embed]]: ((${target.uid}))}}`;
+  if (target.type === "page") return `[${clean2(target.alias) || clean2(query) || clean2(target.title)}]([[${target.title}]])`;
+  return `[${clean2(query) || blockLabel(target.text) || target.uid}](((${target.uid})))`;
+}
+var sidebarWindow = (target) => ({ type: target.type === "page" ? "outline" : "block", "block-uid": target.uid });
+
 // src/wheel.js
 function wheelPlan({ deltaX = 0, deltaY = 0, deltaMode = 0, shiftKey = false }, chips, list = null) {
   const unit = deltaMode === 1 ? 16 : deltaMode === 2 ? 300 : 1;
@@ -4327,7 +4380,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     prompt: null,
     help: false,
     aliasOnly: null,
-    rel: -1
+    rel: -1,
+    held: false
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -5326,7 +5380,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         chips: chipsAvailable(row),
         aliasNew: aliasNew(row.kind === "alias" || row.kind === "page"),
         drill: canDrill(ownedSource(row, st.chip)),
-        block: Boolean(ownedSource(row, -1)?.block)
+        block: Boolean(ownedSource(row, -1)?.block),
+        page: variantType(row) === "page"
       } : null,
       native: !row && kind === "[[" ? (() => {
         const source = armedSource();
@@ -5335,7 +5390,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
-      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline") }
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
+      held: Boolean(st.held)
     };
     return pickerHints(state);
   }
@@ -5916,6 +5972,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   }
   function reset(reason) {
     if (st.phase !== "IDLE" || st.rows.length) trace({ ev: "reset", reason });
+    if (holdTimer) {
+      win.clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    st.held = false;
     closeHelp();
     tips.hide();
     if (nudgeShown) nudgeSeen();
@@ -6028,6 +6089,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   const ACTION_KEYS = /* @__PURE__ */ new Set(["Enter", "Tab", "ArrowUp", "ArrowDown", "Escape"]);
   function onKeyDown(event) {
     if (tips.visible) tips.hide();
+    if (st.held || holdTimer || MODIFIER_KEYS.has(event.key)) holdKey(event);
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
     if (st.help && event.target === st.ta && helpKey(event)) return;
@@ -6081,6 +6143,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       relatedKeyDown(event);
       return;
     }
+    if (st.phase === "OWNED" && variantKey(event, shown[st.active], st.chip)) return;
     if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
       const page = aliasSource();
       if (page) {
@@ -6164,6 +6227,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       consume(event);
       return true;
     }
+    if (variantKey(event, row, st.chip)) return true;
     const last = row.aliases.length - 1;
     if (plain && (key === "ArrowLeft" || key === "ArrowUp")) st.chip = Math.max(0, st.chip - 1);
     else if (plain && (key === "ArrowRight" || key === "ArrowDown")) st.chip = Math.min(last, st.chip + 1);
@@ -6183,6 +6247,88 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     paintActive();
     consume(event);
+    return true;
+  }
+  function variantType(row) {
+    if (row?.kind === "alias" || row?.kind === "page") return "page";
+    if (row?.kind === "ref") return "block";
+    if (row?.kind === "drill" && st.drill) return st.drill.target ? "block" : "page";
+    return null;
+  }
+  function variantTarget(row, chip = -1) {
+    if (row?.kind === "alias") return { type: "page", uid: row.uid, title: row.title, alias: chip >= 0 ? row.aliases[chip] : row.alias };
+    if (row?.kind === "page") return { type: "page", uid: row.uid, title: row.title };
+    if (row?.kind === "ref") return { type: "block", uid: row.uid, text: resolveRefs(indexes.refs?.byUid.get(row.uid)?.string ?? row.text) };
+    if (row?.kind === "drill" && st.drill) {
+      return st.drill.target ? { type: "block", uid: row.uid, text: resolveRefs(st.drill.target.string ?? row.text) } : { type: "page", uid: st.drill.page.uid, title: st.drill.page.title };
+    }
+    return null;
+  }
+  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
+  const HOLD_MS = 300;
+  const MODIFIER_KEYS = /* @__PURE__ */ new Set(["Shift", "Alt", "Meta", "Control"]);
+  let holdTimer = null;
+  function setHeld(on) {
+    if (holdTimer) {
+      win.clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+    if (Boolean(st.held) === on) return;
+    st.held = on;
+    if (st.phase === "SCOPE" && st.scope) scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false, variantsOn());
+    else if (st.phase !== "IDLE") layoutPop();
+  }
+  function holdKey(event) {
+    if (!MODIFIER_KEYS.has(event.key)) {
+      setHeld(false);
+      return;
+    }
+    const can = st.phase === "OWNED" && variantType(shown[st.active]) || st.phase === "SCOPE";
+    if (!can || st.held || holdTimer || !setting("keyHints") || !(setting("insertVariants") || setting("openInSidebar"))) return;
+    holdTimer = win.setTimeout(() => {
+      holdTimer = null;
+      setHeld(true);
+    }, HOLD_MS);
+  }
+  function labelQuery(row) {
+    if (row?.kind === "drill") return lastStep(st.token?.query);
+    const query = st.token?.query ?? "";
+    const filters = setting("queryFilters") ? parseFilters(query) : null;
+    return filters ? filters.planText : query;
+  }
+  function variantKey(event, row, chip = -1) {
+    const variant = variantOf(event, setting);
+    const target = variant ? variantTarget(row, chip) : null;
+    if (!target) return false;
+    consume(event);
+    runVariant(variant, target, labelQuery(row), row);
+    return true;
+  }
+  function runVariant(variant, target, query, row = null) {
+    if (variant === "sidebar") {
+      if (!openSidebar(target)) refused();
+      return;
+    }
+    const insertion = variantInsertion(variant, target, query);
+    if (!commit({ kind: "variant", target, key: `${variant}:${target.uid}`, insertion })) refused();
+  }
+  function openSidebar(target) {
+    const ta = st.ta;
+    const token = st.token;
+    const fail = (reason) => {
+      debug.lastFailure = { reason, at: Date.now(), row: target.uid, value: ta?.value, token };
+      trace({ ev: "sidebar-fail", reason });
+      return false;
+    };
+    const add = api.ui?.rightSidebar?.addWindow;
+    if (!add) return fail("no-sidebar");
+    if (!ta || !token || !ta.isConnected) return fail("textarea-gone");
+    if (doc.activeElement !== ta) return fail("not-focused");
+    if (!tokenStillValid(ta.value, ta.selectionStart, ta.selectionEnd, token)) return fail("token-changed");
+    const window2 = sidebarWindow(target);
+    debug.sidebar = { at: Date.now(), window: window2 };
+    trace({ ev: "sidebar", uid: target.uid });
+    Promise.resolve(add({ window: window2 })).catch((error) => console.error("[burrow] sidebar failed", error));
     return true;
   }
   const isAltA = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyA";
@@ -6496,7 +6642,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (on >= 0) level.active = on;
     else if (keepActive && level.active != null) level.active = Math.min(level.active, Math.max(0, st.scope.rows.length - 1));
     else level.active = level.query ? 0 : firstReal(st.scope.rows);
-    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
+    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"), variantsOn());
     placeScope();
   }
   function scopeMore() {
@@ -6505,7 +6651,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     level.limit += CAP;
     st.scope.rows = capRows(st.scope.all, level.limit);
     level.active = Math.min(at, st.scope.rows.length - 1);
-    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"));
+    scopePanel.show(st.scope, setting("keyHints"), setting("helpSheet"), variantsOn());
     placeScope();
   }
   let scopeModel = null;
@@ -6554,7 +6700,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     perf.time("scope.key", () => {
       const level = scopeLevel();
       level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
-      scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
+      scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), true, variantsOn());
       if (scopeFrame == null) {
         scopeFrame = win.requestAnimationFrame(() => {
           scopeFrame = null;
@@ -6599,6 +6745,20 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     return commit(row ? { kind: "scope", key: `scope:${row.uid}`, insertion: `((${row.uid}))` } : { kind: "scope", key: `scope:${level.uid}`, insertion: level.insertion });
   }
+  function scopeTarget(row) {
+    const level = scopeLevel();
+    if (row?.more != null || row?.empty && row.drillable) return null;
+    if (row) return { type: "block", uid: row.uid, text: resolveRefs(row.node?.string ?? row.text ?? "") };
+    return level.isPage ? { type: "page", uid: level.uid, title: level.page.title } : { type: "block", uid: level.uid, text: level.label };
+  }
+  function scopeVariant(event) {
+    const variant = variantOf(event, setting);
+    const target = variant ? scopeTarget(st.scope.rows[scopeLevel().active]) : null;
+    if (!target) return false;
+    consume(event);
+    runVariant(variant, target, scopeLevel().query);
+    return true;
+  }
   function scopeKey(event) {
     const key = event.key;
     if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.code === "KeyO") {
@@ -6607,6 +6767,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       showScopePreview();
       return;
     }
+    if (key === "Enter" && scopeVariant(event)) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const level = scopeLevel();
     if (key === "Tab") {
@@ -6693,7 +6854,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function recordPick(row) {
     if (!frecency || !(setting("frecency") || setting("recentRows"))) return;
     const block = /^\(\(([\w-]{9})\)\)$/.exec(row.insertion);
-    if (block) frecency.record("block", block[1]);
+    if (row.kind === "variant") frecency.record(row.target.type, row.target.uid);
+    else if (block) frecency.record("block", block[1]);
     else if (row.uid && (row.kind === "alias" || row.kind === "page" || row.kind === "drill")) frecency.record("page", row.uid);
     else return;
     pickInfo?.refresh();
@@ -6743,15 +6905,37 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     event.stopPropagation();
     if (st.prompt) return;
     const chip = event.target.closest?.(".burrow-chip");
+    const sidebar = event.shiftKey && setting("openInSidebar");
     if (chip) {
       const row2 = shown[st.active];
+      if (row2 && sidebar) {
+        if (!openSidebar(variantTarget(row2, Number(chip.dataset.index)))) refused();
+        return;
+      }
       if (row2 && !commit(chipRow(row2, Number(chip.dataset.index)))) reset("click-refused");
       return;
     }
     const node = event.target.closest?.(".burrow-row");
     if (!node) return;
     const row = shown[Number(node.dataset.index)];
+    const target = sidebar ? variantTarget(row) : null;
+    if (target) {
+      if (!openSidebar(target)) refused();
+      return;
+    }
     if (row && !commit(row)) reset("click-refused");
+  }
+  function onShiftPointer(event) {
+    if (!event.shiftKey || st.phase === "IDLE" || !setting("openInSidebar")) return;
+    const inStrip = strip.contains(event.target);
+    if (!inStrip && !scopePanel.node.contains(event.target)) return;
+    if (event.type.startsWith("pointer")) {
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      return;
+    }
+    consume(event);
+    if (event.type === "mousedown") (inStrip ? onStripMouseDown : onScopeMouseDown)(event);
   }
   function onScopeMouseDown(event) {
     event.preventDefault();
@@ -6769,6 +6953,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const level = scopeLevel();
     level.active = Number(row.dataset.index);
     const clicked = st.scope.rows[level.active];
+    const target = event.shiftKey && setting("openInSidebar") ? scopeTarget(clicked) : null;
+    if (target) {
+      if (!openSidebar(target)) refused();
+      else scopeMove(0);
+      return;
+    }
     if (clicked?.more != null) scopeMore();
     else if (clicked?.empty && clicked.drillable) scopeDeeper();
     else if (!scopeCommit()) reset("click-refused");
@@ -6800,6 +6990,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       return null;
     }
   };
+  function variantLines(target, query) {
+    if (!target) return [];
+    const lines = [];
+    if (setting("insertVariants")) {
+      lines.push([keyLabel("shiftEnter"), `insert ${variantInsertion("embed", target, query)}`], [keyLabel("altEnter"), `insert ${variantInsertion("label", target, query)}`]);
+    }
+    if (setting("openInSidebar")) lines.push([`${keyLabel("sidebarEnter")}, ⇧click`, "open it in the right sidebar"]);
+    return lines;
+  }
+  const rowVariantLines = (row, chip = -1) => variantLines(variantTarget(row, chip), labelQuery(row));
   const drillLine = (uid, what) => setting("tabDrill") && hasKids(uid) ? ["⇥", what] : null;
   function stripTip(target) {
     const chip = target.closest?.(".burrow-chip");
@@ -6808,6 +7008,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       const i = Number(chip.dataset.index);
       return { el: chip, title: chipTitle(active, active.aliases[i]), lines: [
         ["↵", `or click: insert ${chipRow(active, i).insertion}`],
+        ...rowVariantLines(active, i),
         ["←→", "move between the aliases"],
         setting("aliasDelete") ? [keyLabel("altBackspace"), "delete the selected alias (asks first)"] : null
       ].filter(Boolean) };
@@ -6832,6 +7033,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (row.kind === "alias") {
       return { el: node, title: `${row.alias} ↳ ${row.title}`, lines: [
         ["↵", `or click: insert ${row.insertion}`],
+        ...rowVariantLines(row),
         setting("aliasChips") && row.aliases.length > 1 ? [keyLabel("altDown"), `pick one of its ${row.aliases.length} aliases`] : null,
         drillLine(row.uid, "list the blocks on this page"),
         setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null
@@ -6849,6 +7051,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (row.kind === "ref") {
       return { el: node, title: row.text, lines: [
         ["↵", `or click: insert ((${row.uid}))`],
+        ...rowVariantLines(row),
         row.recent ? ["", row.recent === "pick" ? "Recent pick" : "Edited recently"] : null,
         row.refs > 0 ? ["", `${row.refs} block${row.refs === 1 ? "" : "s"} reference it`] : null,
         drillLine(row.uid, "list the children of this block"),
@@ -6857,6 +7060,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     return { el: node, title: row.crumb ? `${row.crumb} › ${row.text}` : row.text, lines: [
       ["↵", "insert the block the drill-down reaches"],
+      ...rowVariantLines(row),
       drillLine(row.uid, "list the children of this block"),
       ownedSource(row, -1)?.block ? upLine : null
     ].filter(Boolean) };
@@ -6885,6 +7089,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (row.more != null) return { el: node, title: `${row.more} more blocks`, lines: [["↵", "or click: list the next 50"]] };
     return { el: node, title: row.text || "(empty)", lines: [
       row.empty && row.drillable ? ["↵", "or click: go into it"] : ["↵", `or click: insert ((${row.uid}))`],
+      ...variantLines(scopeTarget(row), scopeLevel().query),
       row.drillable ? ["⇥ or >", "go into it"] : null
     ].filter(Boolean) };
   }
@@ -6948,7 +7153,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const level = scopeLevel();
     if (!st.scope.rows[index] || level.active === index) return;
     level.active = index;
-    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false);
+    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"), false, variantsOn());
     showScopePreview();
   }
   lifecycle.event(win, "keydown", guarded("keydown", onKeyDown), true);
@@ -7000,6 +7205,16 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   if (unlisten) lifecycle.add(unlisten);
   lifecycle.event(scopePanel.node, "mousedown", guarded("mousedown", onScopeMouseDown));
+  for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) lifecycle.event(win, type, guarded(type, onShiftPointer), true);
+  lifecycle.event(win, "keyup", (event) => {
+    if (MODIFIER_KEYS.has(event.key) && (st.held || holdTimer)) setHeld(false);
+  }, true);
+  lifecycle.event(win, "blur", () => {
+    if (st.held || holdTimer) setHeld(false);
+  });
+  lifecycle.add(() => {
+    if (holdTimer) win.clearTimeout(holdTimer);
+  });
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
   return { state: st, debug, reset, tree, forget, related: relatedDebug };
@@ -7028,7 +7243,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.10.0";
+var VERSION = "0.11.0";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows"];
 function safeLocalStorage() {
