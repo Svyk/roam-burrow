@@ -4,6 +4,21 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-28
+
+### Added
+
+- **Insert as embed or as a labelled link** (`insertVariants`, on). With a Burrow row, the drill row or a drill panel row highlighted, ⇧↵ inserts `{{[[embed]]: ((uid))}}` for a block or `{{[[embed]]: [[Page]]}}` for a page; ⌥↵ inserts `[label](((uid)))`, the label being what you typed (the `((` query, a drill-down's last step, the drill panel's filter) or, with nothing typed, the block's first 40 characters as a reader sees them; on an alias row (or a chip) ⌥↵ inserts `[alias]([[Page]])` whatever the Alias link format says. Same checks as Enter: with the text before the caret changed, nothing is written and the rows are ranked again.
+- **Open in the sidebar** (`openInSidebar`, on). ⌘⇧↵ (Ctrl+Shift+↵ off a Mac) or ⇧+click opens the highlighted page or block in Roam's right sidebar (`rightSidebar.addWindow`): the block keeps its text and caret, and the picker (or the drill panel) stays open. Roam takes a shift+mousedown as its block-range selection and ended the edit first, so on Burrow's rows the shifted pointer events now stop at the window, before Roam.
+- Recent rows (0.8.1) take the keys too: a recent page row embeds or opens its page. A ⇧↵ or ⌥↵ pick counts for Frequent first like Enter (the block, or the page of an alias, page or drill-to-page row); opening in the sidebar is not a pick.
+- On Roam's own rows these keys stay Roam's (⇧↵ its newline). Holding ⇧, ⌥ or ⌘ for 300 ms on a Burrow row or in the drill panel turns the hint line into `⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar` (the line was already full: in svy only its first three items fit), and any other key, the release or leaving the window puts it back, so typing a capital never flickers it. The tips say exactly what ⇧↵ and ⌥↵ would insert, and the key list's Pick group names all three; each goes with its switch.
+- Unit tests (`test/variants.test.js`): the keys, what each inserts, labels, the hint line and key list, and on jsdom the strip writing only the token, the sidebar call leaving text and caret, the switches off, a refused key, and Roam's row keeping the keys.
+- Live gates: each key on Burrow's block row, the alias row, the drill row and the drill panel, ⇧+click on a row and in the panel, Roam's row (⇧↵ still Roam's newline), the switches off, a refused ⇧↵ and ⌥↵; every case byte-for-byte against Roam alone. Where Burrow does not take ⌥↵ or ⌘⇧↵ (Roam's row, the off and gone arms), the gate records that the key got past Burrow and stops it there: in svy another extension acts on those keys (it moved the fixture block and rearranged the sidebar). The gates' off arm now turns the new switches off too; `--grep <regex>` runs a subset; a case whose arm errored no longer crashes the verdict.
+- Final gate run (2026-10-27, merged with 0.8.1, 0.9.0 and 0.9.1): `live-gate` svy dark and notes light PASS, 179 byte-for-byte case runs each (on / off / gone / drilloff), hidden-row Enter cases included, text boxes 32 states, 1,173 boxes in svy and 1,180 in notes, none intersecting. Unit suite: 296 tests. Perf gates were dropped at Svy's request; the last measurements before that (merged build): svy `((` p95 3.7–3.9 ms, notes 1.9–2.0 ms (budget 4).
+- Merged with 0.9.2 (image thumbnails, 2026-10-28): `live-gate` svy dark, every variant, hint-line and drill panel case, PASS, 72 byte-for-byte case runs.
+- Merged with 0.9.3 (table preview, 2026-10-28): the same svy rerun PASS, 72 byte-for-byte case runs. Gate tooling: `live-gate` waits up to 30 s for Burrow's index after each reload (it was 10 s) and logs any build over 10 s; two runs in a busy svy aborted on "index not built" late in the run.
+- A ⌥↵ label made from a code block's text keeps the code, not its fence, language or backticks (`[const x = 1;](((uid)))`, not ``[```js const x = 1; ```](((uid)))``): a backtick inside a link label turns it into code.
+- The hint line no longer reads a row's block text on every key (it resolved block refs over the whole string, up to 90 KB code blocks in svy); it only needs to know whether the row is a page or a block.
 ## [0.9.3] - 2026-10-28
 
 ### Added

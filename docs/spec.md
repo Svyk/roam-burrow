@@ -182,6 +182,8 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `refOutline` | switch | on | BRW-8: ⇧⇥ on a block row lists its parent's children (up the outline); Tab lists its children under its whole trail |
 | `refProse` | switch | on | BRW-10: `((` rows match a block's prose; code only for a code-looking query; long blocks after short; title matches first (§17) |
 | `richRows` | switch | on | BRW-10: rows, drill panel and previews drawn like Roam (§17) |
+| `insertVariants` | switch | on | BRW-15: ⇧↵ embed, ⌥↵ labelled link on Burrow's rows (§23) |
+| `openInSidebar` | switch | on | BRW-15: ⌘⇧↵ or ⇧+click opens the row in the right sidebar (§23) |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
 | `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
 | `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
@@ -529,6 +531,32 @@ Precedent: BRW-12 §3 ("Roam Grid tables in the picker"), Roam's native table, R
 **Gates (0.9.3).** svy live gate 105/105 and notes (light) 101/101 PASS, including the four `table:` drill cases (grid content, Escape and Enter byte-for-byte across arms, switch off, 6 chain pulls for the 200-row fixture). `tools/grid-gate.mjs` PASS in svy: Roam Grid's arrows move its active cell before and after the popup, and the table and its metadata are unchanged. The fixture's table sections are created collapsed, so their ~470 blocks are not rendered in the gate's sidebar. Per-key performance gates were dropped at Svy's request. After merging 0.9.2's image previews (2026-10-28, this build): the four `table:` cases in svy, the cells case in notes and the `[[` thumbnail drill case in both graphs pass.
 
 **Not covered.** A drill step cannot name a table that has text siblings: `stripRoamMarkup` drops the macro, so the table has no words, and an empty step takes the first sibling with text. The Tab list reaches any table.
+
+## 23. Insert variants and the sidebar (BRW-15)
+
+Sources: BRW-12 report §4 (Thymer's Shift+Enter transclusion, RoamJS Quick Switcher's Shift+Enter to the sidebar, Workbench's text-and-alias reference commands). svy holds 556 embed blocks.
+
+**Keys.** Only while a Burrow row (`((` block row, `[[` alias row and its chips, the drill row) or a drill panel row holds the highlight (§4 OWNED or SCOPE). With Roam's row highlighted (ARMED) nothing changes: Roam's ⇧↵ is its newline (memory: only plain Enter and Tab pick Roam's row; ⌘↵ toggles TODO).
+
+| Key | Switch | Block | Page (alias row, chip, a drill-down that reached only its page, an empty drill level that is a page) |
+|---|---|---|---|
+| ⇧↵ | `insertVariants` | `{{[[embed]]: ((uid))}}` | `{{[[embed]]: [[Page]]}}` |
+| ⌥↵ | `insertVariants` | `[label](((uid)))` | `[alias]([[Page]])` whatever `aliasLinkFormat` says; without an alias `[query]([[Page]])`, else `[Page]([[Page]])` |
+| ⌘⇧↵ (Ctrl+Shift+↵ off a Mac), ⇧+click | `openInSidebar` | `rightSidebar.addWindow({type: "block"})` | `addWindow({type: "outline"})` |
+
+Recent rows (§18) count as Burrow rows: a recent block row is a block, a recent page row a page. A ⇧↵ or ⌥↵ commit records its target for frecency (§18) as Enter does; the sidebar is not a pick. With query filters (§19) the label is the search words without the filters (`parseFilters(…).planText`: `((pcr is:todo` → `pcr`, `(("black panther" -wakanda` → `black panther`).
+
+The label is what was typed: the `((` query, the drill-down's last step (`[[MCU Watch Order > watch order > ant man` → `ant man`), the drill panel's filter. With nothing typed it is the block's first 40 characters (code points) as a reader sees them: markup, macros and block refs gone (§17's `stripRoamMarkup` after refs are resolved), a markdown image or link reduced to its text, code to its code (fences, their language and backticks dropped); `[` and `]` are dropped from any label (a `]` would end it), whitespace collapsed; an empty result falls back to the uid. `src/variants.js` is pure; the strip passes it a target `{type, uid, text|title, alias}`.
+
+**Safety.** ⇧↵ and ⌥↵ go through `commit` (§4): the same token, caret and focused-block checks, and the stale-key path ranks again and consumes the key when the text before the caret moved. ⌘⇧↵ writes nothing but makes the same token and focus checks before it opens anything; it leaves the textarea, its caret, Burrow's state and Roam's popup as they are, and the panel stays open in SCOPE. A refused variant only redraws (never a Roam row). The modifiers the keys need are checked exactly: ⌥⇧↵, ⌘↵ and Ctrl+⇧↵ on a Mac are not variants.
+
+**Discoverability.** The hint line was full already (svy, 800 px popover: a block row shows `↵ insert ref · ⇥ children of this block · ⇧⇥ parent` and nothing more; an alias row already lost `⌥A add alias` to the ellipsis), so the variants are not appended. Holding ⇧, ⌥ or ⌘ (Ctrl too) alone for 300 ms on a Burrow row or in the drill panel makes the line `⇧↵ embed · ⌥↵ label · ⌘⇧↵ sidebar`; any other key, the modifier's release or the window's blur puts the line back, so a capital typed with ⇧ never shows it. Each tip names exactly what ⇧↵ and ⌥↵ would insert; the key list's Pick group lists the three. All go when their switch is off.
+
+**⇧+click.** Roam takes a shift+mousedown anywhere as its block-range selection and ends the edit before the strip's own (bubble) listener runs. Shifted `pointerdown`, `mousedown`, `pointerup`, `mouseup` and `click` on Burrow's strip or drill panel stop at the window in the capture phase (pointer events without `preventDefault`, which would cancel the mousedown); the mousedown opens the sidebar from there.
+
+**Gates in svy.** With Roam's row highlighted, ⌥↵ and ⌘⇧↵ reach another svy extension (a move-block command: it left `[*](((uid))) {{[[r/moved]]}}` and removed the fixture's sidebar window). Where Burrow passes those keys (Roam's row, the off and gone arms, the switches off), the gate's own window capture listener, added after Burrow's, records that the key got past Burrow and stops it; ⇧↵ stays a real key (Roam's newline).
+
+**Cost.** Nothing per key: the variant is decided on the Enter keydown. A tip builds its two insertions on hover.
 
 ## Also noticed
 

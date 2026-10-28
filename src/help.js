@@ -25,7 +25,10 @@ export function helpGroups(setting, mac = IS_MAC) {
   const groups = [];
   const pick = { title: "Pick", items: [], notes: [] };
   if (on("aliasPages") || on("refRanking")) pick.items.push(["↑ ↓", "move; ↑ on Roam's first row enters Burrow's"]);
-  pick.items.push(["↵", "insert the selected row, or click it"], ["esc", "back to Roam's rows"]);
+  pick.items.push(["↵", "insert the selected row, or click it"]);
+  if (on("insertVariants")) pick.items.push([k("shiftEnter"), "insert it as an embed"], [k("altEnter"), "insert [label](((uid))) or [alias]([[Page]])"]);
+  if (on("openInSidebar")) pick.items.push([`${k("sidebarEnter")}, ⇧click`, "open it in the right sidebar"]);
+  pick.items.push(["esc", "back to Roam's rows"]);
   if (on("refRanking")) pick.items.push(["((", "referenced blocks first"]);
   if (on("refSearch") && on("refSearchHotkey")) pick.items.push([k("altShift9"), "open (( at the caret"]);
   groups.push(pick);
