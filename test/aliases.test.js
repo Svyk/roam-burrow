@@ -133,3 +133,13 @@ test("buildAliasIndex with the last index's memo parses only changed blocks, sam
   assert.equal(memoized.memo.parsed.has("Aliases:: lori, lorinator"), false);
   assert.equal(memoized.memo.parsed.size, 2);
 });
+
+test("alias rows: a frequently picked page ranks first among equal scores, never over a better score", () => {
+  const index = buildAliasIndex([["Aliases:: Zed", "Alpha", "pa"], ["Aliases:: Zed", "Beta", "pb"], ["Aliases:: Zedd", "Gamma", "pg"]], "Aliases");
+  const plain = matchAliases(index, searchPlan("zed"), { limit: 5 });
+  assert.deepEqual(plain.map((h) => h.uid).slice(0, 2), ["pa", "pb"]);
+  const ranked = matchAliases(index, searchPlan("zed"), { limit: 5, picked: new Map([["pb", 3]]) });
+  assert.deepEqual(ranked.map((h) => h.uid).slice(0, 2), ["pb", "pa"]);
+  const lifted = matchAliases(index, searchPlan("zed"), { limit: 5, picked: new Map([["pg", 99]]) });
+  assert.equal(lifted.at(-1).uid, "pg", "a worse match stays below equal-or-better ones");
+});

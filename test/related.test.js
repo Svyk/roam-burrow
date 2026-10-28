@@ -353,3 +353,9 @@ test("a long Related block draws only its first characters", () => withRelated({
   assert.ok(text.startsWith("Huge block word"), text.slice(0, 40));
   assert.ok(text.length <= 241, `drawn ${text.length} characters`);
 }));
+
+test("query filters or the alias: prefix keep the band out: no request", () => withRelated({ query: "((wakanda forever is:todo", hits: HITS }, async (h) => {
+  await sleep(600);
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.shownBand(), false);
+}));

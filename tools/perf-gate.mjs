@@ -6,6 +6,7 @@
 // Per key: keydown timeStamp -> end of the next frame (a MessageChannel task
 // posted from requestAnimationFrame). Burrow's own handler time comes from
 // window.__BURROW_PERF. Datalog queries and pulls per key must be zero.
+// --filters types the three-filter query of the graph (by window title).
 // --drill types into a drill expression on the fixture's heading tree instead
 // (`[[Burrow/Fixtures#alpha > ` then the query), with the preview open; data
 // fetched by the drill (one pull per node it visits) is reported separately.
@@ -46,7 +47,15 @@ const related = args.includes("--related");
 // --band off: the --related typing with semanticRows off, the control for the
 // band's per-key cost (no band is drawn, so the band checks are skipped).
 const bandOff = flag("--band", "on") === "off";
-const query = flag("--query", drill ? "never > grand" : related ? "how to stay focused" : "ant man");
+// --filters: three query filters on real data, rows still shown (BRW-18):
+// svy's ant man TODO on MCU Watch Order, notes' PCR screen on the PhD page.
+const FILTERED = {
+  svy: "ant man is:todo -wakanda in:MCU Watch Order",
+  notes: "\"pcr screen\" -wgs in:PhD/Cronobacter & Spore Control in PIF",
+};
+const filtered = args.includes("--filters") ? FILTERED[/^svy/i.test(title) ? "svy" : "notes"] : null;
+const query = flag("--query", filtered ?? (drill ? "never > grand" : related ? "how to stay focused" : "ant man"));
+// The (( opener and the first two characters of the query are the recent rows' keys (BRW-14).
 const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
@@ -65,7 +74,7 @@ async function setArm(arm) {
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
     for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "semanticRows"]) dev.values[f] = true;
+      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "semanticRows"]) dev.values[f] = true;
     if (bandOff) dev.values.semanticRows = false;
     dev.values.helpNudgeSeen = true;
     const style = document.createElement("style");

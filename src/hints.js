@@ -32,10 +32,10 @@ export function hintsKey(items) {
 // for what is highlighted now, each [keys, label, tip] (the tip is the hover
 // text). Pure: the strip says what it knows.
 //   s.kind "[[" | "(("; s.prompt null | "add" | "delete"; s.chips: in the chips;
-//   s.row (a Burrow row holds the selection): { kind: "alias" | "ref" | "drill",
+//   s.row (a Burrow row holds the selection): { kind: "alias" | "page" | "ref" | "drill",
 //     chips: more aliases to pick, drill: Tab drills into it, aliasNew: ⌥A applies };
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
-//   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them;
+//   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them (s.recentAbove: all of them recent rows);
 //   s.related: "available" (the Related band has rows) | "active" (one of them holds the selection) | null;
 //   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline }.
 // The drill key names what Tab lists: a page's blocks or a block's children.
@@ -76,6 +76,12 @@ function baseHints(s, mac) {
     if (row.aliasNew) items.push(addAlias);
     return items;
   }
+  if (row?.kind === "page") {
+    items.push(["↵", "insert", "Insert [[Page]]"]);
+    if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
+    if (row.aliasNew) items.push(addAlias);
+    return items;
+  }
   if (row?.kind === "ref") {
     items.push(["↵", "insert ref", "Insert this block's ((uid)): the original other blocks already reference"]);
     if (row.drill && on.tabDrill) items.push(drillHint(BLOCK));
@@ -89,7 +95,7 @@ function baseHints(s, mac) {
     if (on.refOutline && row.block) items.push(upHint);
     return items;
   }
-  if (s.rowsAbove) items.push(["↑", s.kind === "((" ? "referenced" : "alias rows", "From Roam's first row, ↑ moves into Burrow's rows above it"]);
+  if (s.rowsAbove) items.push(["↑", s.recentAbove ? "recent" : s.kind === "((" ? "referenced" : "alias rows", "From Roam's first row, ↑ moves into Burrow's rows above it"]);
   if (s.kind === "[[" && s.native) {
     if (s.native.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (s.native.aliasNew) items.push(addAlias);

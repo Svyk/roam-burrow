@@ -13,6 +13,7 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
   const byRaw = new Map();
   const byLower = new Map();
   const byCompact = new Map();
+  const byUid = new Map();
   const add = (map, key, page) => {
     const list = map.get(key);
     if (!list) map.set(key, [page]);
@@ -23,6 +24,7 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
     if (withContent && /[#>]/.test(title) && !withContent.has(title)) continue;
     const page = { title, uid };
     byRaw.set(title, page);
+    byUid.set(uid, title);
     add(byLower, title.toLowerCase(), page);
     const compact = searchKey(title).compact;
     if (compact) add(byCompact, compact, page);
@@ -44,6 +46,8 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
   const one = (list) => (list?.length === 1 ? list[0] : null);
   return {
     size: byRaw.size,
+    // Page uid -> title, for the recent rows.
+    byUid: (uid) => byUid.get(uid) ?? null,
     setAliases,
     // Exact title, then case-insensitive, then separator-insensitive, then
     // an alias; an ambiguous spelling resolves to nothing.
