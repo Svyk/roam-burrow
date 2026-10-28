@@ -1691,7 +1691,7 @@ function pickerHints(s, mac = IS_MAC) {
     return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
   }
   const items = baseHints(s, mac);
-  if (s.related === "available" && !s.prompt) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
+  if (s.related === "available" && !s.prompt && !s.chips) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
   return items;
 }
 function baseHints(s, mac) {

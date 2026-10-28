@@ -161,4 +161,7 @@ test("pickerHints: ⌥R names the Related rows while the band has rows; inside i
   const ref = { kind: "((", row: { kind: "ref", drill: false }, on: { ...ON, refOutline: false }, related: "available" };
   assert.equal(keys(pickerHints(ref, true)), "↵ insert ref · ⌥R related");
   assert.equal(keys(pickerHints({ ...ref, prompt: "add" }, true)), "↵ save alias · esc cancel");
+  // The alias chips' line names only the chip keys (notes live gate, [[zq chip al has a band).
+  const chips = { kind: "[[", chips: true, row: { kind: "alias", chips: true, drill: false }, on: ON, related: "available" };
+  assert.equal(keys(pickerHints(chips, true)), "←→ alias · ↵ insert · esc rows");
 });
