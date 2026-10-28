@@ -1,4 +1,4 @@
-/* Burrow v0.10.0 | MIT | generated; edit src/ */
+/* Burrow v0.11.0 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -796,6 +796,7 @@ function rekeyAliases(index, entries, aliasesByPage, { from = 0, stop = () => fa
   if (changed) index.prefilter = null;
   return { next: at, changed };
 }
+var COMMON_WORD = 200;
 function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, frequent = null, currentPage = null, prose = true, code = false, accept = null } = {}) {
   if (!index || !plan) return [];
   const hits = /* @__PURE__ */ new Map();
@@ -834,11 +835,12 @@ function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, f
   }
   const words2 = plan.clauses.reduce((n, q) => n + q.tokens.length, 0);
   if (recall && words2 >= 2 && hits.size < limit) {
-    const candidates = /* @__PURE__ */ new Set();
-    for (const clause of plan.clauses) {
-      for (const word of clause.tokens) for (const entry of index.words.get(word) || []) candidates.add(entry);
-    }
-    for (const entry of candidates) if (!strictHit.has(entry)) consider(entry, {});
+    const lists = plan.clauses.flatMap((clause) => clause.tokens).map((word) => index.words.get(word) || []);
+    const rare = lists.filter((list) => list.length <= COMMON_WORD);
+    const seeds = rare.length ? rare : lists;
+    const candidates2 = /* @__PURE__ */ new Set();
+    for (const list of seeds) for (const entry of list) candidates2.add(entry);
+    for (const entry of candidates2) if (!strictHit.has(entry)) consider(entry, {});
   }
   for (const hit of hits.values()) hit.quoter = hit.entry.quotes.some((uid) => uid !== hit.entry.uid && hits.has(uid));
   const rows = [...hits.values()];
@@ -950,11 +952,11 @@ function words(c) {
   }
   return w;
 }
-function filterCandidates(candidates, query, limit) {
+function filterCandidates(candidates2, query, limit) {
   const typed = searchKey(query).compact;
-  if (!typed) return candidates.slice(0, limit);
+  if (!typed) return candidates2.slice(0, limit);
   const out = [];
-  for (const c of candidates) {
+  for (const c of candidates2) {
     if (words(c).some((w) => w.startsWith(typed))) {
       out.push(c);
       if (out.length >= limit) break;
@@ -1547,6 +1549,7 @@ var DEFAULTS = Object.freeze({
   insertVariants: true,
   openInSidebar: true,
   previewTables: true,
+  semanticRows: true,
   // Not a switch: set once the first-run line has been shown.
   helpNudgeSeen: false,
   aliasKeyword: "Aliases",
@@ -1580,6 +1583,7 @@ var SWITCHES = [
   ["insertVariants", "Insert variants (⇧↵ embed, ⌥↵ label)", "On a highlighted Burrow row, drill row or drill panel row: Shift+Enter inserts an embed ({{[[embed]]: ((uid))}} for a block, {{[[embed]]: [[Page]]}} for a page); Alt+Enter inserts a labelled link: [label](((uid))) for a block, where the label is what you typed (or the block's first 40 characters when you typed nothing), and [alias]([[Page]]) for an alias row whatever the Alias link format says. On Roam's own rows these keys stay Roam's."],
   ["openInSidebar", "Open in sidebar (⌘⇧↵ or ⇧+click)", "On a highlighted Burrow row, drill row or drill panel row, Cmd+Shift+Enter (Ctrl+Shift+Enter off a Mac) or Shift+click opens that page or block in Roam's right sidebar. The block you are typing in keeps its text and the picker stays open."],
   ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
+  ["semanticRows", "Related rows (Roam semantic search)", "When Roam's semantic search is on for the graph (Settings > Graph), up to three Related rows from it show under Roam's results in (( and [[, after you pause typing a phrase of two or more words. Each lookup sends what you typed after the (( or [[ to the embedding provider set in Settings > Graph; in an encrypted graph the query text still goes to that provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. ⌥R (Alt+R) moves into the Related rows, ↑/↓ move inside them, Esc goes back to Roam's rows. Enter inserts a Related row only when it is highlighted, by those keys or by the mouse; otherwise it does what it did before."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["previewImages", "Images in the preview", "In the previews, the highlighted block's first image shows as a thumbnail (at most 240×160) under its line, +N when it has more. It loads after the row has been highlighted for 150 ms, only for that row; in an encrypted graph it is decrypted with Roam's file API and kept for the popup only (8 at most). Files over 5 MB and images that fail keep the image label with their alt text. Rows keep the label."],
   ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],
@@ -1882,11 +1886,11 @@ function parseDrill(query, titles) {
   }
   return null;
 }
-function bestMatch(candidates, query, { strict = false, first, ordinals = false, hideEmpty = false } = {}) {
+function bestMatch(candidates2, query, { strict = false, first, ordinals = false, hideEmpty = false } = {}) {
   const plain = (node) => stripRoamMarkup(node.string ?? "").trim();
-  let list = candidates;
+  let list = candidates2;
   if (hideEmpty) {
-    list = candidates.filter((node) => plain(node) || node.kids?.length);
+    list = candidates2.filter((node) => plain(node) || node.kids?.length);
     if (!String(query ?? "").trim()) list = [list.find((node) => plain(node)) ?? list[0]].filter(Boolean);
   }
   if (!list.length) return null;
@@ -2149,6 +2153,7 @@ var NAMED2 = {
   altBackspace: ["⌥⌫", "Alt+⌫"],
   ctrlO: ["⌃O", "Ctrl+O"],
   altSlash: ["⌥/", "Alt+/"],
+  altR: ["⌥R", "Alt+R"],
   altShift9: ["⌥⇧9", "Alt+Shift+9"],
   shiftEnter: ["⇧↵", "Shift+↵"],
   altEnter: ["⌥↵", "Alt+↵"],
@@ -2165,6 +2170,14 @@ function hintsKey(items) {
   return items.map(([keys, label]) => `${keys}\0${label}`).join("");
 }
 function pickerHints(s, mac = IS_MAC) {
+  if (s.related === "active") {
+    return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
+  }
+  const items = baseHints(s, mac);
+  if (s.related === "available" && !s.prompt && !s.chips && !s.held) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
+  return items;
+}
+function baseHints(s, mac) {
   const on = s.on || {};
   const k = (name) => keyLabel(name, mac);
   const PAGE = "blocks on this page";
@@ -2290,6 +2303,14 @@ function helpGroups(setting, mac = IS_MAC) {
   if (on("refOutline")) drill.items.push(["⇧⇥", "on a block row: up to its parent, the block highlighted"]);
   if (on("drill")) drill.items.push(["# >", "[[Page#heading > child"]);
   if (drill.items.length) groups.push(drill);
+  if (on("semanticRows")) {
+    groups.push({ title: "Related", items: [
+      [k("altR"), "move into the Related rows"],
+      ["↑ ↓", "move inside them"],
+      ["↵", "insert the highlighted one"],
+      ["esc", "back to Roam's rows"]
+    ], notes: [] });
+  }
   const preview = { title: "Preview", items: [], notes: [] };
   preview.items.push([k("ctrlO"), on("rowPreview") ? "Roam's preview, for Burrow's rows too" : "Roam's preview"]);
   if (on("tabDrill") && on("drillPreview")) preview.items.push([k("ctrlO"), "in a drill: its own preview"]);
@@ -2530,9 +2551,9 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
     trails.set(uid, chain);
     return chain;
   }
-  function first(candidates) {
-    const want = new Set(candidates.map((c) => c.uid));
-    const page = trail(candidates[0].uid)[0];
+  function first(candidates2) {
+    const want = new Set(candidates2.map((c) => c.uid));
+    const page = trail(candidates2[0].uid)[0];
     if (page) {
       let seen = 0;
       const stack = [page.uid];
@@ -2545,7 +2566,7 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       }
     }
     const path = (c) => trail(c.uid).slice(1).map((a) => a.order).concat(nodes.get(c.uid)?.order ?? 0);
-    return [...candidates].sort((a, b) => {
+    return [...candidates2].sort((a, b) => {
       const pa = path(a);
       const pb = path(b);
       for (let i = 0; i < Math.min(pa.length, pb.length); i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
@@ -3677,6 +3698,201 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
   };
 }
 
+// src/semantic.js
+var DEBOUNCE_MS = 400;
+var MIN_WORDS = 2;
+var MIN_CHARS = 8;
+var K = 10;
+var CACHE_LIMIT = 50;
+var CACHE_TTL_MS = 5 * 60 * 1e3;
+var SYNC_RETRY_MS = 2e3;
+var SYNC_RETRIES = 6;
+var syncing = (error) => /sync in progress/i.test(String(error?.message || error));
+function eligibleQuery(query) {
+  const text = String(query ?? "").trim();
+  return text.length >= MIN_CHARS && text.split(/\s+/).length >= MIN_WORDS;
+}
+function candidates(hits, kind) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  if (!Array.isArray(hits)) return out;
+  for (const hit of hits) {
+    if (!hit) continue;
+    const page = hit.type === "page";
+    const uid = hit.type === "chunk" ? hit.topUids?.[0] : hit.uid;
+    if (typeof uid !== "string" || !uid || seen.has(uid)) continue;
+    if (page && kind !== "[[") continue;
+    seen.add(uid);
+    out.push({ kind: page ? "page" : "block", uid });
+  }
+  return out;
+}
+function createSemantic({ api, win = globalThis, perf = null, trace = () => {
+}, graph = () => "", now = () => Date.now(), onReply = () => {
+} }) {
+  const cache = /* @__PURE__ */ new Map();
+  let timer = null;
+  let retryTimer = null;
+  let latest = null;
+  let pending = null;
+  let inFlight = null;
+  let failed = false;
+  let logged = false;
+  let generation = 0;
+  const info = { lastQuery: null, lastMs: null };
+  function available() {
+    try {
+      return Boolean(api?.data?.semanticSearchEnabled?.()) && typeof api.data.async?.semanticSearch === "function";
+    } catch {
+      return false;
+    }
+  }
+  const keyFor = (token) => `${graph()}\0${token.kind}\0${token.query.trim()}`;
+  function cached(key) {
+    const entry = cache.get(key);
+    if (!entry) return null;
+    cache.delete(key);
+    if (now() - entry.at > CACHE_TTL_MS) return null;
+    cache.set(key, entry);
+    return entry.list;
+  }
+  function store(key, list) {
+    cache.delete(key);
+    cache.set(key, { at: now(), list });
+    while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+  }
+  function schedule(token) {
+    if (timer != null) win.clearTimeout(timer);
+    timer = null;
+    if (failed || !eligibleQuery(token.query)) return;
+    timer = win.setTimeout(() => {
+      timer = null;
+      ask(token);
+    }, DEBOUNCE_MS);
+  }
+  function cancel() {
+    if (timer != null) win.clearTimeout(timer);
+    timer = null;
+    if (retryTimer != null) win.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+  function ask(token) {
+    if (failed || !available()) return;
+    const entry = { token, key: keyFor(token), gen: generation };
+    latest = entry;
+    const list = cached(entry.key);
+    if (list) {
+      pending = null;
+      trace({ ev: "related", step: "cache", query: token.query.trim(), n: list.length });
+      onReply(token, list);
+      return;
+    }
+    if (inFlight) {
+      pending = entry;
+      return;
+    }
+    void request(entry);
+  }
+  async function request(entry) {
+    const { token } = entry;
+    const query = token.query.trim();
+    inFlight = entry;
+    info.lastQuery = query;
+    trace({ ev: "related", step: "request", kind: token.kind, query });
+    const t0 = now();
+    let list = null;
+    let error = null;
+    try {
+      const hits = await api.data.async.semanticSearch({ "search-str": query, k: K, "search-blocks": true, "search-pages": token.kind === "[[" });
+      list = candidates(hits, token.kind);
+    } catch (caught) {
+      error = caught;
+    }
+    inFlight = null;
+    const ms = now() - t0;
+    info.lastMs = ms;
+    if (error) {
+      trace({ ev: "related", step: "fail", query });
+      if (entry.gen !== generation) {
+        servePending();
+        return;
+      }
+      if (syncing(error)) {
+        if (servePending()) return;
+        entry.tries = (entry.tries ?? 0) + 1;
+        if (latest === entry && entry.tries <= SYNC_RETRIES) {
+          trace({ ev: "related", step: "sync-wait", query, tries: entry.tries });
+          retryTimer = win.setTimeout(() => {
+            retryTimer = null;
+            if (latest === entry && entry.gen === generation && !inFlight) void request(entry);
+          }, SYNC_RETRY_MS);
+          return;
+        }
+      }
+      failed = true;
+      pending = null;
+      if (!logged) {
+        logged = true;
+        console.debug("[burrow] related rows: semantic search failed", String(error?.message || error));
+      }
+      return;
+    }
+    perf?.push("related.request", ms);
+    store(entry.key, list);
+    trace({ ev: "related", step: "reply", query, n: list.length, ms: Math.round(ms) });
+    if (servePending()) return;
+    if (entry.gen !== generation || latest !== entry) {
+      trace({ ev: "related", step: "drop", query, why: entry.gen !== generation ? "closed" : "superseded" });
+      return;
+    }
+    onReply(token, list);
+  }
+  function servePending() {
+    if (!pending || pending.gen !== generation) return false;
+    const next = pending;
+    pending = null;
+    const hit = cached(next.key);
+    if (hit) {
+      trace({ ev: "related", step: "cache", query: next.token.query.trim(), n: hit.length });
+      onReply(next.token, hit);
+    } else void request(next);
+    return true;
+  }
+  function reset() {
+    cancel();
+    pending = null;
+    latest = null;
+    failed = false;
+    logged = false;
+    generation += 1;
+  }
+  return {
+    available,
+    eligible: (token) => Boolean(token) && eligibleQuery(token.query),
+    schedule,
+    cancel,
+    reset,
+    clear() {
+      cache.clear();
+    },
+    get cacheSize() {
+      return cache.size;
+    },
+    get inFlight() {
+      return inFlight != null;
+    },
+    get failed() {
+      return failed;
+    },
+    get lastQuery() {
+      return info.lastQuery;
+    },
+    get lastMs() {
+      return info.lastMs;
+    }
+  };
+}
+
 // src/scope.js
 function scopeRows(nodes, query, { strict = false, text = (s) => s, ordinals = false, hideEmpty = false } = {}) {
   const row = (node, ord = false) => {
@@ -4138,7 +4354,7 @@ var FOLDED = "data-burrow-folded";
 var EXPANDED = "rm-autocomplete__results--expanded";
 var CHIPS_INSET = 8;
 var ROW_LIMIT = 3;
-var POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
+var POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN, "burrow-related-open", "burrow-related-owning", "burrow-related-1", "burrow-related-2", "burrow-related-3"];
 var HAS_KIDS = "[(limit :block/children 1)]";
 var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
@@ -4151,6 +4367,13 @@ var PREVIEW_SLICE_MS = 3;
 var PREVIEW_DRAW_ALONE_MS = 0.5;
 var PREVIEW_FIRST_LINES = 24;
 var CONTEXT_KIDS = 100;
+var RELATED_ROWS = 3;
+var RELATED_HEAD = 240;
+var RELATED_LABEL = 18;
+var RELATED_FRAME = 6;
+var RELATED_POOL = 5;
+var RELATED_STOP_MS = 2;
+var RELATED_PULL = "[:block/uid :block/string :node/title]";
 var valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, saveSetting = null, doc = document, win = window }) {
   const st = {
@@ -4175,6 +4398,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     prompt: null,
     help: false,
     aliasOnly: null,
+    rel: -1,
     held: false
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
@@ -4239,7 +4463,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       perf.counters[counter] = (perf.counters[counter] || 0) + 1;
     }
   });
-  const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet");
+  const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows");
   const kidsKnown = /* @__PURE__ */ new Map();
   function hasKids(uid) {
     if (!uid) return false;
@@ -4515,7 +4739,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   let sampledDark = null;
   function sampleColors() {
-    const nodes = [strip, preview.node, scopePreview.node, scopePanel.node];
+    const nodes = [strip, band, preview.node, scopePreview.node, scopePanel.node];
     const set = (name, value) => {
       for (const node of nodes) {
         if (value && !/^(transparent|rgba\(.*,\s*0\))$/.test(value)) node.style.setProperty(name, value);
@@ -4604,8 +4828,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       shownQuery = query;
       chipsFor = null;
     }
+    syncBand();
     if (!rows.length) {
-      if (st.phase !== "IDLE") {
+      if (st.phase !== "IDLE" && st.phase !== "RELATED") {
         st.phase = "ARMED";
         st.active = -1;
         st.auto = false;
@@ -4842,6 +5067,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     return highlightRe;
   }
   function richContent(row) {
+    if (row.kind === "related") return renderParts(doc, headParts(row.rich, RELATED_HEAD), (t) => highlight(t));
     return renderParts(doc, snippet(row.rich, highlightPattern(searchWords())), (t) => highlight(t));
   }
   function highlight(text, query = searchWords()) {
@@ -4866,6 +5092,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       node.setAttribute("aria-selected", String(st.phase === "OWNED" && i === st.active));
     });
     strip.classList.toggle(OWNING, st.phase === "OWNED");
+    paintBand();
     paintChips();
     paintContext();
     sizeStrip();
@@ -5039,6 +5266,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     panel.style.zIndex = strip.style.zIndex;
     panel.style.font = strip.style.font;
     panel.classList.toggle("burrow-dark", dark);
+    for (const name of ["--burrow-bg", "--burrow-fg", "--burrow-active"]) {
+      const value = strip.style.getPropertyValue(name);
+      if (value) band.style.setProperty(name, value);
+      else band.style.removeProperty(name);
+    }
+    band.style.font = strip.style.font;
+    band.classList.toggle("burrow-dark", dark);
     for (const name of ["--burrow-footer-bg", "--burrow-footer-fg"]) {
       const value = hints.style.getPropertyValue(name);
       if (value) panel.style.setProperty(name, value);
@@ -5074,6 +5308,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   }
   function clearPopover() {
     strip.remove();
+    band.remove();
+    related.visible = false;
+    related.painted = null;
     hints.remove();
     if (!st.pop) return;
     if (lifted) st.pop.style.marginBottom = "";
@@ -5094,6 +5331,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     contextFor = null;
     cancelContext();
     hints.hidden = true;
+    hideBand();
     cancelRowPreview();
     hidePreview();
     clearPopover();
@@ -5139,6 +5377,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (wantFold) want.push(FOLD_ALIASES);
     if (wantLayout) want.push(LAYOUT);
     if (preview.drills(pop)) want.push(DRILL_CLASS);
+    if (related.visible) {
+      want.push("burrow-related-open", `burrow-related-${related.rows.length}`);
+      if (st.phase === "RELATED") want.push("burrow-related-owning");
+    }
     for (const cls of want) if (!pop.classList.contains(cls)) pop.classList.add(cls);
   }
   function hintList() {
@@ -5165,6 +5407,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       })() : null,
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
+      related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
       held: Boolean(st.held)
     };
@@ -5294,7 +5537,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (nudgeShown || nudgeWanted()) nudgeSeen();
     const covered = st.phase === "SCOPE" ? scopePanel.node : st.pop;
     const anchor = covered.getBoundingClientRect();
-    for (const node of [strip, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.add("burrow-help-covered");
+    for (const node of [strip, band, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.add("burrow-help-covered");
     st.pop.classList.add(HELP_OPEN);
     sampleSheet();
     sheet.show(helpGroups(setting), keyLabel("altSlash"), anchor, st.ta?.getBoundingClientRect());
@@ -5305,7 +5548,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (!st.help) return;
     st.help = false;
     sheet.hide();
-    for (const node of [strip, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.remove("burrow-help-covered");
+    for (const node of [strip, band, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.remove("burrow-help-covered");
     st.pop?.classList.remove(HELP_OPEN);
     trace({ ev: "help-close" });
     hintsFor = null;
@@ -5346,6 +5589,302 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (st.help) closeHelp();
     else openHelp();
   }
+  const band = doc.createElement("div");
+  band.className = "burrow-related";
+  band.setAttribute("role", "listbox");
+  band.hidden = true;
+  lifecycle.add(() => band.remove());
+  const bandLabel = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
+  const related = { key: null, rows: [], job: null, visible: false, painted: null };
+  const semantic = createSemantic({
+    api,
+    win,
+    perf,
+    trace,
+    graph: () => api.graph?.name ?? "",
+    onReply: (token, list) => onRelatedReply(token, list)
+  });
+  const relatedKey = (token) => `${token.start}\0${token.kind}\0${token.query}`;
+  function relatedQuery(token) {
+    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows")) {
+      semantic.cancel();
+      dropRelated();
+      return;
+    }
+    const key = relatedKey(token);
+    if (related.key !== null && related.key !== key) dropRelated();
+    if (related.key !== key) semantic.schedule(token);
+  }
+  function dropRelated() {
+    if (related.key === null && !related.job && !related.rows.length) return;
+    cancelRelatedJob();
+    related.key = null;
+    related.rows = [];
+    if (st.phase === "RELATED") {
+      st.phase = "ARMED";
+      st.rel = -1;
+      st.active = -1;
+      st.released = releaseKey();
+      trace({ ev: "related-drop" });
+    }
+  }
+  function cancelRelatedJob() {
+    const job = related.job;
+    related.job = null;
+    if (job?.id != null) (win.cancelIdleCallback || win.clearTimeout).call(win, job.id);
+  }
+  const relatedCurrent = (token) => Boolean(st.ta?.isConnected && st.pop?.isConnected && st.token && !st.drill && st.phase !== "IDLE" && st.token.start === token.start && st.token.kind === token.kind && st.token.query === token.query && !stale(st.ta));
+  function onRelatedReply(token, list) {
+    if (!setting("semanticRows") || !relatedCurrent(token)) {
+      trace({ ev: "related", step: "drop", query: token.query.trim(), why: "text-changed" });
+      return;
+    }
+    const key = relatedKey(token);
+    if (related.key === key && (related.rows.length || related.job)) return;
+    cancelRelatedJob();
+    related.key = key;
+    related.rows = [];
+    if (!list.length) return;
+    const job = { token, key, queue: list.slice(), done: [], id: null };
+    related.job = job;
+    job.id = idle(() => relatedPullSlice(job));
+  }
+  function relatedSkip() {
+    const skip = new Set(shown.map((row) => row.uid));
+    if (st.uid) skip.add(st.uid);
+    return skip;
+  }
+  function relatedPullSlice(job) {
+    job.id = null;
+    if (related.job !== job) return;
+    const t0 = performance.now();
+    const skip = relatedSkip();
+    while (job.queue.length && job.done.length < RELATED_POOL && performance.now() - t0 < RELATED_STOP_MS) {
+      const hit = job.queue.shift();
+      if (skip.has(hit.uid)) continue;
+      const row = relatedRow(hit);
+      if (row) {
+        job.done.push(row);
+        skip.add(hit.uid);
+      }
+    }
+    perf.push("related.pull", performance.now() - t0);
+    const more = job.queue.length && job.done.length < RELATED_POOL;
+    job.id = idle(() => more ? relatedPullSlice(job) : relatedDrawSlice(job));
+  }
+  function relatedRow(hit) {
+    let pulled;
+    try {
+      pulled = api.pull(RELATED_PULL, [":block/uid", hit.uid]);
+    } catch {
+      return null;
+    }
+    if (!pulled) return null;
+    const title = pulled[":node/title"];
+    const string = pulled[":block/string"];
+    if (hit.kind === "page") {
+      if (typeof title !== "string" || !title) return null;
+      return { kind: "related", page: true, key: `related:${hit.uid}`, uid: hit.uid, insertion: `[[${title}]]`, text: title, parts: null, rich: null };
+    }
+    if (typeof string !== "string" || !string.trim() || title != null) return null;
+    return { kind: "related", page: false, key: `related:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`, ...rowText(string), rich: richFor(hit.uid, string), source: string };
+  }
+  function relatedVisible(rows) {
+    const titles = /* @__PURE__ */ new Set();
+    const strings = /* @__PURE__ */ new Set();
+    for (const el of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
+      const title = el.getAttribute("title");
+      if (!title) continue;
+      titles.add(title.toLowerCase());
+      strings.add(title);
+    }
+    const seen = /* @__PURE__ */ new Set();
+    return rows.filter((row) => {
+      if (seen.has(row.uid)) return false;
+      seen.add(row.uid);
+      return row.page ? !titles.has(row.text.toLowerCase()) : !strings.has(row.source);
+    }).slice(0, RELATED_ROWS);
+  }
+  function relatedDrawSlice(job) {
+    job.id = null;
+    if (related.job !== job) return;
+    related.job = null;
+    if (!relatedCurrent(job.token)) {
+      trace({ ev: "related", step: "drop", why: "text-changed" });
+      related.key = null;
+      return;
+    }
+    const t0 = performance.now();
+    related.rows = relatedVisible(job.done);
+    syncBand();
+    layoutPop();
+    perf.push("related.draw", performance.now() - t0);
+    trace({ ev: "related", step: "draw", n: related.rows.length });
+  }
+  function bandWanted() {
+    return related.rows.length > 0 && setting("semanticRows") && Boolean(st.pop?.isConnected) && !st.prompt && st.phase !== "SCOPE" && st.phase !== "IDLE" && Boolean(st.token) && !st.drill;
+  }
+  const bandHeight = (n) => RELATED_LABEL + n * ROW_HEIGHT + RELATED_FRAME;
+  function syncBand() {
+    if (!bandWanted()) {
+      hideBand();
+      return;
+    }
+    const pop = st.pop;
+    const count = related.rows.length;
+    if (related.painted !== related.rows) {
+      related.painted = related.rows;
+      band.replaceChildren(bandLabel, ...related.rows.map((row, i) => relatedRowNode(row, i)));
+      band.style.height = `${bandHeight(count)}px`;
+    }
+    const column = listColumn(pop);
+    const flipped = pop.style.bottom === "0px";
+    band.classList.toggle("burrow-related-top", flipped);
+    if (flipped) {
+      if (strip.parentNode === column && (band.parentNode !== column || band.nextSibling !== strip)) column.insertBefore(band, strip);
+    } else {
+      const list = column.querySelector(":scope > .rm-autocomplete__results-scroll") || strip;
+      if (list.parentNode === column && (band.parentNode !== column || band.previousSibling !== list)) list.after(band);
+    }
+    band.hidden = false;
+    related.visible = true;
+    for (let n = 1; n <= RELATED_ROWS; n += 1) pop.classList.toggle(`burrow-related-${n}`, n === count);
+    pop.classList.add("burrow-related-open");
+    paintBand();
+  }
+  function hideBand() {
+    related.painted = null;
+    if (st.phase === "RELATED") {
+      st.phase = "ARMED";
+      st.rel = -1;
+      st.active = -1;
+      st.released = releaseKey();
+    }
+    if (!related.visible && !band.isConnected) return;
+    related.visible = false;
+    band.remove();
+    band.hidden = true;
+    st.pop?.classList.remove("burrow-related-open", "burrow-related-owning", "burrow-related-1", "burrow-related-2", "burrow-related-3");
+  }
+  function relatedRowNode(row, i) {
+    const node = rowNode(row, i);
+    if (row.page) node.querySelector(".burrow-text").classList.add("burrow-ref");
+    return node;
+  }
+  function paintBand() {
+    const on = st.phase === "RELATED";
+    band.querySelectorAll(".burrow-row").forEach((node, i) => {
+      node.classList.toggle("burrow-active", on && i === st.rel);
+      node.setAttribute("aria-selected", String(on && i === st.rel));
+    });
+    st.pop?.classList.toggle("burrow-related-owning", on);
+  }
+  const bandRows = () => related.visible ? related.rows : [];
+  function enterRelated(index) {
+    st.phase = "RELATED";
+    st.active = -1;
+    st.rel = index;
+    st.auto = false;
+    st.chip = -1;
+    trace({ ev: "related-enter", index });
+    paintActive();
+  }
+  function leaveRelated() {
+    st.phase = "ARMED";
+    st.rel = -1;
+    st.active = -1;
+    st.released = releaseKey();
+    trace({ ev: "related-leave" });
+    paintActive();
+  }
+  const isAltR = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyR";
+  function relatedKeyDown(event) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const rows = bandRows();
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+        st.rel = Math.max(0, Math.min(rows.length - 1, st.rel + (event.key === "ArrowDown" ? 1 : -1)));
+        paintBand();
+        consume(event);
+        return;
+      case "Escape":
+        leaveRelated();
+        consume(event);
+        return;
+      case "Enter":
+      case "Tab": {
+        consume(event);
+        const row = rows[st.rel];
+        if (!row || !commit(row)) refused();
+        return;
+      }
+      case "ArrowLeft":
+      case "ArrowRight":
+      case "Home":
+      case "End":
+      case "PageUp":
+      case "PageDown":
+        reset("caret-move");
+        return;
+      default:
+    }
+  }
+  function onBandMouseMove(event) {
+    const at = `${event.clientX},${event.clientY}`;
+    if (at === lastPointer) return;
+    lastPointer = at;
+    if (st.prompt || st.help || !related.visible || st.phase !== "ARMED" && st.phase !== "OWNED" && st.phase !== "RELATED") return;
+    const node = event.target.closest?.(".burrow-related .burrow-row");
+    if (!node) return;
+    const index = Number(node.dataset.index);
+    if (!related.rows[index] || st.phase === "RELATED" && st.rel === index) return;
+    enterRelated(index);
+  }
+  function onBandMouseDown(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = event.target.closest?.(".burrow-row");
+    const row = node ? bandRows()[Number(node.dataset.index)] : null;
+    if (row && !commit(row)) reset("click-refused");
+  }
+  function relatedTip(target) {
+    const node = target.closest?.(".burrow-row");
+    const row = node ? bandRows()[Number(node.dataset.index)] : null;
+    if (row) {
+      return { el: node, title: row.text, lines: [
+        ["↵", `or click: insert ${row.insertion}`],
+        [keyLabel("altR"), "move into the Related rows"],
+        ["", "from Roam's semantic search"]
+      ] };
+    }
+    const label = target.closest?.(".burrow-related-label");
+    return label ? { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] } : null;
+  }
+  const relatedDebug = {
+    get enabled() {
+      return Boolean(setting("semanticRows"));
+    },
+    get available() {
+      return semantic.available();
+    },
+    get inFlight() {
+      return semantic.inFlight;
+    },
+    get lastQuery() {
+      return semantic.lastQuery;
+    },
+    get cacheSize() {
+      return semantic.cacheSize;
+    },
+    get lastMs() {
+      return semantic.lastMs;
+    },
+    get rows() {
+      return related.rows.map((row) => ({ uid: row.uid, kind: row.page ? "page" : "block", insertion: row.insertion }));
+    },
+    clear: () => semantic.clear()
+  };
   function attach(pop) {
     if (st.pop === pop) return;
     detach();
@@ -5353,7 +5892,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     sampleTheme(pop);
     if (st.phase === "SCOPE") pop.classList.add(SCOPE_OPEN);
     if (st.help) pop.classList.add(HELP_OPEN);
-    const ours = (node) => node === strip || node === hints || strip.contains(node) || hints.contains(node);
+    const ours = (node) => node === strip || node === hints || node === band || strip.contains(node) || hints.contains(node) || band.contains(node);
     const mo = new MutationObserver((records) => {
       if (st.pop !== pop || st.phase === "IDLE") return;
       let roam = false;
@@ -5464,6 +6003,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     contextKnown.clear();
     contextFor = null;
     cancelContext();
+    semantic.reset();
+    cancelRelatedJob();
+    related.key = null;
+    related.rows = [];
+    st.rel = -1;
     st.phase = "IDLE";
     st.rows = [];
     st.active = -1;
@@ -5495,6 +6039,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function own(index) {
     st.phase = "OWNED";
     st.active = index;
+    st.rel = -1;
     trace({ ev: "own", index });
   }
   function release() {
@@ -5515,11 +6060,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       st.uid = api.ui.getFocusedBlock?.()?.["block-uid"] ?? null;
       st.pageTitle = ta.closest?.("[data-page-title]")?.getAttribute("data-page-title") ?? null;
       st.active = -1;
-      if (st.phase === "OWNED") st.phase = "ARMED";
+      if (st.phase === "OWNED" || st.phase === "RELATED") st.phase = "ARMED";
     }
     st.ta = ta;
     st.token = token;
     st.rows = rank(token);
+    relatedQuery(token);
     st.chip = -1;
     if (!st.rows.length && st.phase === "OWNED") {
       st.phase = "ARMED";
@@ -5565,7 +6111,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (pendingTa && (ACTION_KEYS.has(event.key) || event.altKey) && event.target === pendingTa) flush();
     if (st.phase === "IDLE") return;
     if (st.help && event.target === st.ta && helpKey(event)) return;
-    if (st.phase === "OWNED" && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
+    if ((st.phase === "OWNED" || st.phase === "RELATED") && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
       trace({ ev: "stale-key", key: event.key });
       evaluate(st.ta);
       if (frameQueued) inFrameDo(draw);
@@ -5597,6 +6143,22 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const key = event.key;
     if (st.phase === "SCOPE") {
       scopeKey(event);
+      return;
+    }
+    if (isAltR(event) && (st.phase === "ARMED" || st.phase === "OWNED" || st.phase === "RELATED")) {
+      if (st.phase === "RELATED") {
+        leaveRelated();
+        consume(event);
+        return;
+      }
+      if (bandRows().length) {
+        enterRelated(0);
+        consume(event);
+        return;
+      }
+    }
+    if (st.phase === "RELATED") {
+      relatedKeyDown(event);
       return;
     }
     if (st.phase === "OWNED" && variantKey(event, shown[st.active], st.chip)) return;
@@ -5836,6 +6398,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     shownFilters = "";
     chipsFor = null;
     chipsNode.remove();
+    hideBand();
     strip.hidden = false;
     syncPanes(promptRows);
     layoutPop();
@@ -6056,6 +6619,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     filtersNode.remove();
     shownFilters = "";
     contextFor = null;
+    hideBand();
     cancelRowPreview();
     hidePreview();
     st.pop.classList.remove(DRILL_CLASS);
@@ -6556,7 +7120,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "close Roam's preview (and this one)"], ["", "read-only preview of the highlighted Burrow row: its page, or the block among its siblings; Tab lists what is under it"]] };
   }
   const guarded = (name, handler) => (event) => {
-    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "SCOPE" || Boolean(st.prompt)) && (event.key === "Enter" || event.key === "Tab");
+    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "RELATED" || st.phase === "SCOPE" || Boolean(st.prompt)) && (event.key === "Enter" || event.key === "Tab");
     try {
       handler(event);
     } catch (error) {
@@ -6586,7 +7150,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const at = `${event.clientX},${event.clientY}`;
     if (at === lastPointer) return;
     lastPointer = at;
-    if (st.prompt || st.help || st.phase !== "ARMED" && st.phase !== "OWNED") return;
+    if (st.prompt || st.help || st.phase !== "ARMED" && st.phase !== "OWNED" && st.phase !== "RELATED") return;
     const node = event.target.closest?.(".burrow-row");
     if (!node || !strip.contains(node)) return;
     const index = Number(node.dataset.index);
@@ -6632,6 +7196,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     chipsScrolled = chipsNode.scrollLeft > 0;
   }, { passive: true });
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
+  lifecycle.event(band, "mousemove", guarded("mousemove", onBandMouseMove));
+  lifecycle.event(band, "mousedown", guarded("mousedown", onBandMouseDown));
   lifecycle.event(win, "mousedown", guarded("mousedown", onNativeMouseDown), true);
   lifecycle.event(hints, "mousedown", guarded("mousedown", onHintsMouseDown));
   lifecycle.event(hints, "click", guarded("click", onHelpClick));
@@ -6645,12 +7211,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     event.stopPropagation();
   });
   tips.attach(strip, guardedTip(stripTip));
+  tips.attach(band, guardedTip(relatedTip));
   tips.attach(hints, guardedTip(hintTip));
   tips.attach(scopePanel.node, guardedTip(scopeTip));
   for (const p of [preview, scopePreview]) tips.attach(p.node, guardedTip((target) => previewTip(target, p)));
   const unlisten = indexes.listen?.(() => {
     pickInfo?.refresh();
-    if (!st.ta || !st.token || st.phase === "IDLE" || st.phase === "SCOPE" || st.prompt || st.help || st.chip >= 0) return;
+    if (!st.ta || !st.token || st.phase === "IDLE" || st.phase === "SCOPE" || st.phase === "RELATED" || st.prompt || st.help || st.chip >= 0) return;
     if (st.phase === "OWNED" && !st.auto) return;
     if (doc.activeElement === st.ta) scheduleEvaluate(st.ta);
   });
@@ -6668,16 +7235,35 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
-  return { state: st, debug, reset, tree, forget };
+  return { state: st, debug, reset, tree, forget, related: relatedDebug };
+}
+function headParts(parts, max) {
+  const out = [];
+  let left = max;
+  for (const part of parts) {
+    if (left <= 0) break;
+    if (part.task || part.text == null) {
+      out.push(part);
+      continue;
+    }
+    if (part.text.length <= left) {
+      out.push(part);
+      left -= part.text.length;
+      continue;
+    }
+    out.push({ ...part, text: `${part.text.slice(0, left)}…` });
+    left = 0;
+  }
+  return out;
 }
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // src/extension.js
-var VERSION = "0.10.0";
+var VERSION = "0.11.0";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "previewTables"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;
@@ -6715,6 +7301,8 @@ function installPerfHud({ lifecycle, perf, setting }) {
     if (hud.hidden) return;
     const s = perf.summary("input");
     hud.textContent = `burrow ${s.n} keys · p50 ${fmt(s.p50)} ms · p95 ${fmt(s.p95)} ms`;
+    const req = perf.summary("related.request");
+    if (req.n) hud.textContent += ` · related req p50 ${fmt(req.p50)} ms · draw p95 ${fmt(perf.summary("related.draw").p95)} ms`;
   }, 1e3);
 }
 var LIVE = "__burrowLive";
@@ -6799,7 +7387,7 @@ async function onload({ extensionAPI, extension }) {
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch, related: strip.related };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;

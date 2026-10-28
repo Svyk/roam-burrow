@@ -10,6 +10,7 @@ import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { createPickInfo, filterCandidates, mergeCandidates } from "./recents.js";
 import { rankRefs } from "./refindex.js";
 import { createRichCache, renderParts, richParts, snippet } from "./rich.js";
+import { createSemantic } from "./semantic.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { looksLikeCode, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
@@ -37,7 +38,7 @@ const EXPANDED = "rm-autocomplete__results--expanded";
 const CHIPS_INSET = 8;
 const ROW_LIMIT = 3;
 // Every class Burrow puts on Roam's popover; each one is removed again on reset.
-const POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
+const POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN, "burrow-related-open", "burrow-related-owning", "burrow-related-1", "burrow-related-2", "burrow-related-3"];
 // One check per highlighted page or block, kept until the popup closes: does
 // it have children (so Tab drills, and the hint line says so)? `limit` keeps
 // it at 0.1-0.3 ms whatever the size of the page.
@@ -64,6 +65,24 @@ const PREVIEW_DRAW_ALONE_MS = 0.5;
 const PREVIEW_FIRST_LINES = 24;
 // The context line counts a block's children up to this many.
 const CONTEXT_KIDS = 100;
+// The Related band (Roam's semantic search): up to three rows under a label.
+// Its height is fixed from its row count, and the same height is added to
+// Roam's list column (src/extension.css, .burrow-related-N) so Roam's list
+// keeps its own 300 px.
+const RELATED_ROWS = 3;
+// Characters of a Related row that are drawn (the row shows one line).
+const RELATED_HEAD = 240;
+const RELATED_LABEL = 18;
+// .burrow-related padding (bottom) and its border.
+const RELATED_FRAME = 6;
+// Hits are pulled until this many can be drawn (a few may turn out to be
+// shown by Roam already, which is only known at draw time).
+const RELATED_POOL = 5;
+// Pulls and the draw run in idle slices of RELATED_SLICE_MS; a pull slice
+// stops starting new pulls after RELATED_STOP_MS.
+const RELATED_SLICE_MS = 3;
+const RELATED_STOP_MS = 2;
+const RELATED_PULL = "[:block/uid :block/string :node/title]";
 const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 
 // Keyboard ownership (spec §4):
@@ -71,6 +90,11 @@ const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaEleme
 //   ARMED - strip shown, Roam's popup holds selection, no key consumed except
 //           ↑ from Roam's first row, which moves selection into the strip.
 //   OWNED - a strip row is active; Burrow consumes ↑ ↓ Enter Tab only.
+//   RELATED - ⌥R (or the pointer) moved into the Related band under Roam's
+//           results: ↑ ↓ move inside it, Enter and Tab insert its row, Esc and
+//           ⌥R go back to ARMED (Roam's row). The band never takes the
+//           selection by itself: it can arrive late, and Enter picks a row of
+//           it only while that row is highlighted.
 //   SCOPE - Tab drilled into a page or block: the scope panel replaces the
 //           popover, typing filters its rows (nothing reaches the document)
 //           and Burrow consumes the keys the panel uses.
@@ -81,7 +105,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const st = {
     phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, held: false,
+    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1, held: false,
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -152,7 +176,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   });
 
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
-    || setting("paneLayout") || setting("keyHints") || setting("helpSheet");
+    || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows");
 
   // Has this page or block children? The page tree knows when it has read
   // the node; otherwise one bounded pull, kept until the popup closes.
@@ -428,7 +452,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // that is missing or transparent is removed, so the stylesheet's applies.
   let sampledDark = null;
   function sampleColors() {
-    const nodes = [strip, preview.node, scopePreview.node, scopePanel.node];
+    const nodes = [strip, band, preview.node, scopePreview.node, scopePanel.node];
     const set = (name, value) => {
       for (const node of nodes) {
         if (value && !/^(transparent|rgba\(.*,\s*0\))$/.test(value)) node.style.setProperty(name, value);
@@ -510,8 +534,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       shownQuery = query;
       chipsFor = null;
     }
+    syncBand();
     if (!rows.length) {
-      if (st.phase !== "IDLE") { st.phase = "ARMED"; st.active = -1; st.auto = false; st.chip = -1; }
+      if (st.phase !== "IDLE" && st.phase !== "RELATED") { st.phase = "ARMED"; st.active = -1; st.auto = false; st.chip = -1; }
       hideRows();
       syncPanes(rows);
       layoutPop();
@@ -761,8 +786,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     return highlightRe;
   }
 
-  // A row's block as Roam draws it, cut around the match when long.
+  // A row's block as Roam draws it, cut around the match when long. A
+  // Related row matched by meaning, not by the typed words: it starts at the
+  // block's start (a semantic hit's typed words are often deep inside it).
   function richContent(row) {
+    if (row.kind === "related") return renderParts(doc, headParts(row.rich, RELATED_HEAD), (t) => highlight(t));
     return renderParts(doc, snippet(row.rich, highlightPattern(searchWords())), (t) => highlight(t));
   }
 
@@ -786,6 +814,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       node.setAttribute("aria-selected", String(st.phase === "OWNED" && i === st.active));
     });
     strip.classList.toggle(OWNING, st.phase === "OWNED");
+    paintBand();
     paintChips();
     paintContext();
     sizeStrip();
@@ -996,6 +1025,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     panel.style.zIndex = strip.style.zIndex;
     panel.style.font = strip.style.font;
     panel.classList.toggle("burrow-dark", dark);
+    for (const name of ["--burrow-bg", "--burrow-fg", "--burrow-active"]) {
+      const value = strip.style.getPropertyValue(name);
+      if (value) band.style.setProperty(name, value); else band.style.removeProperty(name);
+    }
+    band.style.font = strip.style.font;
+    band.classList.toggle("burrow-dark", dark);
     for (const name of ["--burrow-footer-bg", "--burrow-footer-fg"]) {
       const value = hints.style.getPropertyValue(name);
       if (value) panel.style.setProperty(name, value); else panel.style.removeProperty(name);
@@ -1036,6 +1071,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // and its own nodes out of Roam's list column.
   function clearPopover() {
     strip.remove();
+    band.remove();
+    related.visible = false;
+    related.painted = null;
     hints.remove();
     if (!st.pop) return;
     if (lifted) st.pop.style.marginBottom = "";
@@ -1057,6 +1095,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     contextFor = null;
     cancelContext();
     hints.hidden = true;
+    hideBand();
     cancelRowPreview();
     hidePreview();
     clearPopover();
@@ -1109,6 +1148,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (wantFold) want.push(FOLD_ALIASES);
     if (wantLayout) want.push(LAYOUT);
     if (preview.drills(pop)) want.push(DRILL_CLASS);
+    if (related.visible) {
+      want.push("burrow-related-open", `burrow-related-${related.rows.length}`);
+      if (st.phase === "RELATED") want.push("burrow-related-owning");
+    }
     for (const cls of want) if (!pop.classList.contains(cls)) pop.classList.add(cls);
   }
 
@@ -1134,6 +1177,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       })() : null,
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
+      related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
       held: Boolean(st.held),
     };
@@ -1260,7 +1304,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (nudgeShown || nudgeWanted()) nudgeSeen();
     const covered = st.phase === "SCOPE" ? scopePanel.node : st.pop;
     const anchor = covered.getBoundingClientRect();
-    for (const node of [strip, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.add("burrow-help-covered");
+    for (const node of [strip, band, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.add("burrow-help-covered");
     st.pop.classList.add(HELP_OPEN);
     sampleSheet();
     sheet.show(helpGroups(setting), keyLabel("altSlash"), anchor, st.ta?.getBoundingClientRect());
@@ -1272,7 +1316,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (!st.help) return;
     st.help = false;
     sheet.hide();
-    for (const node of [strip, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.remove("burrow-help-covered");
+    for (const node of [strip, band, hints, preview.node, scopePreview.node, scopePanel.node]) node.classList.remove("burrow-help-covered");
     st.pop?.classList.remove(HELP_OPEN);
     trace({ ev: "help-close" });
     hintsFor = null;
@@ -1323,6 +1367,314 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.help) closeHelp(); else openHelp();
   }
 
+  // ---- Related rows (Roam's semantic search, src/semantic.js) ----
+
+  // The band sits in Roam's list column like the strip: right after Roam's
+  // results, before its footer. It never takes the selection by itself (a
+  // reply comes seconds after the keys) and takes its own room, so nothing of
+  // Roam's moves: see RELATED_* above and .burrow-related-N in the stylesheet.
+  const band = doc.createElement("div");
+  band.className = "burrow-related";
+  band.setAttribute("role", "listbox");
+  band.hidden = true;
+  lifecycle.add(() => band.remove());
+  const bandLabel = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
+  const related = { key: null, rows: [], job: null, visible: false, painted: null };
+  const semantic = createSemantic({
+    api, win, perf, trace, graph: () => api.graph?.name ?? "", onReply: (token, list) => onRelatedReply(token, list),
+  });
+  const relatedKey = (token) => `${token.start}\u0000${token.kind}\u0000${token.query}`;
+
+  // Per key (evaluate): drop what was asked or drawn for another query, then
+  // restart the pause. The band's DOM goes at the next render.
+  function relatedQuery(token) {
+    // A drill, query filters (in:, is:, -word, "phrase") and the alias: prefix
+    // ask for literal matches: the band would ignore them, so it stays out.
+    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows")) {
+      semantic.cancel();
+      dropRelated();
+      return;
+    }
+    const key = relatedKey(token);
+    if (related.key !== null && related.key !== key) dropRelated();
+    if (related.key !== key) semantic.schedule(token);
+  }
+
+  function dropRelated() {
+    if (related.key === null && !related.job && !related.rows.length) return;
+    cancelRelatedJob();
+    related.key = null;
+    related.rows = [];
+    if (st.phase === "RELATED") {
+      st.phase = "ARMED";
+      st.rel = -1;
+      st.active = -1;
+      st.released = releaseKey();
+      trace({ ev: "related-drop" });
+    }
+  }
+
+  function cancelRelatedJob() {
+    const job = related.job;
+    related.job = null;
+    if (job?.id != null) (win.cancelIdleCallback || win.clearTimeout).call(win, job.id);
+  }
+
+  // The popup shows the text the reply was asked for, and nothing has moved since.
+  const relatedCurrent = (token) => Boolean(st.ta?.isConnected && st.pop?.isConnected && st.token && !st.drill && st.phase !== "IDLE"
+    && st.token.start === token.start && st.token.kind === token.kind && st.token.query === token.query && !stale(st.ta));
+
+  function onRelatedReply(token, list) {
+    if (!setting("semanticRows") || !relatedCurrent(token)) { trace({ ev: "related", step: "drop", query: token.query.trim(), why: "text-changed" }); return; }
+    const key = relatedKey(token);
+    if (related.key === key && (related.rows.length || related.job)) return;
+    cancelRelatedJob();
+    related.key = key;
+    related.rows = [];
+    if (!list.length) return;
+    const job = { token, key, queue: list.slice(), done: [], id: null };
+    related.job = job;
+    job.id = idle(() => relatedPullSlice(job));
+  }
+
+  // Burrow's rows, the block being edited: never shown again below.
+  function relatedSkip() {
+    const skip = new Set(shown.map((row) => row.uid));
+    if (st.uid) skip.add(st.uid);
+    return skip;
+  }
+
+  function relatedPullSlice(job) {
+    job.id = null;
+    if (related.job !== job) return;
+    const t0 = performance.now();
+    const skip = relatedSkip();
+    while (job.queue.length && job.done.length < RELATED_POOL && performance.now() - t0 < RELATED_STOP_MS) {
+      const hit = job.queue.shift();
+      if (skip.has(hit.uid)) continue;
+      const row = relatedRow(hit);
+      if (row) { job.done.push(row); skip.add(hit.uid); }
+    }
+    perf.push("related.pull", performance.now() - t0);
+    const more = job.queue.length && job.done.length < RELATED_POOL;
+    job.id = idle(() => (more ? relatedPullSlice(job) : relatedDrawSlice(job)));
+  }
+
+  // One hit as a row: the page's title, or the block's text drawn as the
+  // strip's own block rows are. A hit that is gone, or empty, is no row.
+  function relatedRow(hit) {
+    let pulled;
+    try { pulled = api.pull(RELATED_PULL, [":block/uid", hit.uid]); } catch { return null; }
+    if (!pulled) return null;
+    const title = pulled[":node/title"];
+    const string = pulled[":block/string"];
+    if (hit.kind === "page") {
+      if (typeof title !== "string" || !title) return null;
+      return { kind: "related", page: true, key: `related:${hit.uid}`, uid: hit.uid, insertion: `[[${title}]]`, text: title, parts: null, rich: null };
+    }
+    if (typeof string !== "string" || !string.trim() || title != null) return null;
+    return { kind: "related", page: false, key: `related:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`, ...rowText(string), rich: richFor(hit.uid, string), source: string };
+  }
+
+  // Not drawn again: what Roam's list shows already. A native row's title
+  // attribute holds the page title, or the block's raw string, so a plain
+  // comparison is enough (normalising every native row's text cost 10 ms in
+  // notes, where a row can hold a whole transcript). Read at draw time only.
+  function relatedVisible(rows) {
+    const titles = new Set();
+    const strings = new Set();
+    for (const el of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
+      const title = el.getAttribute("title");
+      if (!title) continue;
+      titles.add(title.toLowerCase());
+      strings.add(title);
+    }
+    const seen = new Set();
+    return rows.filter((row) => {
+      if (seen.has(row.uid)) return false;
+      seen.add(row.uid);
+      return row.page ? !titles.has(row.text.toLowerCase()) : !strings.has(row.source);
+    }).slice(0, RELATED_ROWS);
+  }
+
+  function relatedDrawSlice(job) {
+    job.id = null;
+    if (related.job !== job) return;
+    related.job = null;
+    if (!relatedCurrent(job.token)) { trace({ ev: "related", step: "drop", why: "text-changed" }); related.key = null; return; }
+    const t0 = performance.now();
+    related.rows = relatedVisible(job.done);
+    syncBand();
+    layoutPop();
+    perf.push("related.draw", performance.now() - t0);
+    trace({ ev: "related", step: "draw", n: related.rows.length });
+  }
+
+  function bandWanted() {
+    return related.rows.length > 0 && setting("semanticRows") && Boolean(st.pop?.isConnected) && !st.prompt
+      && st.phase !== "SCOPE" && st.phase !== "IDLE" && Boolean(st.token) && !st.drill;
+  }
+
+  const bandHeight = (n) => RELATED_LABEL + n * ROW_HEIGHT + RELATED_FRAME;
+
+  // Draws the band for related.rows (when they changed) and puts it in place;
+  // takes it out when it is not wanted. DOM writes only, no layout read.
+  function syncBand() {
+    if (!bandWanted()) { hideBand(); return; }
+    const pop = st.pop;
+    const count = related.rows.length;
+    if (related.painted !== related.rows) {
+      related.painted = related.rows;
+      band.replaceChildren(bandLabel, ...related.rows.map((row, i) => relatedRowNode(row, i)));
+      band.style.height = `${bandHeight(count)}px`;
+    }
+    const column = listColumn(pop);
+    // A popover flipped above the caret grows upward from its bottom edge if
+    // the band is at the end of the column, which would push the rows Roam
+    // has already drawn; there the band goes first, and the growth is above them.
+    const flipped = pop.style.bottom === "0px";
+    band.classList.toggle("burrow-related-top", flipped);
+    if (flipped) {
+      if (strip.parentNode === column && (band.parentNode !== column || band.nextSibling !== strip)) column.insertBefore(band, strip);
+    } else {
+      const list = column.querySelector(":scope > .rm-autocomplete__results-scroll") || strip;
+      if (list.parentNode === column && (band.parentNode !== column || band.previousSibling !== list)) list.after(band);
+    }
+    band.hidden = false;
+    related.visible = true;
+    for (let n = 1; n <= RELATED_ROWS; n += 1) pop.classList.toggle(`burrow-related-${n}`, n === count);
+    pop.classList.add("burrow-related-open");
+    paintBand();
+  }
+
+  function hideBand() {
+    related.painted = null;
+    if (st.phase === "RELATED") { st.phase = "ARMED"; st.rel = -1; st.active = -1; st.released = releaseKey(); }
+    if (!related.visible && !band.isConnected) return;
+    related.visible = false;
+    band.remove();
+    band.hidden = true;
+    st.pop?.classList.remove("burrow-related-open", "burrow-related-owning", "burrow-related-1", "burrow-related-2", "burrow-related-3");
+  }
+
+  function relatedRowNode(row, i) {
+    const node = rowNode(row, i);
+    if (row.page) node.querySelector(".burrow-text").classList.add("burrow-ref");
+    return node;
+  }
+
+  function paintBand() {
+    const on = st.phase === "RELATED";
+    band.querySelectorAll(".burrow-row").forEach((node, i) => {
+      node.classList.toggle("burrow-active", on && i === st.rel);
+      node.setAttribute("aria-selected", String(on && i === st.rel));
+    });
+    st.pop?.classList.toggle("burrow-related-owning", on);
+  }
+
+  const bandRows = () => (related.visible ? related.rows : []);
+
+  function enterRelated(index) {
+    st.phase = "RELATED";
+    st.active = -1;
+    st.rel = index;
+    st.auto = false;
+    st.chip = -1;
+    trace({ ev: "related-enter", index });
+    paintActive();
+  }
+
+  // Back to Roam's row. The released mark keeps a preselect from taking it.
+  function leaveRelated() {
+    st.phase = "ARMED";
+    st.rel = -1;
+    st.active = -1;
+    st.released = releaseKey();
+    trace({ ev: "related-leave" });
+    paintActive();
+  }
+
+  const isAltR = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyR";
+
+  function relatedKeyDown(event) {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const rows = bandRows();
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+        st.rel = Math.max(0, Math.min(rows.length - 1, st.rel + (event.key === "ArrowDown" ? 1 : -1)));
+        paintBand();
+        consume(event);
+        return;
+      case "Escape":
+        leaveRelated();
+        consume(event);
+        return;
+      case "Enter":
+      case "Tab": {
+        consume(event);
+        const row = rows[st.rel];
+        if (!row || !commit(row)) refused();
+        return;
+      }
+      case "ArrowLeft":
+      case "ArrowRight":
+      case "Home":
+      case "End":
+      case "PageUp":
+      case "PageDown":
+        reset("caret-move");
+        return;
+      default:
+    }
+  }
+
+  function onBandMouseMove(event) {
+    const at = `${event.clientX},${event.clientY}`;
+    if (at === lastPointer) return;
+    lastPointer = at;
+    if (st.prompt || st.help || !related.visible || (st.phase !== "ARMED" && st.phase !== "OWNED" && st.phase !== "RELATED")) return;
+    const node = event.target.closest?.(".burrow-related .burrow-row");
+    if (!node) return;
+    const index = Number(node.dataset.index);
+    if (!related.rows[index] || (st.phase === "RELATED" && st.rel === index)) return;
+    enterRelated(index);
+  }
+
+  function onBandMouseDown(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = event.target.closest?.(".burrow-row");
+    const row = node ? bandRows()[Number(node.dataset.index)] : null;
+    if (row && !commit(row)) reset("click-refused");
+  }
+
+  function relatedTip(target) {
+    const node = target.closest?.(".burrow-row");
+    const row = node ? bandRows()[Number(node.dataset.index)] : null;
+    if (row) {
+      return { el: node, title: row.text, lines: [
+        ["↵", `or click: insert ${row.insertion}`],
+        [keyLabel("altR"), "move into the Related rows"],
+        ["", "from Roam's semantic search"],
+      ] };
+    }
+    const label = target.closest?.(".burrow-related-label");
+    return label ? { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] } : null;
+  }
+
+  // The state the debug object and the gates read: read-mostly.
+  const relatedDebug = {
+    get enabled() { return Boolean(setting("semanticRows")); },
+    get available() { return semantic.available(); },
+    get inFlight() { return semantic.inFlight; },
+    get lastQuery() { return semantic.lastQuery; },
+    get cacheSize() { return semantic.cacheSize; },
+    get lastMs() { return semantic.lastMs; },
+    get rows() { return related.rows.map((row) => ({ uid: row.uid, kind: row.page ? "page" : "block", insertion: row.insertion })); },
+    clear: () => semantic.clear(),
+  };
+
   // ---- popup attach / detach ----
 
   function attach(pop) {
@@ -1333,7 +1685,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.phase === "SCOPE") pop.classList.add(SCOPE_OPEN);
     if (st.help) pop.classList.add(HELP_OPEN);
     // Burrow's own nodes live in the popover now: their changes are not Roam's.
-    const ours = (node) => node === strip || node === hints || strip.contains(node) || hints.contains(node);
+    const ours = (node) => node === strip || node === hints || node === band || strip.contains(node) || hints.contains(node) || band.contains(node);
     const mo = new MutationObserver((records) => {
       if (st.pop !== pop || st.phase === "IDLE") return;
       let roam = false;
@@ -1456,6 +1808,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     contextKnown.clear();
     contextFor = null;
     cancelContext();
+    semantic.reset();
+    cancelRelatedJob();
+    related.key = null;
+    related.rows = [];
+    st.rel = -1;
     st.phase = "IDLE";
     st.rows = [];
     st.active = -1;
@@ -1488,6 +1845,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function own(index) {
     st.phase = "OWNED";
     st.active = index;
+    st.rel = -1;
     trace({ ev: "own", index });
   }
 
@@ -1513,11 +1871,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       st.uid = api.ui.getFocusedBlock?.()?.["block-uid"] ?? null;
       st.pageTitle = ta.closest?.("[data-page-title]")?.getAttribute("data-page-title") ?? null;
       st.active = -1;
-      if (st.phase === "OWNED") st.phase = "ARMED";
+      if (st.phase === "OWNED" || st.phase === "RELATED") st.phase = "ARMED";
     }
     st.ta = ta;
     st.token = token;
     st.rows = rank(token);
+    relatedQuery(token);
     st.chip = -1;
     if (!st.rows.length && st.phase === "OWNED") { st.phase = "ARMED"; st.active = -1; st.auto = false; }
     if (st.phase === "OWNED") st.active = 0;
@@ -1566,7 +1925,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     // moved without an event Burrow saw yet): rank again before the key acts.
     // Enter or Tab then only redraws; the highlight the user saw was Burrow's,
     // so the key never falls through to a Roam row that was not highlighted.
-    if (st.phase === "OWNED" && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
+    if ((st.phase === "OWNED" || st.phase === "RELATED") && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
       trace({ ev: "stale-key", key: event.key });
       evaluate(st.ta);
       if (frameQueued) inFrameDo(draw);
@@ -1585,6 +1944,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const count = shown.length;
     const key = event.key;
     if (st.phase === "SCOPE") { scopeKey(event); return; }
+    if (isAltR(event) && (st.phase === "ARMED" || st.phase === "OWNED" || st.phase === "RELATED")) {
+      // With no band the key passes untouched.
+      if (st.phase === "RELATED") { leaveRelated(); consume(event); return; }
+      if (bandRows().length) { enterRelated(0); consume(event); return; }
+    }
+    if (st.phase === "RELATED") { relatedKeyDown(event); return; }
     if (st.phase === "OWNED" && variantKey(event, shown[st.active], st.chip)) return;
     if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
       const page = aliasSource();
@@ -1831,6 +2196,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     shownFilters = "";
     chipsFor = null;
     chipsNode.remove();
+    hideBand();
     strip.hidden = false;
     syncPanes(promptRows);
     layoutPop();
@@ -2021,6 +2387,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     filtersNode.remove();
     shownFilters = "";
     contextFor = null;
+    hideBand();
     cancelRowPreview();
     hidePreview();
     st.pop.classList.remove(DRILL_CLASS);
@@ -2514,7 +2881,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // exception is Enter or Tab while Burrow's row or panel held the
   // highlight: Roam's own row was not highlighted, so the key stops here.
   const guarded = (name, handler) => (event) => {
-    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "SCOPE" || Boolean(st.prompt))
+    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "RELATED" || st.phase === "SCOPE" || Boolean(st.prompt))
       && (event.key === "Enter" || event.key === "Tab");
     try {
       handler(event);
@@ -2552,7 +2919,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const at = `${event.clientX},${event.clientY}`;
     if (at === lastPointer) return;
     lastPointer = at;
-    if (st.prompt || st.help || (st.phase !== "ARMED" && st.phase !== "OWNED")) return;
+    if (st.prompt || st.help || (st.phase !== "ARMED" && st.phase !== "OWNED" && st.phase !== "RELATED")) return;
     const node = event.target.closest?.(".burrow-row");
     if (!node || !strip.contains(node)) return;
     const index = Number(node.dataset.index);
@@ -2592,6 +2959,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   lifecycle.event(strip, "wheel", guarded("wheel", onStripWheel), { passive: false });
   lifecycle.event(chipsNode, "scroll", () => { chipsScrolled = chipsNode.scrollLeft > 0; }, { passive: true });
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
+  lifecycle.event(band, "mousemove", guarded("mousemove", onBandMouseMove));
+  lifecycle.event(band, "mousedown", guarded("mousedown", onBandMouseDown));
   lifecycle.event(win, "mousedown", guarded("mousedown", onNativeMouseDown), true);
   lifecycle.event(hints, "mousedown", guarded("mousedown", onHintsMouseDown));
   lifecycle.event(hints, "click", guarded("click", onHelpClick));
@@ -2599,6 +2968,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   lifecycle.event(sheet.node, "mousedown", (event) => { event.preventDefault(); event.stopPropagation(); });
   for (const p of [preview, scopePreview]) lifecycle.event(p.node, "mousedown", (event) => { event.preventDefault(); event.stopPropagation(); });
   tips.attach(strip, guardedTip(stripTip));
+  tips.attach(band, guardedTip(relatedTip));
   tips.attach(hints, guardedTip(hintTip));
   tips.attach(scopePanel.node, guardedTip(scopeTip));
   for (const p of [preview, scopePreview]) tips.attach(p.node, guardedTip((target) => previewTip(target, p)));
@@ -2606,7 +2976,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // open popup at once, unless the user has picked a row or is in the chips.
   const unlisten = indexes.listen?.(() => {
     pickInfo?.refresh();
-    if (!st.ta || !st.token || st.phase === "IDLE" || st.phase === "SCOPE" || st.prompt || st.help || st.chip >= 0) return;
+    if (!st.ta || !st.token || st.phase === "IDLE" || st.phase === "SCOPE" || st.phase === "RELATED" || st.prompt || st.help || st.chip >= 0) return;
     if (st.phase === "OWNED" && !st.auto) return;
     if (doc.activeElement === st.ta) scheduleEvaluate(st.ta);
   });
@@ -2619,7 +2989,22 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 
-  return { state: st, debug, reset, tree, forget };
+  return { state: st, debug, reset, tree, forget, related: relatedDebug };
+}
+
+// The first `max` characters of a row's parts: a Related row is one line, and
+// a block can hold a whole transcript.
+function headParts(parts, max) {
+  const out = [];
+  let left = max;
+  for (const part of parts) {
+    if (left <= 0) break;
+    if (part.task || part.text == null) { out.push(part); continue; }
+    if (part.text.length <= left) { out.push(part); left -= part.text.length; continue; }
+    out.push({ ...part, text: `${part.text.slice(0, left)}…` });
+    left = 0;
+  }
+  return out;
 }
 
 function escapeRe(s) {

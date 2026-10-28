@@ -183,6 +183,9 @@ export function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
 // quoter folds into its original. Pass 1 is strict only;
 // recall (typos, abbreviations) runs only when the strip is not yet full,
 // because recall rows rank below every strict row.
+// Blocks a word may be in and still seed recall candidates (rankRefs).
+const COMMON_WORD = 200;
+
 export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, frequent = null, currentPage = null, prose = true, code = false, accept = null } = {}) {
   if (!index || !plan) return [];
   const hits = new Map();
@@ -225,10 +228,15 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
   if (recall && words >= 2 && hits.size < limit) {
     // An admitted recall row has some query word as an exact word, so the
     // word index yields every candidate.
+    // A word in hundreds of blocks ("to", "how") seeds candidates only when
+    // every query word is that common: each candidate costs a fuzzy match,
+    // and `how to stay focused` spent 6 ms a key on them in notes (0.7.0 too).
+    // A row whose only exact word is that common one is left out.
+    const lists = plan.clauses.flatMap((clause) => clause.tokens).map((word) => index.words.get(word) || []);
+    const rare = lists.filter((list) => list.length <= COMMON_WORD);
+    const seeds = rare.length ? rare : lists;
     const candidates = new Set();
-    for (const clause of plan.clauses) {
-      for (const word of clause.tokens) for (const entry of index.words.get(word) || []) candidates.add(entry);
-    }
+    for (const list of seeds) for (const entry of list) candidates.add(entry);
     for (const entry of candidates) if (!strictHit.has(entry)) consider(entry, {});
   }
   for (const hit of hits.values()) hit.quoter = hit.entry.quotes.some((uid) => uid !== hit.entry.uid && hits.has(uid));

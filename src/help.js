@@ -59,6 +59,12 @@ export function helpGroups(setting, mac = IS_MAC) {
   if (on("drill")) drill.items.push(["# >", "[[Page#heading > child"]);
   if (drill.items.length) groups.push(drill);
 
+  if (on("semanticRows")) {
+    groups.push({ title: "Related", items: [
+      [k("altR"), "move into the Related rows"], ["↑ ↓", "move inside them"], ["↵", "insert the highlighted one"], ["esc", "back to Roam's rows"],
+    ], notes: [] });
+  }
+
   const preview = { title: "Preview", items: [], notes: [] };
   preview.items.push([k("ctrlO"), on("rowPreview") ? "Roam's preview, for Burrow's rows too" : "Roam's preview"]);
   if (on("tabDrill") && on("drillPreview")) preview.items.push([k("ctrlO"), "in a drill: its own preview"]);

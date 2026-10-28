@@ -59,7 +59,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows"];
 const REF_COMMAND = "Burrow: block reference search";
 // The drill panel's ↓ limit for the image cases; BURROW_SCOPE_KEY_LIMIT=0 prints their samples.
 const SCOPE_KEY_LIMIT = Number(process.env.BURROW_SCOPE_KEY_LIMIT ?? 4);
@@ -1116,7 +1116,7 @@ const ALIAS_CASES = [
     keys: ["alt+slash", "snap", "Escape", "snap", "Escape"],
     check: ({ snaps: [a, b] }) => {
       if (!a?.sheet) return "no key list after ⌥/";
-      if (JSON.stringify(a.sheet.groups) !== JSON.stringify(["Pick", "Aliases", "Drill", "Preview", "Filters"])) return `groups ${JSON.stringify(a.sheet.groups)}`;
+      if (JSON.stringify(a.sheet.groups) !== JSON.stringify(["Pick", "Aliases", "Drill", "Related", "Preview", "Filters"])) return `groups ${JSON.stringify(a.sheet.groups)}`;
       if (!["⌥A", "⌥⌫", "⌥↓", "⇥ or >", "⌃O"].every((k) => a.sheet.keys.includes(k))) return `keys ${JSON.stringify(a.sheet.keys)}`;
       if (!a.popoverCovered) return "Roam's popover still shows under the key list";
       if (!a.sheet.inWindow) return `key list outside the window ${JSON.stringify(a.sheet.box)}`;

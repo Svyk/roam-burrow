@@ -6,6 +6,7 @@ const NAMED = {
   altBackspace: ["⌥⌫", "Alt+⌫"],
   ctrlO: ["⌃O", "Ctrl+O"],
   altSlash: ["⌥/", "Alt+/"],
+  altR: ["⌥R", "Alt+R"],
   altShift9: ["⌥⇧9", "Alt+Shift+9"],
   shiftEnter: ["⇧↵", "Shift+↵"],
   altEnter: ["⌥↵", "Alt+↵"],
@@ -38,11 +39,22 @@ export function hintsKey(items) {
 //     chips: more aliases to pick, drill: Tab drills into it, aliasNew: ⌥A applies };
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
 //   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them (s.recentAbove: all of them recent rows);
+//   s.related: "available" (the Related band has rows) | "active" (one of them holds the selection) | null;
 //   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline,
 //     insertVariants, openInSidebar }; s.held: ⇧, ⌥ or ⌘ held on a Burrow row (the line
 //     is full already, so the variants take its place while a modifier is held).
 // The drill key names what Tab lists: a page's blocks or a block's children.
 export function pickerHints(s, mac = IS_MAC) {
+  if (s.related === "active") {
+    return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
+  }
+  const items = baseHints(s, mac);
+  // Not in the alias chips, a prompt or the held-modifier variants: those lines name only their own keys.
+  if (s.related === "available" && !s.prompt && !s.chips && !s.held) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
+  return items;
+}
+
+function baseHints(s, mac) {
   const on = s.on || {};
   const k = (name) => keyLabel(name, mac);
   const PAGE = "blocks on this page";
