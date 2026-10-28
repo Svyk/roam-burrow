@@ -73,10 +73,12 @@ const QUERY = config.query;
 const instrument = () => c.evaluate(() => {
   const api = window.roamAlphaAPI;
   if (window.__footGate) return "already";
-  const gate = { calls: [], console: [], origSearch: api.data.async.semanticSearch, origEnabled: api.data.semanticSearchEnabled, origConsole: {} };
+  const gate = { calls: [], console: [], delayMs: 0, origSearch: api.data.async.semanticSearch, origEnabled: api.data.semanticSearchEnabled, origConsole: {} };
   api.data.async.semanticSearch = function gateSearch(...args) {
     gate.calls.push(String(args[0]?.["search-str"] ?? ""));
-    return gate.origSearch.apply(this, args);
+    const reply = gate.origSearch.apply(this, args);
+    // The height case holds replies back, so it sees the pane before the footer.
+    return gate.delayMs ? new Promise((r) => setTimeout(r, gate.delayMs)).then(() => reply) : reply;
   };
   for (const m of ["warn", "error", "log", "debug"]) {
     gate.origConsole[m] = console[m];
@@ -188,6 +190,20 @@ const shot = () => c.evaluate(() => {
     value: document.activeElement?.tagName === "TEXTAREA" ? document.activeElement.value : null,
     focusedInput: document.activeElement?.id === window.__burrowFixture?.inputId,
   };
+});
+
+// The footer's rows: how many Burrow can select, how many are drawn, and
+// which drawn ones the footer or the pane cuts (outside their boxes).
+const visibleFooter = () => c.evaluate(() => {
+  const foot = [...document.querySelectorAll(".burrow-preview-related")].find((n) => n.getClientRects().length);
+  const rows = window.__BURROW?.related?.footer?.rows ?? [];
+  if (!foot) return { debug: rows.length, dom: 0, cut: [], uids: [] };
+  const fb = foot.getBoundingClientRect();
+  const pb = foot.closest(".burrow-preview").getBoundingClientRect();
+  const nodes = [...foot.querySelectorAll(".burrow-row")];
+  const inside = (r, b) => r.top >= b.top - 0.5 && r.bottom <= b.bottom + 0.5;
+  const cut = nodes.map((n, i) => { const r = n.getBoundingClientRect(); return inside(r, fb) && inside(r, pb) ? null : i; }).filter((i) => i != null);
+  return { debug: rows.length, dom: nodes.length, cut, uids: rows.map((r) => r.uid) };
 });
 
 // Rects of the pane(s), the popover, the strip and the drill panel, plus the
@@ -430,7 +446,7 @@ const brief = (t, n = 60) => (t || "").replace(/\s+/g, " ").slice(0, n);
 const NAMES = {
   acceptance: `acceptance: ${config.acceptQuery ?? QUERY} → 1-4 footer rows, none the subject or on its page`,
   dedupe: `dedupe: ${QUERY} → no footer row is a row Roam's list shows`,
-  height: "height: the pane and the popover keep their size when the footer arrives",
+  height: "height: the pane and the popover keep their size when the footer arrives; every selectable row drawn whole",
   switchOff: "switch off removes it",
   keys: "⌥R / ↑↓ / Esc / Enter",
   variants: "⇧↵ embed, ⌥↵ labelled ref",
@@ -503,7 +519,8 @@ function dedupeVerdict({ on }) {
 // ("row", Roam's preview expanded and docked) or the drill panel ("scope", Shift+Tab).
 async function heightRun(mode) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const opened = await openQuery();
+    // The query with the most footer rows (notes: four), so a cut row would show.
+    const opened = await openQuery(config.acceptQuery ?? QUERY);
     if (opened.error) return opened;
     const sub = await waitSubject(config.subject);
     if (!sub) { await c.key("Escape"); await readBack(); return { error: "no active subject row" }; }
@@ -533,11 +550,17 @@ async function heightRun(mode) {
       await sleep(40);
     }
     const phaseAfter = await c.evaluate(() => window.__BURROW?.state.phase);
-    await c.key("Escape");
-    await c.key("Escape");
-    await readBack();
-    if (!after) return { error: "no footer" };
-    if (before) return { before, after, phaseAfter, mode };
+    if (!after) { await c.key("Escape"); await c.key("Escape"); await readBack(); return { error: "no footer" }; }
+    // Every row Burrow can select is drawn whole inside the footer and the
+    // pane; then ⌥R and ↓ past the end, and Enter inserts the last drawn row.
+    await sleep(300);
+    const seen = await visibleFooter();
+    await altR();
+    for (let i = 0; i < 6; i++) await key("ArrowDown");
+    const enterFoot = await c.evaluate(() => window.__BURROW?.state.foot ?? null);
+    await key("Enter");
+    const back = await readBack();
+    if (before) return { before, after, phaseAfter, mode, seen, enterFoot, string: back.string };
     // The footer was there before the first sample: ask again.
   }
   return { error: "the footer was already there at the first sample twice" };
@@ -556,7 +579,13 @@ function heightVerdict({ on }) {
     if (!rectEq(b.strip, a.strip)) bad.push(`the strip ${JSON.stringify(b.strip)} → ${JSON.stringify(a.strip)}`);
     if (!rectEq(b.scope, a.scope)) bad.push(`the drill panel ${JSON.stringify(b.scope)} → ${JSON.stringify(a.scope)}`);
     if (r.mode === "scope" && r.phaseAfter !== "SCOPE") bad.push(`phase ${r.phaseAfter} after the footer arrived`);
-    detail.push(`${r.mode === "scope" ? "drill panel (SCOPE)" : "row preview (expanded)"}: ${bad.length ? bad.join(", ") : `equal (${b.pane.length} pane rect(s), footer ${a.n} row(s))`}`);
+    const v = r.seen;
+    if (v.debug !== v.dom) bad.push(`${v.debug} selectable row(s) but ${v.dom} drawn`);
+    if (v.cut.length) bad.push(`footer row(s) ${v.cut.join(", ")} not drawn whole`);
+    const last = v.uids[v.uids.length - 1];
+    if (r.enterFoot !== v.uids.length - 1) bad.push(`↓ past the end reached footer index ${r.enterFoot}, last drawn is ${v.uids.length - 1}`);
+    if (!last || !String(r.string).endsWith(`((${last}))`)) bad.push(`Enter after ↓ past the end stored ${JSON.stringify(r.string)}, want the last drawn row ((${last}))`);
+    detail.push(`${r.mode === "scope" ? "drill panel (SCOPE)" : "row preview (expanded)"}: ${bad.length ? bad.join(", ") : `equal (${b.pane.length} pane rect(s), footer ${v.dom} row(s), all whole; ↓×6 Enter → ((${last})))`}`);
     if (bad.length) failures.push(`${r.mode}: ${bad.join(", ")}`);
   }
   return { failures, detail: detail.join("; ") };
@@ -822,9 +851,14 @@ const CASES = [
   {
     name: NAMES.height, graphs: ["svy", "notes"], arms: ["on"],
     run: async () => {
-      const row = await heightRun("row");
-      const scope = await heightRun("scope");
-      return { row: { label: "row preview", ...row }, scope: { label: "drill panel", ...scope } };
+      await c.evaluate(() => { window.__footGate.delayMs = 2500; });
+      try {
+        const row = await heightRun("row");
+        const scope = await heightRun("scope");
+        return { row: { label: "row preview", ...row }, scope: { label: "drill panel", ...scope } };
+      } finally {
+        await c.evaluate(() => { if (window.__footGate) window.__footGate.delayMs = 0; });
+      }
     },
     verdict: heightVerdict,
   },

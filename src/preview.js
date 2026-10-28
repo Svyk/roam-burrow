@@ -310,7 +310,7 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
   function cancelFootFrame() { if (footFrame != null) { win.cancelAnimationFrame(footFrame); footFrame = null; } }
 
   // nodes: row elements (made and wired by src/strip.js), or null to take the
-  // footer away. Beside the popover the pane's height is pinned first, so the
+  // footer away. Returns how many of them are drawn (the first ones). Beside the popover the pane's height is pinned first, so the
   // footer takes room inside it; the line it may cover is scrolled clear in
   // the next frame.
   function setFooter(nodes) {
@@ -333,11 +333,17 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
     const label = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
     footerNode.replaceChildren(label, ...nodes);
     pane.append(footerNode);
+    // The footer is capped (60% of the pane) and clips: a row it cuts would
+    // still take ↓ and Enter, so rows that do not fit whole are not drawn.
+    let fit = nodes.length;
+    while (fit > 0 && footerNode.scrollHeight > footerNode.clientHeight + 0.5) footerNode.lastChild.remove(), fit -= 1;
+    if (!fit) { setFooter(null); return 0; }
     cancelFootFrame();
     footFrame = win.requestAnimationFrame(() => {
       footFrame = null;
       if (!pane.hidden && footerNode?.parentNode === pane) scrollToTarget();
     });
+    return fit;
   }
 
   // The scroll to the highlighted line reads layout, so a docked draw leaves

@@ -3660,11 +3660,18 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     const label = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
     footerNode.replaceChildren(label, ...nodes);
     pane.append(footerNode);
+    let fit = nodes.length;
+    while (fit > 0 && footerNode.scrollHeight > footerNode.clientHeight + 0.5) footerNode.lastChild.remove(), fit -= 1;
+    if (!fit) {
+      setFooter(null);
+      return 0;
+    }
     cancelFootFrame();
     footFrame = win.requestAnimationFrame(() => {
       footFrame = null;
       if (!pane.hidden && footerNode?.parentNode === pane) scrollToTarget();
     });
+    return fit;
   }
   let scrollFrame = null;
   const cancelScroll = () => {
@@ -6014,7 +6021,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     trace: (event) => trace({ ...event, ev: "footer" }),
     graph: () => api.graph?.name ?? "",
     k: FOOTER_K,
-    keyOf: (token) => `${api.graph?.name ?? ""}\0foot\0${token.uid}`,
+    keyOf: (token) => `${api.graph?.name ?? ""}\0foot\0${token.uid}\0${token.query}`,
     perfName: "related.footer.request",
     onReply: (token, list) => onFooterReply(token, list)
   });
@@ -6183,9 +6190,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const t0 = performance.now();
     const rows = relatedVisible(job.done, FOOTER_ROWS);
     if (!rows.length) return;
-    footer.rows = rows;
-    footer.nodes = rows.map((row, i) => rowNode(row, i));
-    footerPane().setFooter(footer.nodes);
+    const nodes = rows.map((row, i) => rowNode(row, i));
+    const fit = footerPane().setFooter(nodes);
+    if (!fit) return;
+    footer.rows = rows.slice(0, fit);
+    footer.nodes = nodes.slice(0, fit);
     paintFooter();
     layoutPop();
     perf.push("related.footer.draw", performance.now() - t0);

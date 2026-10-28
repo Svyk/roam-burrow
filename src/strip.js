@@ -1711,7 +1711,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const footer = { key: null, subject: null, timer: null, job: null, rows: [], nodes: [] };
   const foot = createSemantic({
     api, win, perf, trace: (event) => trace({ ...event, ev: "footer" }), graph: () => api.graph?.name ?? "",
-    k: FOOTER_K, keyOf: (token) => `${api.graph?.name ?? ""}\u0000foot\u0000${token.uid}`, perfName: "related.footer.request",
+    k: FOOTER_K, keyOf: (token) => `${api.graph?.name ?? ""}\u0000foot\u0000${token.uid}\u0000${token.query}`, perfName: "related.footer.request",
     onReply: (token, list) => onFooterReply(token, list),
   });
 
@@ -1872,9 +1872,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const t0 = performance.now();
     const rows = relatedVisible(job.done, FOOTER_ROWS);
     if (!rows.length) return;
-    footer.rows = rows;
-    footer.nodes = rows.map((row, i) => rowNode(row, i));
-    footerPane().setFooter(footer.nodes);
+    const nodes = rows.map((row, i) => rowNode(row, i));
+    // Only the rows the footer draws whole can be highlighted or inserted.
+    const fit = footerPane().setFooter(nodes);
+    if (!fit) return;
+    footer.rows = rows.slice(0, fit);
+    footer.nodes = nodes.slice(0, fit);
     paintFooter();
     layoutPop();
     perf.push("related.footer.draw", performance.now() - t0);

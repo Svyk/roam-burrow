@@ -184,3 +184,27 @@ test("settings: semanticRelated is on by default, has a switch after semanticRow
   assert.match(entry.description, /first ten blocks, up to 600 characters/);
   assert.match(entry.description, /kept per graph/);
 });
+
+test("rows the capped footer cannot show whole are not drawn: setFooter says how many are", () => {
+  const preview = createPreview({ doc, win, lifecycle: createLifecycle() });
+  stubHeight(preview.node, 120);
+  preview.show(model("c1"), popover, { beside: { left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 } });
+  // A label of 18 px and rows of 33 px in a footer capped at 72 px (60% of 120): one row fits.
+  let cap = 72;
+  const realAppend = preview.node.append.bind(preview.node);
+  preview.node.append = (node) => {
+    if (node.className === "burrow-preview-related") {
+      Object.defineProperty(node, "clientHeight", { configurable: true, get: () => cap });
+      Object.defineProperty(node, "scrollHeight", { configurable: true, get: () => 18 + 33 * node.querySelectorAll(".burrow-row").length });
+    }
+    return realAppend(node);
+  };
+  const four = ["r1", "r2", "r3", "r4"].map((uid, i) => Object.assign(doc.createElement("div"), { className: "burrow-row", textContent: uid }));
+  assert.equal(preview.setFooter(four), 1);
+  assert.equal(preview.footerRows, 1);
+  assert.equal(preview.node.querySelector(".burrow-preview-related .burrow-row").textContent, "r1");
+  cap = 10;
+  assert.equal(preview.setFooter(four.slice(0, 1)), 0, "not even one row: no footer");
+  assert.equal(preview.node.querySelector(".burrow-preview-related"), null);
+  assert.equal(preview.node.style.height, "", "and no pin");
+});
