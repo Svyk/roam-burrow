@@ -4740,7 +4740,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         aliasNew: aliasNew(row.kind === "alias" || row.kind === "page"),
         drill: canDrill(ownedSource(row, st.chip)),
         block: Boolean(ownedSource(row, -1)?.block),
-        page: variantTarget(row)?.type === "page"
+        page: variantType(row) === "page"
       } : null,
       native: !row && kind === "[[" ? (() => {
         const source = armedSource();
@@ -5286,6 +5286,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     consume(event);
     return true;
   }
+  function variantType(row) {
+    if (row?.kind === "alias" || row?.kind === "page") return "page";
+    if (row?.kind === "ref") return "block";
+    if (row?.kind === "drill" && st.drill) return st.drill.target ? "block" : "page";
+    return null;
+  }
   function variantTarget(row, chip = -1) {
     if (row?.kind === "alias") return { type: "page", uid: row.uid, title: row.title, alias: chip >= 0 ? row.aliases[chip] : row.alias };
     if (row?.kind === "page") return { type: "page", uid: row.uid, title: row.title };
@@ -5314,7 +5320,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       setHeld(false);
       return;
     }
-    const can = st.phase === "OWNED" && variantTarget(shown[st.active]) || st.phase === "SCOPE";
+    const can = st.phase === "OWNED" && variantType(shown[st.active]) || st.phase === "SCOPE";
     if (!can || st.held || holdTimer || !setting("keyHints") || !(setting("insertVariants") || setting("openInSidebar"))) return;
     holdTimer = win.setTimeout(() => {
       holdTimer = null;

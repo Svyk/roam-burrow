@@ -1119,7 +1119,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       row: row ? {
         kind: row.kind, chips: chipsAvailable(row), aliasNew: aliasNew(row.kind === "alias" || row.kind === "page"),
         drill: canDrill(ownedSource(row, st.chip)), block: Boolean(ownedSource(row, -1)?.block),
-        page: variantTarget(row)?.type === "page",
+        page: variantType(row) === "page",
       } : null,
       native: !row && kind === "[[" ? (() => {
         const source = armedSource();
@@ -1684,6 +1684,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   // ---- insert variants and the sidebar (src/variants.js) ----
 
+  // The kind of target a row has, for the hint line on every key: no block
+  // text is read (variantTarget resolves refs in it, only on a key or hover).
+  function variantType(row) {
+    if (row?.kind === "alias" || row?.kind === "page") return "page";
+    if (row?.kind === "ref") return "block";
+    if (row?.kind === "drill" && st.drill) return st.drill.target ? "block" : "page";
+    return null;
+  }
+
   // What ⇧↵ ⌥↵ ⌘⇧↵ act on for a strip row (`chip`: the selected alias chip).
   function variantTarget(row, chip = -1) {
     if (row?.kind === "alias") return { type: "page", uid: row.uid, title: row.title, alias: chip >= 0 ? row.aliases[chip] : row.alias };
@@ -1713,7 +1722,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   }
   function holdKey(event) {
     if (!MODIFIER_KEYS.has(event.key)) { setHeld(false); return; }
-    const can = (st.phase === "OWNED" && variantTarget(shown[st.active])) || st.phase === "SCOPE";
+    const can = (st.phase === "OWNED" && variantType(shown[st.active])) || st.phase === "SCOPE";
     if (!can || st.held || holdTimer || !setting("keyHints") || !(setting("insertVariants") || setting("openInSidebar"))) return;
     holdTimer = win.setTimeout(() => { holdTimer = null; setHeld(true); }, HOLD_MS);
   }
