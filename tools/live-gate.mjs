@@ -59,7 +59,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "insertVariants", "openInSidebar"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar"];
 const REF_COMMAND = "Burrow: block reference search";
 // The drill panel's ↓ limit for the image cases; BURROW_SCOPE_KEY_LIMIT=0 prints their samples.
 const SCOPE_KEY_LIMIT = Number(process.env.BURROW_SCOPE_KEY_LIMIT ?? 4);
@@ -186,6 +186,7 @@ async function state() {
       // Block text is never HTML: no element the text could have made, and no handler that ran.
       htmlEls: [...document.querySelectorAll(".burrow-strip img, .burrow-strip b, .burrow-strip script")].map((n) => n.tagName),
       xss: window.__burrowXss ?? null,
+      tableChains: window.__BURROW_PERF?.counters?.tableChains ?? 0,
       firstUid: b?.state.rows?.[0]?.uid ?? null,
       activeUid: b && b.state.phase === "OWNED" ? b.state.rows?.[b.state.active]?.uid ?? null : null,
       context: document.querySelector(".burrow-strip:not([hidden]) .burrow-context")?.textContent ?? null,
@@ -217,6 +218,27 @@ async function state() {
             if (!t) return null;
             const a = t.getBoundingClientRect(); const b = pane.getBoundingClientRect();
             return a.top >= b.top - 1 && a.bottom <= b.bottom + 1;
+          })(),
+          linesAfterTarget: (() => {
+            const lines = [...pane.querySelectorAll(".burrow-node")];
+            const at = lines.indexOf(pane.querySelector(".burrow-target"));
+            return at < 0 ? null : lines.slice(at + 1).filter((n) => !n.hidden).length;
+          })(),
+          table: (() => {
+            const grid = pane.querySelector(".burrow-table");
+            if (!grid) return null;
+            const line = grid.closest(".burrow-node");
+            const target = pane.querySelector(".burrow-target");
+            return {
+              cells: [...grid.querySelectorAll(".burrow-cell")].map((n) => n.textContent),
+              cols: Number(grid.style.getPropertyValue("--burrow-cols")),
+              footer: pane.querySelector(".burrow-table-more")?.textContent ?? null,
+              bold: Boolean(grid.querySelector(".burrow-cell .burrow-b")),
+              ref: Boolean(grid.querySelector(".burrow-cell .burrow-ref")),
+              onAttrs: [pane, ...pane.querySelectorAll("*")].filter((n) => [...n.attributes].some((a) => a.name.startsWith("on"))).length,
+              fits: grid.getBoundingClientRect().right <= pane.getBoundingClientRect().right + 1,
+              afterTarget: Boolean(line && target && target.nextElementSibling === line),
+            };
           })(),
           nativeHidden: [...document.querySelectorAll(".rm-autocomplete__results.burrow-drill .rm-autocomplete__preview > *")].every((n) => getComputedStyle(n).visibility === "hidden"),
         };
@@ -503,6 +525,42 @@ const CASES = [
 // tree's uids, known once the fixture exists.
 const DRILL_PAGE = FIXTURE_PAGE;
 const DRILL_Q = `[[${DRILL_PAGE}#alpha > never`;
+const TABLE_Q = `[[${DRILL_PAGE} > tables section > `;
+// The table line is drawn at idle after the key (src/preview.js), so the checks read a snap taken after a wait.
+const tableCellsCheck = (on) => {
+  const t = on.snaps?.[0]?.preview?.table;
+  if (!t) return `no table in the preview ${JSON.stringify(on.snaps?.[0]?.preview)}`;
+  const long = t.cells.find((x) => x.startsWith("zebra long cell"));
+  const bad = [];
+  if (t.cells.length !== 30) bad.push(`${t.cells.length} cells`);
+  if (t.cells[0] !== "Item") bad.push(`first cell ${JSON.stringify(t.cells[0])}`);
+  if (t.footer !== "+2 rows, +2 cols") bad.push(`footer ${JSON.stringify(t.footer)}`);
+  if (!t.cells.includes("=B2*C2")) bad.push("no =B2*C2 cell");
+  if (!long || !long.endsWith("…") || long.length > 41) bad.push(`long cell ${JSON.stringify(long)}`);
+  if (!t.bold) bad.push("no bold part");
+  if (!t.ref) bad.push("no ref part");
+  if (t.onAttrs) bad.push(`${t.onAttrs} element(s) with on* attributes`);
+  if (!t.fits) bad.push("grid wider than the pane");
+  if (!t.afterTarget) bad.push("table line not right after the highlighted block");
+  return bad.length ? bad.join("; ") : null;
+};
+const tableOffCheck = (on) => {
+  const p = on.snaps?.[0]?.preview;
+  if (!p) return "no preview";
+  if (p.table) return `a table was drawn with previewTables off ${JSON.stringify(p.table.footer)}`;
+  return p.linesAfterTarget > 0 ? null : `no outline lines after the target (${p.linesAfterTarget})`;
+};
+const tableBigCheck = (on) => {
+  const [a, b] = on.snaps;
+  const t = b?.preview?.table;
+  if (!t) return `no table after > ${JSON.stringify(b?.preview)}`;
+  const bad = [];
+  if (t.footer !== "+194 rows") bad.push(`footer ${JSON.stringify(t.footer)}`);
+  if (t.cells.length !== 12) bad.push(`${t.cells.length} cells`);
+  const chains = (b?.tableChains ?? NaN) - (a?.tableChains ?? NaN);
+  if (chains !== 6) bad.push(`${chains} chain pulls, not 6`);
+  return bad.length ? bad.join("; ") : null;
+};
 const DRILL_CASES = [
   { name: "drill: Enter inserts the resolved block", query: DRILL_Q, keys: ["Enter"], on: (d) => `${SEED}((${d.never}))`, preview: { trail: `${DRILL_PAGE} › Alpha section`, target: "never grok for writing" } },
   { name: "drill: Tab inserts the resolved block", query: DRILL_Q, keys: ["Tab"], on: (d) => `${SEED}((${d.never}))`, settings: { tabDrill: false } },
@@ -520,6 +578,13 @@ const DRILL_CASES = [
   { name: "drill: typed > 2 takes the numbered block", query: `[[${DRILL_PAGE} > steps > 2`, keys: ["Enter"], on: (d) => `${SEED}((${d.two}))`, line: true },
   // Burrow's preview shows 16 of the section's 55 children and says so.
   { name: "drill: preview caps children with +N more", query: `[[${DRILL_PAGE} > many`, keys: ["Enter"], on: (d) => `${SEED}((${d.many}))`, previewMore: "+39 more", line: true },
+  // BRW-20: a highlighted {{[[table]]}} block draws its first 6x5 cells under it. The empty last
+  // step takes the table: it is the only child of the section, and drillEmpty keeps an empty-text
+  // block that has children (src/drill.js bestMatch; stripRoamMarkup drops the macro, so "table" would not match).
+  { name: "table: drill preview draws the first 6x5 cells", query: TABLE_Q, keys: ["wait:600", "snap", "Enter"], on: (d) => `${SEED}((${d.tableSmall}))`, check: tableCellsCheck },
+  { name: "table: Escape on a drilled table", query: TABLE_Q, keys: ["Escape"] },
+  { name: "table: switch off draws the outline", query: TABLE_Q, keys: ["wait:600", "snap", "Enter"], settings: { previewTables: false }, on: (d) => `${SEED}((${d.tableSmall}))`, check: tableOffCheck },
+  { name: "table: a 200-row table reads 6 rows' chains", query: `[[${DRILL_PAGE} > big table section`, keys: ["snap", "type: > ", "wait:800", "snap", "Escape"], check: tableBigCheck },
 ];
 
 // Query filters (0.9.0): Escape leaves the text alone, Enter on a filtered
@@ -2781,6 +2846,10 @@ if (flags.includes("--json")) {
   console.log(`  recent rows: picked row first, not selected: ${report.pick?.recent?.firstUid === report.pick?.recent?.chosen && report.pick?.recent?.active === -1}; frequent first after 3 picks: ${report.pick?.frecency?.afterFirst === report.pick?.frecency?.target}; forget: ${report.pick?.forget?.size === 0}`);
   const p = report.arms.on?.[DRILL_CASES[0].name]?.before?.preview;
   console.log(`  drill preview: trail ${JSON.stringify(p?.trail)}, highlighted ${JSON.stringify(p?.target)}, in view ${p?.targetVisible}`);
+  const tableOn = report.arms.on?.[DRILL_CASES.find((k) => k.name.startsWith("table: drill preview"))?.name];
+  if (tableOn) tableOn.before = tableOn.snaps?.[0] ?? tableOn.before;
+  const bigOn = report.arms.on?.[DRILL_CASES.find((k) => k.name.startsWith("table: a 200-row"))?.name];
+  console.log(`  table preview: cells ${tableOn?.before?.preview?.table?.cells.length ?? "none"}, footer ${JSON.stringify(tableOn?.before?.preview?.table?.footer ?? null)}, chains for the 200-row table ${bigOn?.snaps ? (bigOn.snaps[1]?.tableChains ?? 0) - (bigOn.snaps[0]?.tableChains ?? 0) : "n/a"}`);
   console.log(`  fast typing then Enter: ${JSON.stringify(report.fast?.string)}`);
   for (const line of report.lines || []) console.log(`  ${line}`);
   console.log(`  text boxes: ${report.overlap?.states.length} picker states, ${report.overlap?.states.reduce((n, st) => n + st.boxes, 0)} text boxes, ${report.overlap?.problems.length} intersecting pairs`);

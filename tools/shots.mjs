@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "insertVariants", "openInSidebar"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -126,13 +126,16 @@ const SCENARIOS = [
   { id: "70-thumb-many", query: "((zebra photo many", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
   { id: "71-thumb-broken", query: "((zebra photo broken", keys: ["preview-open", "wait-thumb:failed:6000", "wait:500"] },
   { id: "72-thumb-tab-drill", query: "((zebra photos", keys: ["preview-open", "Tab", "ArrowDown", "ArrowDown", "wait-thumb:ok:6000", "wait:500"] },
+  // BRW-20: the highlighted {{[[table]]}} block draws its first 6x5 cells in Burrow's drill preview.
+  { id: "73-table-preview", query: `[[${FIXTURE_PAGE} > tables section > `, keys: ["wait:600"], loose: true },
+  { id: "74-table-preview-big", query: `[[${FIXTURE_PAGE} > big table section > `, keys: ["wait:600"], loose: true },
   // 0.10.0: insert variants and the sidebar.
-  { id: "73-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "74-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "75-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
-  { id: "76-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
-  { id: "77-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
-  { id: "78-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
+  { id: "75-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "76-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "77-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "78-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
+  { id: "79-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
+  { id: "80-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
 ];
 
 const c = await connect(title);
