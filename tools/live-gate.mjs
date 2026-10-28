@@ -62,7 +62,7 @@ const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "be
   "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages"];
 const REF_COMMAND = "Burrow: block reference search";
 // The drill panel's ↓ limit for the image cases; BURROW_SCOPE_KEY_LIMIT=0 prints their samples.
-const SCOPE_KEY_LIMIT = Number(process.env.BURROW_SCOPE_KEY_LIMIT ?? 8);
+const SCOPE_KEY_LIMIT = Number(process.env.BURROW_SCOPE_KEY_LIMIT ?? 4);
 
 const [title, configName, ...flags] = process.argv.slice(2);
 const config = CONFIGS[configName];
@@ -258,7 +258,7 @@ async function state() {
         return null;
       })(),
       thumbAny: document.querySelectorAll(".burrow-thumb").length,
-      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.["scope.key"] || []).slice(-40).map((x) => Math.round(x * 100) / 100) },
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.["scope.key"] || []).slice(-40).map((x) => Math.round(x * 100) / 100), frames: (window.__BURROW_PERF?.samples?.["scope.preview"] || []).slice(-40).map((x) => Math.round(x * 100) / 100) },
       thumbLog: window.__burrowThumbLog ?? null,
       urlNet: window.__burrowUrlNet ?? null,
       pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
@@ -646,7 +646,7 @@ async function runKeys(keys, snaps = []) {
         if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
         await sleep(100);
       }
-    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; if (window.__BURROW_PERF?.samples) window.__BURROW_PERF.samples["scope.key"] = []; });
+    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; if (window.__BURROW_PERF?.samples) window.__BURROW_PERF.samples["scope.key"] = []; window.__BURROW_PERF.samples["scope.preview"] = []; });
     else if (k === "count-urls") {
       await c.evaluate(() => {
         if (window.__burrowUrlWrap) return;
@@ -1364,12 +1364,11 @@ const BLOCK_CASES = [
     keys: ["preview-open", "wait:400", "Tab", "wait:300", "reset-loads", "count-urls", ...Array(9).fill("ArrowDown"), "wait-thumb:ok:6000", "snap", "Escape", "Escape", "wait:200", "snap"],
     check: ({ snaps: [a, b] }) => {
       if (!(a?.thumbCounters?.loads <= 1)) return `loads ${JSON.stringify(a?.thumbCounters)}`;
-      // Each ↓ redraws the preview beside the list, with its box, in the key's own work: held to the 4 ms budget.
+      // Each ↓ paints the row in the key ("scope.key": held to the 4 ms budget); the preview beside the list, with its box, is drawn in the next frame ("scope.preview": reported in the failure message, not asserted).
       const downs = [...a.thumbCounters.keys].sort((x, y) => x - y);
       const p95 = downs[Math.min(downs.length - 1, Math.floor(0.95 * downs.length))];
-      // ↓ in the drill panel redraws its preview in the key (0.7.0): p95 about 5 ms in notes with images on or off
-      // (the next case). The thumbnail must not add to it: held to twice the typing budget, not to 4 ms.
-      if (!(downs.length >= 9 && p95 <= SCOPE_KEY_LIMIT)) return `↓ keys p95 ${p95} ms (limit ${SCOPE_KEY_LIMIT}): ${JSON.stringify(a.thumbCounters.keys)}`;
+      // The preview redraw left the key (it was about 5 ms in the key in notes, 0.7.0): the key's part alone is held to SCOPE_KEY_LIMIT.
+      if (!(downs.length >= 9 && p95 <= SCOPE_KEY_LIMIT)) return `↓ keys p95 ${p95} ms (limit ${SCOPE_KEY_LIMIT}): keys ${JSON.stringify(a.thumbCounters.keys)} frames ${JSON.stringify(a.thumbCounters.frames)}`;
       if (a.thumb?.state !== "ok" || !a.preview?.target?.includes("zebra photo 10")) return `last row ${JSON.stringify(a?.thumb)} ${JSON.stringify(a?.preview?.target)}`;
       return b?.thumbCounters?.urls === 0 && b.urlNet === 0 ? null : `after close ${JSON.stringify(b?.thumbCounters)} urlNet ${b?.urlNet}`;
     },
@@ -1381,7 +1380,7 @@ const BLOCK_CASES = [
       const downs = [...(a?.thumbCounters?.keys || [])].sort((x, y) => x - y);
       const p95 = downs[Math.min(downs.length - 1, Math.floor(0.95 * downs.length))];
       if (a?.thumbAny || a?.thumbCounters?.loads) return `thumbnails with the switch off ${a.thumbAny} ${JSON.stringify(a.thumbCounters)}`;
-      return downs.length >= 9 && p95 <= SCOPE_KEY_LIMIT ? null : `↓ keys p95 ${p95} ms (limit ${SCOPE_KEY_LIMIT}): ${JSON.stringify(a?.thumbCounters?.keys)}`;
+      return downs.length >= 9 && p95 <= SCOPE_KEY_LIMIT ? null : `↓ keys p95 ${p95} ms (limit ${SCOPE_KEY_LIMIT}): keys ${JSON.stringify(a?.thumbCounters?.keys)} frames ${JSON.stringify(a?.thumbCounters?.frames)}`;
     },
   },
   {

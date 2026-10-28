@@ -3088,35 +3088,60 @@ function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () => api?.g
     setImg(box, img);
     img.src = src;
   }
-  function plain(req) {
-    count();
+  function plain(req, counted = false) {
+    if (!counted) count();
     showImg(req, req.image.url, true);
+  }
+  const inflight = /* @__PURE__ */ new Map();
+  function download(url) {
+    const known = inflight.get(url);
+    if (known) return known;
+    const gen = generation;
+    count();
+    const p = (async () => {
+      const file = await api.file.get({ url });
+      if (gen !== generation) return void 0;
+      if (!file || !(file.size <= maxBytes)) return null;
+      try {
+        const objectUrl = win.URL.createObjectURL(file);
+        remember(url, objectUrl);
+        return objectUrl;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      if (inflight.get(url) === p) inflight.delete(url);
+    });
+    inflight.set(url, p);
+    return p;
+  }
+  function target(req) {
+    const cur = current;
+    if (!cur || !cur.box.isConnected) return null;
+    return cur === req || cur.box === req.box || cur.image.url === req.image.url ? cur : null;
   }
   async function decrypted(req) {
     const { box, image } = req;
-    const gen = generation;
     box.dataset.state = "loading";
-    count();
-    let file;
+    let objectUrl;
     try {
-      file = await api.file.get({ url: image.url });
+      objectUrl = await download(image.url);
     } catch {
-      if (!isEncryptedUrl(image.url) && current === req && box.isConnected) plain(req);
-      else fail(box, image);
+      const cur2 = target(req);
+      if (!isEncryptedUrl(image.url) && cur2) {
+        if (!cur2.box.querySelector(".burrow-thumb-img")) plain(cur2, true);
+      } else fail(box, image);
       return;
     }
-    try {
-      if (!file || !(file.size <= maxBytes)) {
-        fail(box, image);
-        return;
-      }
-      if (gen !== generation) return;
-      const objectUrl = win.URL.createObjectURL(file);
-      remember(image.url, objectUrl);
-      if (current === req && box.isConnected) showImg(req, objectUrl, false);
-    } catch {
+    if (objectUrl === void 0) return;
+    if (!objectUrl) {
       fail(box, image);
+      return;
     }
+    const cur = target(req);
+    if (!cur || cur.box.querySelector(".burrow-thumb-img")?.getAttribute("src") === objectUrl) return;
+    stopTimer();
+    showImg(cur, objectUrl, false);
   }
   function load(req) {
     try {
@@ -3145,6 +3170,7 @@ function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () => api?.g
   function clear() {
     cancel();
     generation++;
+    inflight.clear();
     for (const objectUrl of lru.values()) revoke(objectUrl);
     lru.clear();
     syncCount();
@@ -3162,6 +3188,12 @@ function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () => api?.g
         box.append(more);
       }
       return box;
+    },
+    // want() again for a box that may already be armed or drawn: no-op then.
+    ensure(box, image, owner) {
+      if (box.dataset.state === "ok" || box.dataset.state === "failed") return;
+      if (current?.box === box || box.querySelector(".burrow-thumb-img")) return;
+      this.want(box, image, owner);
     },
     want(box, image, owner) {
       stopTimer();
@@ -3272,6 +3304,9 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
   let pop = null;
   let thumb = null;
   let thumbSeen = false;
+  function rearmThumb() {
+    if (thumb?.box.isConnected) thumbs.ensure(thumb.box, thumb.image, pane);
+  }
   function dropThumb() {
     if (!thumb) return;
     thumbs.cancel(pane);
@@ -3347,9 +3382,9 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
       const key = `${item.uid}\0${item.image.url}`;
       if (thumb?.key !== key) {
         thumb?.box.remove();
-        thumb = { key, box: thumbs.box(item.image) };
+        thumb = { key, box: thumbs.box(item.image), image: item.image };
         thumbs.want(thumb.box, item.image, pane);
-      }
+      } else thumbs.ensure(thumb.box, item.image, pane);
       if (thumb.box.parentNode !== row || thumb.box !== row.lastChild) row.append(thumb.box);
     } else if (thumb && thumb.box.parentNode === row) thumb.box.remove();
   }
@@ -3421,7 +3456,10 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     fill(model, popover, { budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
-      if (model.key === shownKey) return;
+      if (model.key === shownKey) {
+        if (thumbs) rearmThumb();
+        return;
+      }
       render(model, Infinity, performance.now() + budgetMs);
       shownKey = model.key;
       filled = true;
@@ -3439,7 +3477,7 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
       if (model.key !== shownKey) {
         render(model, lines, performance.now() + budgetMs);
         shownKey = model.key;
-      }
+      } else if (thumbs) rearmThumb();
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);
@@ -5249,6 +5287,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.prompt = null;
     promptRows = [];
     cancelRowPreview();
+    cancelScopeFrame();
     thumbs.clear();
     model = null;
     scopeModel = null;
@@ -5827,12 +5866,25 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
     if (scopePreview.unfinished) scheduleRest(scopePreview, () => st.phase === "SCOPE" && Boolean(st.scope?.preview), "scope");
   }
+  let scopeFrame = null;
+  const cancelScopeFrame = () => {
+    if (scopeFrame != null) {
+      win.cancelAnimationFrame(scopeFrame);
+      scopeFrame = null;
+    }
+  };
+  lifecycle.add(cancelScopeFrame);
   function scopeMove(delta) {
     perf.time("scope.key", () => {
       const level = scopeLevel();
       level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
       scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
-      showScopePreview();
+      if (scopeFrame == null) {
+        scopeFrame = win.requestAnimationFrame(() => {
+          scopeFrame = null;
+          if (st.phase === "SCOPE" && st.scope) perf.time("scope.preview", showScopePreview);
+        });
+      }
     });
   }
   function scopeDeeper() {

@@ -106,31 +106,59 @@ export function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () =>
     img.src = src;
   }
 
-  function plain(req) {
-    count();
+  function plain(req, counted = false) {
+    if (!counted) count();
     showImg(req, req.image.url, true);
+  }
+
+  // One file.get per url at a time: url -> Promise<objectUrl | null | undefined>
+  // (null: unusable file, undefined: cleared meanwhile). Rejects when file.get does.
+  const inflight = new Map();
+  function download(url) {
+    const known = inflight.get(url);
+    if (known) return known;
+    const gen = generation;
+    count();
+    const p = (async () => {
+      const file = await api.file.get({ url });
+      if (gen !== generation) return undefined;
+      if (!file || !(file.size <= maxBytes)) return null;
+      try {
+        const objectUrl = win.URL.createObjectURL(file);
+        remember(url, objectUrl);
+        return objectUrl;
+      } catch { return null; }
+    })().finally(() => { if (inflight.get(url) === p) inflight.delete(url); });
+    inflight.set(url, p);
+    return p;
+  }
+
+  // The request a settled load of `req` shows in: the current one when it is
+  // the same box or the same url (a re-armed request), if its box is on the page.
+  function target(req) {
+    const cur = current;
+    if (!cur || !cur.box.isConnected) return null;
+    return cur === req || cur.box === req.box || cur.image.url === req.image.url ? cur : null;
   }
 
   async function decrypted(req) {
     const { box, image } = req;
-    const gen = generation;
     box.dataset.state = "loading";
-    count();
-    let file;
+    let objectUrl;
     try {
-      file = await api.file.get({ url: image.url });
+      objectUrl = await download(image.url);
     } catch {
-      if (!isEncryptedUrl(image.url) && current === req && box.isConnected) plain(req);
+      const cur = target(req);
+      if (!isEncryptedUrl(image.url) && cur) { if (!cur.box.querySelector(".burrow-thumb-img")) plain(cur, true); }
       else fail(box, image);
       return;
     }
-    try {
-      if (!file || !(file.size <= maxBytes)) { fail(box, image); return; }
-      if (gen !== generation) return;
-      const objectUrl = win.URL.createObjectURL(file);
-      remember(image.url, objectUrl);
-      if (current === req && box.isConnected) showImg(req, objectUrl, false);
-    } catch { fail(box, image); }
+    if (objectUrl === undefined) return;
+    if (!objectUrl) { fail(box, image); return; }
+    const cur = target(req);
+    if (!cur || cur.box.querySelector(".burrow-thumb-img")?.getAttribute("src") === objectUrl) return;
+    stopTimer();
+    showImg(cur, objectUrl, false);
   }
 
   function load(req) {
@@ -155,6 +183,7 @@ export function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () =>
   function clear() {
     cancel();
     generation++;
+    inflight.clear();
     for (const objectUrl of lru.values()) revoke(objectUrl);
     lru.clear();
     syncCount();
@@ -173,6 +202,12 @@ export function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () =>
         box.append(more);
       }
       return box;
+    },
+    // want() again for a box that may already be armed or drawn: no-op then.
+    ensure(box, image, owner) {
+      if (box.dataset.state === "ok" || box.dataset.state === "failed") return;
+      if (current?.box === box || box.querySelector(".burrow-thumb-img")) return;
+      this.want(box, image, owner);
     },
     want(box, image, owner) {
       stopTimer();

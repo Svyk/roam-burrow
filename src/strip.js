@@ -1461,6 +1461,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.prompt = null;
     promptRows = [];
     cancelRowPreview();
+    cancelScopeFrame();
     thumbs.clear();
     model = null;
     scopeModel = null;
@@ -2004,13 +2005,22 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (scopePreview.unfinished) scheduleRest(scopePreview, () => st.phase === "SCOPE" && Boolean(st.scope?.preview), "scope");
   }
 
-  // ↑/↓ in the drill panel redraw its preview in the key's own work: one "scope.key" sample each.
+  // ↑/↓ in the drill panel move the highlight in the key ("scope.key": the row paint only); the
+  // preview follows in the next frame ("scope.preview"), one draw for several keys.
+  let scopeFrame = null;
+  const cancelScopeFrame = () => { if (scopeFrame != null) { win.cancelAnimationFrame(scopeFrame); scopeFrame = null; } };
+  lifecycle.add(cancelScopeFrame);
   function scopeMove(delta) {
     perf.time("scope.key", () => {
       const level = scopeLevel();
       level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
       scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
-      showScopePreview();
+      if (scopeFrame == null) {
+        scopeFrame = win.requestAnimationFrame(() => {
+          scopeFrame = null;
+          if (st.phase === "SCOPE" && st.scope) perf.time("scope.preview", showScopePreview);
+        });
+      }
     });
   }
 

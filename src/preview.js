@@ -88,9 +88,13 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
   lifecycle.node(pane, doc.body);
   let shownKey = null;
   let pop = null;
-  // The highlighted line's thumbnail box (src/thumbs.js): { key, box }.
+  // The highlighted line's thumbnail box (src/thumbs.js): { key, box, image }.
   let thumb = null;
   let thumbSeen = false;
+  // A model drawn again unchanged still has its box armed (a row change cancels the dwell).
+  function rearmThumb() {
+    if (thumb?.box.isConnected) thumbs.ensure(thumb.box, thumb.image, pane);
+  }
   function dropThumb() {
     if (!thumb) return;
     thumbs.cancel(pane);
@@ -186,9 +190,9 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
       const key = `${item.uid}\u0000${item.image.url}`;
       if (thumb?.key !== key) {
         thumb?.box.remove();
-        thumb = { key, box: thumbs.box(item.image) };
+        thumb = { key, box: thumbs.box(item.image), image: item.image };
         thumbs.want(thumb.box, item.image, pane);
-      }
+      } else thumbs.ensure(thumb.box, item.image, pane);
       if (thumb.box.parentNode !== row || thumb.box !== row.lastChild) row.append(thumb.box);
     } else if (thumb && thumb.box.parentNode === row) thumb.box.remove();
   }
@@ -261,7 +265,7 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
     fill(model, popover, { budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
-      if (model.key === shownKey) return;
+      if (model.key === shownKey) { if (thumbs) rearmThumb(); return; }
       render(model, Infinity, performance.now() + budgetMs);
       shownKey = model.key;
       filled = true;
@@ -278,6 +282,7 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
       const changed = model.key !== shownKey || pane.hidden || filled;
       filled = false;
       if (model.key !== shownKey) { render(model, lines, performance.now() + budgetMs); shownKey = model.key; }
+      else if (thumbs) rearmThumb();
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);

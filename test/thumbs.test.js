@@ -258,3 +258,101 @@ test("preview: the box is reserved under the target, moves with it, hide() cance
   assert.equal(boxes().length, 0);
   assert.equal(perf.counters.thumbLoads, undefined);
 });
+
+// Drives createPreview + createThumbs the way strip.js does: a row change cancels, then the same model is shown again.
+function previewRig(over = {}) {
+  const rig = setup(over);
+  const preview = createPreview({ doc, win: dom.window, lifecycle: createLifecycle(), thumbs: rig.thumbs });
+  const pop = host();
+  const model = { key: "kA", trail: ["P"], items: [{ uid: "a", text: "a", string: "a", depth: 0, heading: 0, target: true, image: img("https://x/a.png", "a") }] };
+  const box = () => preview.node.querySelector(".burrow-thumb");
+  return { ...rig, preview, pop, model, box };
+}
+
+test("re-show of the same model after cancel() re-arms the plain thumbnail", () => {
+  const { win, perf, thumbs, preview, pop, model, box } = previewRig({ opts: { encrypted: () => false } });
+  preview.show(model, pop);
+  assert.equal(box().dataset.state, "wait");
+  thumbs.cancel();
+  assert.equal(win.pending, 0);
+  preview.show(model, pop);
+  assert.equal(win.pending, 1);
+  win.fire();
+  assert.equal(box().querySelector("img").getAttribute("src"), "https://x/a.png");
+  assert.equal(perf.counters.thumbLoads, 1);
+  preview.show(model, pop);
+  assert.equal(win.pending, 0, "a drawn box is left alone");
+});
+
+test("re-show while pending does not restart the dwell", () => {
+  const { win, preview, pop, model } = previewRig({ opts: { encrypted: () => false } });
+  preview.show(model, pop);
+  preview.show(model, pop);
+  preview.fill(model, pop);
+  assert.equal(win.pending, 1);
+});
+
+test("encrypted: cancel() during file.get, then re-show, shows the one download", async () => {
+  let release;
+  let calls = 0;
+  const { win, perf, thumbs, preview, pop, model, box } = previewRig({ get: () => { calls++; return new Promise((r) => { release = r; }); } });
+  preview.show(model, pop);
+  win.fire();
+  assert.equal(calls, 1);
+  assert.equal(box().dataset.state, "loading");
+  thumbs.cancel();
+  preview.show(model, pop);
+  win.fire();
+  assert.equal(calls, 1, "attached to the download in flight");
+  release(blob());
+  await tick();
+  assert.equal(box().querySelector("img").getAttribute("src"), "blob:1");
+  assert.equal(calls, 1);
+  assert.equal(perf.counters.thumbLoads, 1);
+  assert.equal(thumbs.live, 1);
+  assert.equal(win.made, 1);
+});
+
+test("encrypted: the result lands in the re-armed box before its dwell fires", async () => {
+  let release;
+  const { win, thumbs, preview, pop, model, box } = previewRig({ get: () => new Promise((r) => { release = r; }) });
+  preview.show(model, pop);
+  win.fire();
+  thumbs.cancel();
+  preview.show(model, pop);
+  release(blob());
+  await tick();
+  assert.equal(box().querySelector("img").getAttribute("src"), "blob:1");
+  assert.equal(win.pending, 0, "the dwell is stopped once the image shows");
+});
+
+test("clear() with a download in flight: no object URL, and a new request downloads again", async () => {
+  const releases = [];
+  let calls = 0;
+  const { win, thumbs } = setup({ get: () => { calls++; return new Promise((r) => releases.push(r)); } });
+  const a = mount(thumbs, img("https://x/a.png"));
+  thumbs.want(a, img("https://x/a.png"), "p");
+  win.fire();
+  thumbs.clear();
+  const b = mount(thumbs, img("https://x/a.png"));
+  thumbs.want(b, img("https://x/a.png"), "p");
+  win.fire();
+  assert.equal(calls, 2);
+  releases[0](blob());
+  await tick();
+  assert.equal(win.made, 0);
+  releases[1](blob());
+  await tick();
+  assert.equal(win.made, 1);
+  assert.ok(b.querySelector("img"));
+});
+
+test("file.get rejecting on a plain url counts one download for the highlight", async () => {
+  const { win, perf, thumbs } = setup({ get: async () => { throw new Error("nope"); } });
+  const a = mount(thumbs, img("https://x/a.png"));
+  thumbs.want(a, img("https://x/a.png"), "p");
+  win.fire();
+  await tick();
+  assert.equal(a.querySelector("img").getAttribute("src"), "https://x/a.png");
+  assert.equal(perf.counters.thumbLoads, 1);
+});
