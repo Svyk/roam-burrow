@@ -469,6 +469,21 @@ Two switches, both on: `aliasUsage` and `aliasPrefix`. `Disable all features` tu
 
 **Data note.** In notes (checked read-only 2026-10-27) there are 8 alias pages, none with three or more aliases, and 0 `[alias]([[Page]])` links, so the live gate builds a scratch fixture page for the order.
 
+## 21. Tables in the preview (BRW-20)
+
+Precedent: BRW-12 §3 ("Roam Grid tables in the picker"), Roam's native table, Roam Grid (`~/roam-grid`, `tableCells`). Switch `previewTables`, on.
+
+**What is drawn.** In any of Burrow's preview panes (drill-down, the row preview, the Tab list's preview), when the highlighted block matches `{{[[table]]}}` or `{{table}}` (case and spaces ignored, anywhere in the string; `src/table.js` `isTableBlock`), `previewModel` puts one table item where the target's child outline would go. The pane draws it as `div.burrow-table` (CSS grid, `--burrow-cols`) of `div.burrow-cell`s, 6 rows x 5 columns at most, rectangular (a short row is padded with empty cells), then `div.burrow-table-more` with `+R rows`, `+C cols` or both when the table is bigger. A cell is cut at 40 characters with `…` (`clipParts` over rich parts, or the plain string) and drawn with the rich parser when Rows drawn like Roam is on. `" "` (Roam Grid's stored empty cell) is empty; a formula is its text. `{{[[roam/grid]]}}` does not match, so a large grid keeps its rich label. Text nodes only, no handlers, no `on*` attributes, no Roam Grid code and no `window.roamGrid` call.
+
+**Storage read.** Rows are the table block's children by `:block/order`; a row's cells are the row block and then, level by level, the child with the smallest order (Roam Grid's first-child chain). `src/pagetree.js` `table(uid)` exists on the full reader (drill, Tab list) and the bounded one (row preview):
+- Row ids: the children already known as nodes when the drill read them, else the preview's paged id read (`SLOTS`, then `KID_IDS` and orders 150 at a time past 150 children).
+- One `CHAIN` pull per shown row: five levels with uid, string and order, then ids and orders only with recursion limited to 30 levels to count the columns past the fifth. Measured on notes' tables: 0.1–2.8 ms per whole-table pull; one row's chain is a fraction of that.
+- Through the bounded reader's guard, so a used-up slice throws `PAUSE` between rows and the next slice resumes without pulling a cached chain again. Counted as `tableChains` in `__BURROW_PERF.counters`. Model and chains are kept by uid until the popup closes (`tree.clear()`).
+
+**Drawn at idle.** A key's draw (`show`/`fill`) never writes the table line: `writeLines` stops at it and leaves it to `more()`, which the preview's idle slices already run. A drill that flips between a section and its table on every key (`perf-gate --table`) rebuilt 30 cells per key and measured 5.4 ms p95 per key in svy before this. The drill and Tab-list models are rebuilt when the switch flips; the row preview takes it at the next row.
+
+**Not covered.** A drill step cannot name a table that has text siblings: `stripRoamMarkup` drops the macro, so the table has no words, and an empty step takes the first sibling with text. The Tab list reaches any table.
+
 ## Also noticed
 
 - `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
