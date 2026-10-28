@@ -1546,6 +1546,7 @@ var DEFAULTS = Object.freeze({
   helpNudge: true,
   refContext: true,
   refOutline: true,
+  previewTables: true,
   semanticRows: true,
   // Not a switch: set once the first-run line has been shown.
   helpNudgeSeen: false,
@@ -1577,6 +1578,7 @@ var SWITCHES = [
   ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["refContext", "Where the block lives", "Under the highlighted referenced block in ((, a line with its page and parent (Page › … › Parent) and how many children Tab lists."],
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
+  ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
   ["semanticRows", "Related rows (Roam semantic search)", "When Roam's semantic search is on for the graph (Settings > Graph), up to three Related rows from it show under Roam's results in (( and [[, after you pause typing a phrase of two or more words. Each lookup sends what you typed after the (( or [[ to the embedding provider set in Settings > Graph; in an encrypted graph the query text still goes to that provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. ⌥R (Alt+R) moves into the Related rows, ↑/↓ move inside them, Esc goes back to Roam's rows. Enter inserts a Related row only when it is highlighted, by those keys or by the mouse; otherwise it does what it did before."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["previewImages", "Images in the preview", "In the previews, the highlighted block's first image shows as a thumbnail (at most 240×160) under its line, +N when it has more. It loads after the row has been highlighted for 150 ms, only for that row; in an encrypted graph it is decrypted with Roam's file API and kept for the popup only (8 at most). Files over 5 MB and images that fail keep the image label with their alt text. Rows keep the label."],
@@ -2368,6 +2370,63 @@ function createHelpSheet({ doc, win, lifecycle }) {
   };
 }
 
+// src/table.js
+var TABLE_ROWS = 6;
+var TABLE_COLS = 5;
+var CELL_CHARS = 40;
+var CHAIN = "[:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order {:block/children [:block/uid :block/string :block/order {:block/children [:db/id :block/order {:block/children 30}]}]}]}]}]}]";
+var TABLE = /\{\{\s*(?:\[\[\s*table\s*\]\]|table)\s*\}\}/i;
+function isTableBlock(string) {
+  return TABLE.test(String(string ?? ""));
+}
+var firstKid = (raw) => {
+  let best = null;
+  for (const kid of raw[":block/children"] || []) {
+    if (!best || (kid[":block/order"] ?? 0) < (best[":block/order"] ?? 0)) best = kid;
+  }
+  return best;
+};
+function tableChain(raw) {
+  const cells = [];
+  let length = 0;
+  for (let at = raw; at; at = firstKid(at)) {
+    length += 1;
+    if (cells.length < TABLE_COLS) {
+      const string = at[":block/string"] ?? "";
+      cells.push({ uid: at[":block/uid"], string: string === " " ? "" : string });
+    }
+  }
+  return { cells, length };
+}
+function tableModel(uid, totalRows, chains) {
+  let cols = 0;
+  let longest = 0;
+  for (const chain of chains) {
+    cols = Math.max(cols, chain.cells.length);
+    longest = Math.max(longest, chain.length);
+  }
+  return { uid, rows: chains.map((chain) => chain.cells), cols, moreRows: Math.max(0, totalRows - TABLE_ROWS), moreCols: Math.max(0, longest - TABLE_COLS) };
+}
+function clipParts(parts, max = CELL_CHARS) {
+  const out = [];
+  let left = max;
+  for (const part of parts) {
+    if (part.task || !part.text) {
+      out.push(part);
+      continue;
+    }
+    if (part.text.length <= left) {
+      out.push(part);
+      left -= part.text.length;
+      continue;
+    }
+    if (left > 0) out.push({ ...part, text: part.text.slice(0, left) });
+    out.push({ text: "…", cls: "burrow-ellipsis" });
+    return out;
+  }
+  return out;
+}
+
 // src/pagetree.js
 var TWO_LEVELS = `[:block/uid :node/title :block/string :block/heading :block/order
   {:block/children [:block/uid :block/string :block/heading :block/order
@@ -2392,6 +2451,8 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
   const paging = /* @__PURE__ */ new Map();
   const byEid = /* @__PURE__ */ new Map();
   const eids = /* @__PURE__ */ new Map();
+  const tables = /* @__PURE__ */ new Map();
+  const chains = /* @__PURE__ */ new Map();
   const node = (raw) => {
     const uid = raw[":block/uid"];
     let n = nodes.get(uid);
@@ -2487,7 +2548,12 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       return pa.length - pb.length;
     })[0];
   }
+  const fullRead = (fn, kind = "pull") => {
+    onFetch?.(kind);
+    return fn();
+  };
   const full = {
+    table: (uid) => tableOf(fullRead, slotIdsOf(fullRead), uid),
     trail,
     window(uid, from, size) {
       const kids = children(uid);
@@ -2497,37 +2563,51 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       return children(parentUid).findIndex((k) => k.uid === uid);
     }
   };
+  const byOrder = (list) => list.sort((a, b) => a[1] - b[1]).map(([eid]) => eid);
+  const slotIdsOf = (read) => (uid) => {
+    if (slots.has(uid)) return slots.get(uid);
+    let job = paging.get(uid);
+    if (!job) {
+      const raw = read(() => pull(SLOTS, [":block/uid", uid]));
+      const first2 = (raw?.[":block/children"] || []).map((k) => [k[":db/id"], k[":block/order"] ?? 0]);
+      if (first2.length <= ORDER_BATCH) {
+        slots.set(uid, byOrder(first2));
+        return slots.get(uid);
+      }
+      job = { eid: raw[":db/id"], ids: null, orders: [], at: 0 };
+      paging.set(uid, job);
+    }
+    if (!job.ids) job.ids = [...read(() => q(KID_IDS, job.eid)) || []];
+    while (job.at < job.ids.length) {
+      const batch = job.ids.slice(job.at, job.at + ORDER_BATCH);
+      const got = read(() => pullMany ? pullMany(ORDER, batch) : batch.map((eid) => pull(ORDER, eid)));
+      for (const raw of got || []) if (raw?.[":db/id"] != null) job.orders.push([raw[":db/id"], raw[":block/order"] ?? 0]);
+      job.at += batch.length;
+    }
+    paging.delete(uid);
+    slots.set(uid, byOrder(job.orders));
+    return slots.get(uid);
+  };
+  const tableOf = (read, slotIds, uid) => {
+    if (tables.has(uid)) return tables.get(uid);
+    const known = nodes.get(uid)?.kids;
+    const refs = Array.isArray(known) ? known.map((k) => [":block/uid", k.uid]) : slotIds(uid);
+    const got = refs.slice(0, TABLE_ROWS).map((ref) => {
+      const key = Array.isArray(ref) ? ref[1] : ref;
+      if (!chains.has(key)) chains.set(key, tableChain(read(() => pull(CHAIN, ref), "chain")));
+      return chains.get(key);
+    });
+    const model = tableModel(uid, refs.length, got);
+    tables.set(uid, model);
+    return model;
+  };
   function bounded(expired = () => false) {
-    const read = (fn) => {
+    const read = (fn, kind = "pull") => {
       if (expired()) throw PAUSE;
-      onFetch?.("pull");
+      onFetch?.(kind);
       return fn();
     };
-    const byOrder = (list) => list.sort((a, b) => a[1] - b[1]).map(([eid]) => eid);
-    const slotIds = (uid) => {
-      if (slots.has(uid)) return slots.get(uid);
-      let job = paging.get(uid);
-      if (!job) {
-        const raw = read(() => pull(SLOTS, [":block/uid", uid]));
-        const first2 = (raw?.[":block/children"] || []).map((k) => [k[":db/id"], k[":block/order"] ?? 0]);
-        if (first2.length <= ORDER_BATCH) {
-          slots.set(uid, byOrder(first2));
-          return slots.get(uid);
-        }
-        job = { eid: raw[":db/id"], ids: null, orders: [], at: 0 };
-        paging.set(uid, job);
-      }
-      if (!job.ids) job.ids = [...read(() => q(KID_IDS, job.eid)) || []];
-      while (job.at < job.ids.length) {
-        const batch = job.ids.slice(job.at, job.at + ORDER_BATCH);
-        const got = read(() => pullMany ? pullMany(ORDER, batch) : batch.map((eid) => pull(ORDER, eid)));
-        for (const raw of got || []) if (raw?.[":db/id"] != null) job.orders.push([raw[":db/id"], raw[":block/order"] ?? 0]);
-        job.at += batch.length;
-      }
-      paging.delete(uid);
-      slots.set(uid, byOrder(job.orders));
-      return slots.get(uid);
-    };
+    const slotIds = slotIdsOf(read);
     const brief = (eid) => {
       if (!byEid.has(eid)) {
         const raw = read(() => pull(BRIEF, eid));
@@ -2543,6 +2623,7 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       return eids.get(uid);
     };
     return {
+      table: (uid) => tableOf(read, slotIds, uid),
       trail(uid) {
         if (!trails.has(uid) && expired()) throw PAUSE;
         return trail(uid);
@@ -2578,6 +2659,8 @@ function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       paging.clear();
       byEid.clear();
       eids.clear();
+      tables.clear();
+      chains.clear();
     },
     get size() {
       return nodes.size;
@@ -3264,7 +3347,7 @@ var readerOf = (tree) => tree.window ? tree : {
   },
   indexOf: (parentUid, uid) => tree.children(parentUid).findIndex((k) => k.uid === uid)
 };
-function previewModel(result, tree, text, { hideEmpty = false, images = false } = {}) {
+function previewModel(result, tree, text, { hideEmpty = false, tables = false, images = false } = {}) {
   const read = readerOf(tree);
   const { page, target } = result;
   const trailNodes = target ? read.trail(target.uid) : [];
@@ -3291,6 +3374,11 @@ function previewModel(result, tree, text, { hideEmpty = false, images = false } 
     }
     if (total2 > CHILD_LIMIT) items.push({ more: total2 - CHILD_LIMIT, depth });
   };
+  const pushTable = (n) => {
+    if (!tables || !read.table || !isTableBlock(n.string)) return false;
+    items.push({ uid: n.uid, table: read.table(n.uid), depth: 1 });
+    return true;
+  };
   if (!target) {
     pushKids(page.uid, 0, 2);
     return { key: `page:${page.uid}`, trail, items };
@@ -3304,11 +3392,14 @@ function previewModel(result, tree, text, { hideEmpty = false, images = false } 
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
     items.push(withImage({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget }, sib.string));
-    if (isTarget) pushKids(target.uid, 1, 2);
+    if (isTarget && !pushTable(sib)) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
-  if (!siblings.length) items.push(withImage({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true }, target.string));
-  return { key: `node:${target.uid}`, trail, items };
+  if (!siblings.length) {
+    items.push(withImage({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true }, target.string));
+    pushTable(target);
+  }
+  return { key: `node:${target.uid}${tables ? ":t" : ""}`, trail, items };
 }
 function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
   const pane = doc.createElement("div");
@@ -3352,7 +3443,7 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     while (kids.length > model.items.length) kids[kids.length - 1].remove();
     for (let i = wrote; i < kids.length; i++) kids[i].hidden = true;
   }
-  function writeLines(items, from, deadline = Infinity, min = 0) {
+  function writeLines(items, from, deadline = Infinity, min = 0, tables = false) {
     const kids = outline.children;
     const made = [];
     let lastTarget = -1;
@@ -3363,9 +3454,11 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     for (; wrote < items.length; wrote++) {
       if (deadline !== Infinity && wrote >= min && wrote > lastTarget && performance.now() > deadline) break;
       const item = items[wrote];
+      if (item.table && !tables && wrote >= min) break;
       const row = kids[from + wrote] || doc.createElement("div");
       let cls = "burrow-node";
       if (item.more != null) cls += " burrow-more";
+      else if (item.table) cls += " burrow-table-line";
       else {
         if (item.heading) cls += ` burrow-h${item.heading}`;
         if (item.target) cls += " burrow-target";
@@ -3383,6 +3476,10 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     return wrote;
   }
   function writeContent(row, item) {
+    if (item.table) {
+      writeTable(row, item);
+      return;
+    }
     if (item.more == null && item.string != null && rich) {
       const key = `${item.uid}\0${item.string}`;
       if (row.__burrowLine === key) return;
@@ -3396,6 +3493,37 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     }
     row.__burrowLine = null;
     setText(row, item.more != null ? `+${item.more} more` : item.text || " ");
+  }
+  function writeTable(row, item) {
+    const { uid, rows, cols, moreRows, moreCols } = item.table;
+    const key = `table\0${uid}\0${rich ? 1 : 0}\0${moreRows}\0${moreCols}\0${rows.map((r) => r.map((c) => `${c.uid}${c.string}`).join("")).join("")}`;
+    if (row.__burrowLine === key) return;
+    row.__burrowLine = key;
+    const grid = doc.createElement("div");
+    grid.className = "burrow-table";
+    grid.style.setProperty("--burrow-cols", String(Math.max(1, cols)));
+    for (const cells of rows) {
+      for (let c = 0; c < cols; c++) {
+        const cell = doc.createElement("div");
+        cell.className = "burrow-cell";
+        const own = cells[c];
+        if (own?.string) {
+          const parts = rich?.({ uid: own.uid, string: own.string })?.filter((part) => !part.task);
+          if (parts?.length) cell.append(renderParts(doc, clipParts(parts)));
+          else cell.textContent = own.string.length > CELL_CHARS ? `${own.string.slice(0, CELL_CHARS)}…` : own.string;
+        }
+        grid.append(cell);
+      }
+    }
+    const more = [moreRows ? `+${moreRows} rows` : "", moreCols ? `+${moreCols} cols` : ""].filter(Boolean).join(", ");
+    if (!more) {
+      row.replaceChildren(grid);
+      return;
+    }
+    const footer = doc.createElement("div");
+    footer.className = "burrow-table-more";
+    footer.textContent = more;
+    row.replaceChildren(grid, footer);
   }
   function writeThumb(row, item) {
     if (item.target && item.image) {
@@ -3528,7 +3656,7 @@ function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
     more(lines = Infinity, budgetMs = Infinity) {
       if (!rest || pane.hidden) return;
       const items = rest.slice(0, lines);
-      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1);
+      const wrote = writeLines(items, restAt, performance.now() + budgetMs, 1, true);
       rest = wrote < rest.length ? rest.slice(wrote) : null;
       restAt += wrote;
     },
@@ -4259,7 +4387,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     pullMany: api.data?.pull_many ? (pattern, eids) => api.data.pull_many(pattern, eids) : null,
     q: fast,
     onFetch: (kind) => {
-      perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1;
+      const counter = kind === "query" ? "drillQueries" : kind === "chain" ? "tableChains" : "drillPulls";
+      perf.counters[counter] = (perf.counters[counter] || 0) + 1;
     }
   });
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows");
@@ -4694,9 +4823,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function showPreview() {
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
-      if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
+      if (model?.drillKey !== st.drill.key || model.tables !== setting("previewTables")) {
+        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
         model.drillKey = st.drill.key;
+        model.tables = setting("previewTables");
       }
       const budgetMs = richBudget(1);
       if (inFrame) preview.show(model, st.pop, { avoid: st.ta?.getBoundingClientRect(), inFrame: true, budgetMs });
@@ -4809,7 +4939,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
+    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
     next.drillKey = `row:${row.key}`;
     return next;
   }
@@ -6404,9 +6534,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       scopePreview.hide();
       return;
     }
-    const key = `${page.uid}:${target?.uid ?? ""}`;
+    const key = `${page.uid}:${target?.uid ?? ""}:${setting("previewTables")}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
+      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
@@ -6900,7 +7030,7 @@ function escapeRe(s) {
 // src/extension.js
 var VERSION = "0.10.0";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;

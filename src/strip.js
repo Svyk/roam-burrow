@@ -168,7 +168,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     pull: (pattern, eid) => api.pull(pattern, eid),
     pullMany: api.data?.pull_many ? (pattern, eids) => api.data.pull_many(pattern, eids) : null,
     q: fast,
-    onFetch: (kind) => { perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1; },
+    onFetch: (kind) => {
+      const counter = kind === "query" ? "drillQueries" : kind === "chain" ? "tableChains" : "drillPulls";
+      perf.counters[counter] = (perf.counters[counter] || 0) + 1;
+    },
   });
 
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
@@ -601,9 +604,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function showPreview() {
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
-      if (model?.drillKey !== st.drill.key) {
-        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
+      if (model?.drillKey !== st.drill.key || model.tables !== setting("previewTables")) {
+        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
         model.drillKey = st.drill.key;
+        model.tables = setting("previewTables");
       }
       // The lines now; their place (a layout read) in the frame.
       const budgetMs = richBudget(1);
@@ -720,7 +724,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
+    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
     next.drillKey = `row:${row.key}`;
     return next;
   }
@@ -2363,9 +2367,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const first = tree.trail(level.uid)[0];
     const page = level.page || (first ? { uid: first.uid, title: first.title } : null);
     if (!page) { scopePreview.hide(); return; }
-    const key = `${page.uid}:${target?.uid ?? ""}`;
+    const key = `${page.uid}:${target?.uid ?? ""}:${setting("previewTables")}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), images: setting("previewImages") });
+      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
