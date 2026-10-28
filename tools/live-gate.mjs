@@ -439,8 +439,9 @@ async function setArm(arm) {
       await dev.module.default.onload({ extensionAPI, extension: { version: "gate" } });
     }
     const t0 = performance.now();
-    while (!window.__BURROW?.indexes?.refs && performance.now() - t0 < 10000) await new Promise((r) => setTimeout(r, 100));
-    return { arm, refs: window.__BURROW?.indexes?.refs?.entries.length };
+    // svy late in a long run can take over 10 s to build the index after a reload.
+    while (!window.__BURROW?.indexes?.refs && performance.now() - t0 < 30000) await new Promise((r) => setTimeout(r, 100));
+    return { arm, refs: window.__BURROW?.indexes?.refs?.entries.length, indexMs: Math.round(performance.now() - t0) };
   }, { arm, code, css, features: FEATURES, refCommand: REF_COMMAND });
   // The alias cases need the scratch alias pages (and use counts) in Burrow's index; "off" never reads them.
   if (arm === "on" || arm === "drilloff") await waitAliasFixtures(c);
@@ -2676,6 +2677,7 @@ try {
         for (const arm of arms.filter((a) => a !== "drilloff" || DRILL_CASES.includes(kase))) {
           const loaded = await setArm(arm);
           if (arm !== "gone" && !loaded.refs) throw new Error(`arm ${arm}: index not built`);
+      if (loaded.indexMs > 10000) console.log(`  slow index: arm ${arm}, ${kase.name}, ${loaded.indexMs} ms`);
           const r = await runCase(arm, kase);
           results[arm] = r;
           report.only.runs.push({ arm, ...r });
