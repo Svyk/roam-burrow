@@ -12,18 +12,17 @@
 //      closes the popup, the fixture block goes back to "";
 //   5. the same grid keys work again with the popup closed;
 //   6. AFTER equals BEFORE byte for byte and no page was left behind.
-// The drill expression names the table's ancestors by their text and ends in an
-// empty step ([[Page > a > b > ): stripRoamMarkup drops the {{[[table]]}} macro,
-// so the table itself has no text to match, and an empty step takes the first
-// non-empty child (src/drill.js bestMatch). The gate accepts the run only when
-// window.__BURROW.state.drill.target is the chosen table.
+// Step 4 reaches the table through the Tab list ([[Page, Tab, ↓ and Tab down
+// its ancestors, ↓ onto the table): a drill step cannot name a table with
+// text siblings, since stripRoamMarkup drops the {{[[table]]}} macro. The gate
+// accepts the run only when the Tab list's highlighted block is the table.
 // No graph writes except the fixture's own scratch page and block. The window is
 // never reloaded; an installed Burrow is parked for the run and put back.
 //   node tools/grid-gate.mjs "Svy -" [--table <uid>]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { clearSelection, cleanupFixture, deleteNewPages, guardReport, onAbort, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { clearSelection, cleanupFixture, deleteNewPages, guardReport, neutralClick, onAbort, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
 
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
@@ -124,22 +123,6 @@ const readState = (uid, metadataUids) => c.evaluate(({ uid, metadataUids }) => {
     metadata: JSON.stringify(metadataUids.map((m) => [m, api.q(`[:find ?s . :where [?b :block/uid "${m}"] [?b :block/string ?s]]`)])),
   };
 }, { uid, metadataUids });
-
-// Texts of the table's ancestors under its page, top first (the drill steps).
-const ancestorTexts = (uid) => c.evaluate((uid) => {
-  const api = window.roamAlphaAPI;
-  const plain = (s) => String(s).replace(/\{\{[\s\S]*?\}\}/g, " ").replace(/\(\([^()]*\)\)/g, " ").replace(/\[\[|\]\]|\*\*|\^\^|__|~~/g, " ").replace(/\s+/g, " ").trim();
-  const texts = [];
-  let at = uid;
-  for (let i = 0; i < 30; i++) {
-    const parent = api.q(`[:find ?pu . :where [?b :block/uid "${at}"] [?p :block/children ?b] [?p :block/uid ?pu]]`);
-    if (!parent || api.q(`[:find ?t . :where [?b :block/uid "${parent}"] [?b :node/title ?t]]`)) break;
-    const string = api.q(`[:find ?s . :where [?b :block/uid "${parent}"] [?b :block/string ?s]]`);
-    texts.unshift(plain(string ?? ""));
-    at = parent;
-  }
-  return texts;
-}, uid);
 
 // ---- Roam Grid keys ----
 
@@ -310,55 +293,83 @@ try {
         // 3. grid keys before the popup
         await gridKeys("3 before the popup");
 
-        // 4. Burrow's popup with the table preview
-        const texts = await ancestorTexts(chosen.uid);
+        // 4. Burrow's popup with the table preview. A drill step cannot name a
+        // table that has siblings with text (stripRoamMarkup drops the macro, and
+        // an empty step takes the first block with text), so the gate goes there
+        // with Tab: [[Page, Tab lists the page's blocks, ↓ onto each ancestor and
+        // Tab, then ↓ onto the table; the Tab list's preview highlights it.
+        const path = await c.evaluate((uid) => {
+          const raw = window.roamAlphaAPI.pull("[:block/uid {:block/_children ...}]", [":block/uid", uid]);
+          const chain = [];
+          for (let at = raw?.[":block/_children"]?.[0]; at; at = at[":block/_children"]?.[0]) if (at[":block/uid"]) chain.unshift(at[":block/uid"]);
+          return chain.slice(1).concat(uid);
+        }, chosen.uid);
         const pageTitle = before.page;
-        const named = texts;
-        if (named.some((t) => !t)) {
-          step("4 Burrow table preview", false, `an ancestor of the table has no text to name it in a drill step: ${JSON.stringify(texts)}`);
-        } else {
-          const query = `[[${pageTitle}${named.length ? ` > ${named.join(" > ")}` : ""} > `;
-          const primed = await primeFixture(c, "");
-          if (!primed.ok) throw new Error(`fixture block not focused: ${JSON.stringify(primed)}`);
-          await c.type(query, TYPE_MS);
-          for (let t0 = Date.now(); Date.now() - t0 < 2500;) {
-            if (await c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results") && window.__BURROW?.state.drill))) break;
-            await sleep(40);
-          }
-          await sleep(150);
-          preview = await isExpanded();
-          if (!preview) await ctrlO();
-          await sleep(800);
-          const seen = await c.evaluate(() => {
-            const grid = document.querySelector(".burrow-preview:not([hidden]) .burrow-table");
-            return {
-              target: window.__BURROW?.state.drill?.target?.uid ?? null,
-              cells: grid ? grid.querySelectorAll(".burrow-cell").length : 0,
-              footer: document.querySelector(".burrow-preview:not([hidden]) .burrow-table-more")?.textContent ?? null,
-              popup: Boolean(document.querySelector(".rm-autocomplete__results")),
-            };
-          });
-          if (!preview) await ctrlO();
-          for (let i = 0; i < 3 && (await c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results")))); i++) {
-            await c.key("Escape");
-            await sleep(250);
-          }
-          const closed = !(await c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results"))));
-          await c.evaluate(async () => {
-            const g = window.__burrowFixture;
-            if (document.activeElement?.tagName === "TEXTAREA") document.activeElement.blur();
-            await window.roamAlphaAPI.data.block.update({ block: { uid: g.blockUid, string: "" } });
-            await new Promise((r) => setTimeout(r, 400));
-          });
-          await clearSelection(c);
-          const pages = await deleteNewPages(c);
-          const resolved = seen.target === chosen.uid;
-          step("4 Burrow table preview", resolved && seen.cells > 0 && closed,
-            `${query} -> target ${seen.target ?? "none"}${resolved ? "" : ` (not ${chosen.uid}: the table cannot be named by this drill; use a table that is the only child of its parent)`}; preview cells ${seen.cells}, footer ${JSON.stringify(seen.footer)}; popup closed by Escape: ${closed}; pages removed ${JSON.stringify(pages.deleted)}`);
-
-          // 5. grid keys after the popup
-          await gridKeys("5 after the popup");
+        const query = `[[${pageTitle}`;
+        // Leave the grid first: its active cell keeps the keys, and Roam may hold the table block selected.
+        await neutralClick(c);
+        await sleep(200);
+        const primed = await primeFixture(c, "");
+        if (!primed.ok) {
+          const held = await c.evaluate(() => [...document.querySelectorAll(".block-highlight-blue, .rm-block--selected, .block-highlight")]
+            .map((n) => `${n.tagName}.${String(n.className).split(/\s+/).slice(0, 4).join(".")}#${n.id || ""}`).slice(0, 6));
+          throw new Error(`fixture block not focused: ${JSON.stringify(primed)}; selected ${JSON.stringify(held)}`);
         }
+        await c.type(query, TYPE_MS);
+        for (let t0 = Date.now(); Date.now() - t0 < 2500;) {
+          if (await c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results")))) break;
+          await sleep(40);
+        }
+        await sleep(400);
+        preview = await isExpanded();
+        if (!preview) await ctrlO();
+        const activeUid = () => c.evaluate(() => {
+          const sc = window.__BURROW?.state.scope;
+          if (!sc || window.__BURROW.state.phase !== "SCOPE") return null;
+          const row = sc.rows[sc.levels.at(-1).active];
+          return row?.node?.uid ?? row?.uid ?? null;
+        });
+        const moves = [];
+        await c.key("Tab");
+        await sleep(400);
+        for (const [i, uid] of path.entries()) {
+          let at = await activeUid();
+          for (let n = 0; n < 80 && at !== uid; n++) { await c.key("ArrowDown"); await sleep(50); at = await activeUid(); }
+          moves.push(`${uid}:${at === uid ? "ok" : `stuck at ${at}`}`);
+          if (at !== uid) break;
+          if (i < path.length - 1) { await c.key("Tab"); await sleep(400); }
+        }
+        await sleep(900);
+        const seen = await c.evaluate(() => {
+          const grid = document.querySelector(".burrow-preview:not([hidden]) .burrow-table");
+          return {
+            target: (() => { const sc = window.__BURROW?.state.scope; const row = sc?.rows[sc.levels.at(-1).active]; return row?.node?.uid ?? row?.uid ?? null; })(),
+            cells: grid ? grid.querySelectorAll(".burrow-cell").length : 0,
+            texts: grid ? [...grid.querySelectorAll(".burrow-cell")].map((n) => n.textContent) : [],
+            footer: document.querySelector(".burrow-preview:not([hidden]) .burrow-table-more")?.textContent ?? null,
+            onAttrs: [...document.querySelectorAll(".burrow-preview *")].filter((n) => [...n.attributes].some((a) => a.name.startsWith("on"))).length,
+          };
+        });
+        if (!preview) await ctrlO();
+        for (let i = 0; i < 4 && (await c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results")))); i++) {
+          await c.key("Escape");
+          await sleep(250);
+        }
+        const closed = !(await c.evaluate(() => Boolean(document.querySelector(".rm-autocomplete__results"))));
+        await c.evaluate(async () => {
+          const g = window.__burrowFixture;
+          if (document.activeElement?.tagName === "TEXTAREA") document.activeElement.blur();
+          await window.roamAlphaAPI.data.block.update({ block: { uid: g.blockUid, string: "" } });
+          await new Promise((r) => setTimeout(r, 400));
+        });
+        await clearSelection(c);
+        const pages = await deleteNewPages(c);
+        const resolved = seen.target === chosen.uid;
+        step("4 Burrow table preview (Tab list)", resolved && seen.cells > 0 && seen.onAttrs === 0 && closed,
+          `${query}, Tab, ${moves.join(" ")} -> highlighted ${seen.target ?? "none"}; preview cells ${seen.cells} ${JSON.stringify(seen.texts)}, footer ${JSON.stringify(seen.footer)}, on* attributes ${seen.onAttrs}; popup closed by Escape: ${closed}; pages removed ${JSON.stringify(pages.deleted)}`);
+
+        // 5. grid keys after the popup
+        await gridKeys("5 after the popup");
 
         // 6. AFTER equals BEFORE
         const after = await readState(chosen.uid, metadataUids);
