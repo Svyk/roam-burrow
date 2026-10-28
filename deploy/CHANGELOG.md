@@ -17,6 +17,20 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 - Final gate run (2026-10-27, merged with 0.8.1, 0.9.0 and 0.9.1): `live-gate` svy dark and notes light PASS, 179 byte-for-byte case runs each (on / off / gone / drilloff), hidden-row Enter cases included, text boxes 32 states, 1,173 boxes in svy and 1,180 in notes, none intersecting. Unit suite: 296 tests. Perf gates were dropped at Svy's request; the last measurements before that (merged build): svy `((` p95 3.7–3.9 ms, notes 1.9–2.0 ms (budget 4).
 - A ⌥↵ label made from a code block's text keeps the code, not its fence, language or backticks (`[const x = 1;](((uid)))`, not ``[```js const x = 1; ```](((uid)))``): a backtick inside a link label turns it into code.
 - The hint line no longer reads a row's block text on every key (it resolved block refs over the whole string, up to 90 KB code blocks in svy); it only needs to know whether the row is a page or a block.
+## [0.9.2] - 2026-10-27
+
+### Added
+
+- **Images in the preview** (`previewImages`, on). In Burrow's previews (the row preview over Roam's, the `[[` drill-down preview and the preview beside the Tab list), the highlighted block's first `![](url)` shows as a thumbnail under its line in a box reserved when the line is drawn (at most 240×160, `object-fit: contain`), with `+N` when the block has more images. It loads after the row has stayed highlighted for 150 ms, only for that row: a newer highlight cancels the wait, and a result that arrives after the highlight moved is not shown. A plain graph's image is an `<img loading="lazy">`; in an encrypted graph, or for a `.enc` URL, Roam's `file.get` decrypts it into an object URL. Up to 8 object URLs are kept, revoked on eviction, when the popup closes and on unload. A decrypted file over 5 MB, a failed download or a failed decode keeps the `image` label with the alt text, in the same box; nothing throws. No Roam component is mounted in the popup. Burrow's rows keep the `image` label.
+- Live gates: thumbnails in svy (encrypted) and notes, the box reserved before load and unmoved after, `+N`, a broken image's label, ↓ through 10 image blocks in the Tab list starting at most one download, no object URL left after the popup closes, the `[[` drill preview, the switch off; thumbnails in the text-box overlap pass. `tools/shots.mjs` scenarios 69–72.
+- `__BURROW_PERF` `scope.key`: the time of each ↑/↓ in the drill panel, whose preview is redrawn in the key.
+
+### Fixed
+
+- A thumbnail stayed an empty box when you pressed ↓ then ↑ back to its row before the next row's preview was drawn. The box is re-armed, and the decrypt already running for it is reused (one download).
+- ↓/↑ in the drill panel draw its preview in the next frame instead of inside the key, so the key only moves the highlight.
+- In an encrypted graph, an external image that falls back from `file.get` to a plain image counts one download, not two.
+- Gate tooling: a gate started right after another one could meet the previous run's cleanup still deleting in the page (svy is slow to delete): it aborted on a "stale fixture tree", or lost its own fixture when the old cleanup finished. Setup now waits for it, and a cleanup clears only its own fixture. A crashed run's block whose page was deleted under it is moved onto the fixture page before it is deleted (Roam's delete throws on a block without a parent).
 
 ## [0.9.1] - 2026-10-27
 

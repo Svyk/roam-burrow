@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "insertVariants", "openInSidebar"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "insertVariants", "openInSidebar"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -121,13 +121,18 @@ const SCENARIOS = [
   { id: "66-chips-by-use", query: "[[zq used", keys: ["alt+ArrowDown", "hover:.burrow-chips .burrow-chip", "wait:700"] },
   { id: "67-shared-alias-rows", query: "[[zq twin sh", keys: [] },
   { id: "68-alias-prefix-rows", query: "[[alias:zq", keys: [] },
+  // previewImages: thumbnails in the previews (the fixture's image blocks; waits poll for the state, up to 6 s).
+  { id: "69-thumb-one", query: "((zebra photo one", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
+  { id: "70-thumb-many", query: "((zebra photo many", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
+  { id: "71-thumb-broken", query: "((zebra photo broken", keys: ["preview-open", "wait-thumb:failed:6000", "wait:500"] },
+  { id: "72-thumb-tab-drill", query: "((zebra photos", keys: ["preview-open", "Tab", "ArrowDown", "ArrowDown", "wait-thumb:ok:6000", "wait:500"] },
   // 0.10.0: insert variants and the sidebar.
-  { id: "69-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "70-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
-  { id: "71-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
-  { id: "72-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
-  { id: "73-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
-  { id: "74-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
+  { id: "73-variants-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "74-variants-alias-row", query: config.alias, keys: ["preview-closed", "hold:Alt", "wait:450"] },
+  { id: "75-variants-tip-ref-row", query: `((${config.ref}`, keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"] },
+  { id: "76-variants-drill-panel", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "type:alpha", "hold:Alt", "wait:450"], loose: true },
+  { id: "77-variants-key-list", query: `((${config.ref}`, keys: ["preview-closed", "alt+slash"] },
+  { id: "78-sidebar-opened", query: `((${config.ref}`, keys: ["preview-closed", "sidebar-mark", "meta+shift+Enter", "wait:900"], full: true },
 ];
 
 const c = await connect(title);
@@ -233,7 +238,13 @@ async function runKeys(keys) {
     if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
     else if (k === "preview-closed") { if (await isExpanded()) await ctrlO(); }
     else if (k === "alt+slash") await altSlash();
-    else if (k === "down-past-strip") {
+    else if (k.startsWith("wait-thumb:")) {
+      const [, want, max] = k.split(":");
+      for (let t0 = Date.now(); Date.now() - t0 < Number(max);) {
+        if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
+        await sleep(100);
+      }
+    } else if (k === "down-past-strip") {
       const rows = await c.evaluate(() => document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row").length);
       for (let i = 0; i < rows; i++) { await c.key("ArrowDown"); await sleep(60); }
     } else if (k.startsWith("hover:")) {
@@ -252,7 +263,7 @@ async function runKeys(keys) {
     else if (k === "sidebar-mark") await c.evaluate(() => { window.__burrowFixture.sidebarBase = window.roamAlphaAPI.ui.rightSidebar.getWindows().map((w) => w["window-id"]); });
     else if (modified) await c.key(modified[2], modified[1].split("+").filter(Boolean).reduce((m, name) => m | { alt: 1, ctrl: 2, meta: 4, shift: 8 }[name], 0));
     else await c.key(k);
-    if (!k.startsWith("wait:")) await sleep(120);
+    if (!k.startsWith("wait:") && !k.startsWith("wait-thumb:")) await sleep(120);
   }
 }
 
