@@ -14,6 +14,9 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ### Fixed
 
+- A thumbnail stayed an empty box when you pressed ↓ then ↑ back to its row before the next row's preview was drawn. The box is re-armed, and the decrypt already running for it is reused (one download).
+- ↓/↑ in the drill panel draw its preview in the next frame instead of inside the key, so the key only moves the highlight.
+- In an encrypted graph, an external image that falls back from `file.get` to a plain image counts one download, not two.
 - Gate tooling: a gate started right after another one could meet the previous run's cleanup still deleting in the page (svy is slow to delete): it aborted on a "stale fixture tree", or lost its own fixture when the old cleanup finished. Setup now waits for it, and a cleanup clears only its own fixture. A crashed run's block whose page was deleted under it is moved onto the fixture page before it is deleted (Roam's delete throws on a block without a parent).
 
 ## [0.9.1] - 2026-10-27
