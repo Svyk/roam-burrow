@@ -42,7 +42,9 @@ export function candidates(hits, kind) {
   return out;
 }
 
-export function createSemantic({ api, win = globalThis, perf = null, trace = () => {}, graph = () => "", now = () => Date.now(), onReply = () => {} }) {
+// `k` and `keyOf` let a second instance (the preview footer) ask for more hits
+// and keep its cache per subject; `perfName` keeps its samples apart.
+export function createSemantic({ api, win = globalThis, perf = null, trace = () => {}, graph = () => "", now = () => Date.now(), onReply = () => {}, k = K, keyOf = null, perfName = "related.request" }) {
   const cache = new Map();
   let timer = null;
   let retryTimer = null;
@@ -62,7 +64,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
     try { return Boolean(api?.data?.semanticSearchEnabled?.()) && typeof api.data.async?.semanticSearch === "function"; } catch { return false; }
   }
 
-  const keyFor = (token) => `${graph()}\u0000${token.kind}\u0000${token.query.trim()}`;
+  const keyFor = (token) => (keyOf ? keyOf(token) : `${graph()}\u0000${token.kind}\u0000${token.query.trim()}`);
 
   function cached(key) {
     const entry = cache.get(key);
@@ -119,7 +121,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
     let list = null;
     let error = null;
     try {
-      const hits = await api.data.async.semanticSearch({ "search-str": query, k: K, "search-blocks": true, "search-pages": token.kind === "[[" });
+      const hits = await api.data.async.semanticSearch({ "search-str": query, k, "search-blocks": true, "search-pages": token.kind === "[[" });
       list = candidates(hits, token.kind);
     } catch (caught) {
       error = caught;
@@ -152,7 +154,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
       }
       return;
     }
-    perf?.push("related.request", ms);
+    perf?.push(perfName, ms);
     store(entry.key, list);
     trace({ ev: "related", step: "reply", query, n: list.length, ms: Math.round(ms) });
     // A newer pause is waiting: this reply is cached and not drawn.
@@ -187,7 +189,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
 
   return {
     available, eligible: (token) => Boolean(token) && eligibleQuery(token.query),
-    schedule, cancel, reset,
+    schedule, cancel, reset, ask,
     clear() { cache.clear(); },
     get cacheSize() { return cache.size; },
     get inFlight() { return inFlight != null; },
@@ -195,4 +197,47 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
     get lastQuery() { return info.lastQuery; },
     get lastMs() { return info.lastMs; },
   };
+}
+
+// The preview footer ("Related to the highlighted block"): one lookup after
+// the highlight has rested FOOTER_DWELL_MS, for the highlighted block or page.
+export const FOOTER_DWELL_MS = 500;
+// Roam's search returns the block itself and the blocks on its own page first
+// (notes, block 6ZtlGN-Np "3. Real-time PCR screen": k=6 gave the block plus 5
+// neighbours on its page, all of which are left out, so nothing would show),
+// so 30 are asked for and the first FOOTER_POOL that pass are kept.
+export const FOOTER_K = 30;
+export const FOOTER_POOL = 6;
+export const FOOTER_ROWS = 4;
+export const FOOTER_TEXT = 600;
+export const FOOTER_CHILDREN = 10;
+
+// The text a lookup is asked with: a block's own text, or a page's title and
+// its first ten children, one per line (roam-related-notes' rule), cut at 600.
+export function footerText({ title = null, string = "", children = [] }) {
+  const lines = title != null ? [title, ...children.slice(0, FOOTER_CHILDREN)] : [string];
+  return lines.map((line) => String(line ?? "").trim()).filter(Boolean).join("\n").slice(0, FOOTER_TEXT);
+}
+
+// One pulled hit { uid, string, title, pageUid }: does it belong in the footer?
+// Not the subject, not a block on the subject's page, no page, no empty block,
+// nothing already shown elsewhere (skip: a Set of uids).
+export function footerKeep(hit, info, skip) {
+  if (!hit || typeof hit.uid !== "string") return false;
+  if (hit.uid === info.subjectUid || (hit.pageUid != null && hit.pageUid === info.pageUid)) return false;
+  if (hit.title != null || typeof hit.string !== "string" || !hit.string.trim()) return false;
+  return !skip.has(hit.uid);
+}
+
+// The first FOOTER_POOL hits that pass, no uid twice (the footer draws FOOTER_ROWS of them).
+export function footerPick(hits, info, skip) {
+  const out = [];
+  const seen = new Set(skip);
+  for (const hit of hits) {
+    if (out.length >= FOOTER_POOL) break;
+    if (!footerKeep(hit, info, seen)) continue;
+    seen.add(hit.uid);
+    out.push(hit);
+  }
+  return out;
 }

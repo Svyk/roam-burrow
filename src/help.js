@@ -59,10 +59,17 @@ export function helpGroups(setting, mac = IS_MAC) {
   if (on("drill")) drill.items.push(["# >", "[[Page#heading > child"]);
   if (drill.items.length) groups.push(drill);
 
-  if (on("semanticRows")) {
-    groups.push({ title: "Related", items: [
-      [k("altR"), "move into the Related rows"], ["↑ ↓", "move inside them"], ["↵", "insert the highlighted one"], ["esc", "back to Roam's rows"],
-    ], notes: [] });
+  if (on("semanticRows") || on("semanticRelated")) {
+    const related = { title: "Related", items: [], notes: [] };
+    if (on("semanticRows")) {
+      related.items.push([k("altR"), "move into the Related rows"], ["↑ ↓", "move inside them"], ["↵", "insert the highlighted one"], ["esc", "back to Roam's rows"]);
+    }
+    if (on("semanticRelated")) {
+      related.items.push([k("altR"), "the blocks related to the highlighted one, under its preview"]);
+      const variants = [on("insertVariants") ? `${k("shiftEnter")} ${k("altEnter")}` : "", on("openInSidebar") ? k("sidebarEnter") : ""].filter(Boolean).join(" ");
+      if (variants) related.items.push([variants, "act on them too"]);
+    }
+    groups.push(related);
   }
 
   const preview = { title: "Preview", items: [], notes: [] };

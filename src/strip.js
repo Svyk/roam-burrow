@@ -10,7 +10,7 @@ import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { createPickInfo, filterCandidates, mergeCandidates } from "./recents.js";
 import { rankRefs } from "./refindex.js";
 import { createRichCache, renderParts, richParts, snippet } from "./rich.js";
-import { createSemantic } from "./semantic.js";
+import { createSemantic, FOOTER_CHILDREN, FOOTER_DWELL_MS, FOOTER_K, FOOTER_POOL, FOOTER_ROWS, footerKeep, footerText } from "./semantic.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { looksLikeCode, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
@@ -83,6 +83,11 @@ const RELATED_POOL = 5;
 const RELATED_SLICE_MS = 3;
 const RELATED_STOP_MS = 2;
 const RELATED_PULL = "[:block/uid :block/string :node/title]";
+// The preview footer's hits also say which page each block is on.
+const FOOTER_PULL = "[:block/uid :block/string :node/title {:block/page [:block/uid]}]";
+// Idle slices to wait for a row preview that is still drawing before the
+// footer gives up (a slice is up to 300 ms).
+const FOOTER_WAIT = 20;
 const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaElement?.prototype || {}, "value")?.set;
 
 // Keyboard ownership (spec §4):
@@ -105,7 +110,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const st = {
     phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1, held: false,
+    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1, held: false, foot: -1,
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -176,7 +181,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   });
 
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
-    || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows");
+    || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated");
 
   // Has this page or block children? The page tree knows when it has read
   // the node; otherwise one bounded pull, kept until the popup closes.
@@ -603,6 +608,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   }
 
   function showPreview() {
+    showPreviewNow();
+    footerFollow();
+  }
+
+  function showPreviewNow() {
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key || model.tables !== setting("previewTables")) {
@@ -815,6 +825,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     });
     strip.classList.toggle(OWNING, st.phase === "OWNED");
     paintBand();
+    paintFooter();
     paintChips();
     paintContext();
     sizeStrip();
@@ -1084,7 +1095,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   function hideStrip() {
     scopePanel.hide();
-    scopePreview.hide();
+    hideScopePreview();
     strip.hidden = true;
     strip.classList.remove(OWNING);
     chipsNode.remove();
@@ -1178,6 +1189,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
+      footer: footerRows().length ? (st.foot >= 0 ? "active" : "available") : null,
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
       held: Boolean(st.held),
     };
@@ -1247,7 +1259,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   let placeId = null;
   let redock = false;
   // A hidden preview stays hidden: no place pending for it.
-  function hidePreview() { redock = false; preview.hide(); }
+  function hidePreview() { redock = false; preview.hide(); footerGone(); }
+  function hideScopePreview() { scopePreview.hide(); footerGone(); }
   const inFrameDo = (fn) => { inFrame = true; try { fn(); } finally { inFrame = false; } };
   function requestPlace() {
     if (inFrame) { placePanes(); return; }
@@ -1480,7 +1493,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // attribute holds the page title, or the block's raw string, so a plain
   // comparison is enough (normalising every native row's text cost 10 ms in
   // notes, where a row can hold a whole transcript). Read at draw time only.
-  function relatedVisible(rows) {
+  function relatedVisible(rows, limit = RELATED_ROWS) {
     const titles = new Set();
     const strings = new Set();
     for (const el of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
@@ -1494,7 +1507,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       if (seen.has(row.uid)) return false;
       seen.add(row.uid);
       return row.page ? !titles.has(row.text.toLowerCase()) : !strings.has(row.source);
-    }).slice(0, RELATED_ROWS);
+    }).slice(0, limit);
   }
 
   function relatedDrawSlice(job) {
@@ -1578,6 +1591,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.phase = "RELATED";
     st.active = -1;
     st.rel = index;
+    st.foot = -1;
     st.auto = false;
     st.chip = -1;
     trace({ ev: "related-enter", index });
@@ -1673,7 +1687,289 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     get lastMs() { return semantic.lastMs; },
     get rows() { return related.rows.map((row) => ({ uid: row.uid, kind: row.page ? "page" : "block", insertion: row.insertion })); },
     clear: () => semantic.clear(),
+    footer: {
+      get enabled() { return Boolean(setting("semanticRelated")); },
+      get available() { return foot.available(); },
+      get subject() { return footer.subject?.uid ?? null; },
+      get rows() { return footerRows().map((row) => ({ uid: row.uid, insertion: row.insertion })); },
+      get active() { return st.foot; },
+      get lastQuery() { return foot.lastQuery; },
+      get inFlight() { return foot.inFlight; },
+      get cacheSize() { return foot.cacheSize; },
+      clear: () => foot.clear(),
+    },
   };
+
+  // ---- Related to the highlighted block (the preview footer) ----
+
+  // A highlight that has rested FOOTER_DWELL_MS with a preview showing it
+  // asks Roam's semantic search once, and up to FOOTER_ROWS blocks it finds
+  // show as a footer at the bottom of that preview, inside the pane's own
+  // space (src/preview.js): the popup never changes size. The per-paint path
+  // (footerFollow) compares a key made of uids and restarts a timer: no pull,
+  // no layout. The text, the pulls and the draw come later, at idle.
+  const footer = { key: null, subject: null, timer: null, job: null, rows: [], nodes: [] };
+  const foot = createSemantic({
+    api, win, perf, trace: (event) => trace({ ...event, ev: "footer" }), graph: () => api.graph?.name ?? "",
+    k: FOOTER_K, keyOf: (token) => `${api.graph?.name ?? ""}\u0000foot\u0000${token.uid}`, perfName: "related.footer.request",
+    onReply: (token, list) => onFooterReply(token, list),
+  });
+
+  const footerKeyOf = (subject) => (subject ? `${subject.pane}:${subject.kind}:${subject.uid}` : null);
+  const footerPane = () => (footer.subject?.pane === "scopePreview" ? scopePreview : preview);
+
+  // What the preview on screen is about, from uids only: the highlighted
+  // block or page row while Roam's preview is open, the drill-down's block or
+  // page, or the block highlighted in the drill panel.
+  function footerSubject() {
+    if (!setting("semanticRelated") || st.prompt || st.phase === "IDLE" || !st.pop) return null;
+    if (st.phase === "SCOPE") {
+      if (!st.scope?.preview) return null;
+      const row = st.scope.rows[scopeLevel().active];
+      return row && row.more == null && row.node?.uid ? { pane: "scopePreview", kind: "block", uid: row.node.uid } : null;
+    }
+    if (st.drill && setting("drillPreview")) {
+      const target = st.drill.target;
+      return { pane: "preview", kind: target ? "block" : "page", uid: target?.uid ?? st.drill.page.uid, title: st.drill.page.title, modelKey: st.drill.key };
+    }
+    const row = previewTarget();
+    if (!row || !setting("rowPreview") || !st.pop.classList.contains(EXPANDED)) return null;
+    const modelKey = `row:${row.key}`;
+    if (row.kind === "ref") return { pane: "preview", kind: "block", uid: row.uid, modelKey };
+    return { pane: "preview", kind: "page", uid: row.uid, title: row.title, modelKey };
+  }
+
+  // On every paint.
+  function footerFollow() {
+    const subject = footerSubject();
+    const key = footerKeyOf(subject);
+    if (key === footer.key) return;
+    dropFooter();
+    footer.key = key;
+    footer.subject = subject;
+    if (subject && foot.available()) footer.timer = win.setTimeout(footerDwell, FOOTER_DWELL_MS);
+  }
+
+  // The preview was hidden under the footer: it goes, and starts again if the subject is still there.
+  function footerGone() {
+    if (footer.nodes.length) dropFooter();
+    footerFollow();
+  }
+
+  function cancelFooterJob() {
+    const job = footer.job;
+    footer.job = null;
+    if (job?.id != null) (win.cancelIdleCallback || win.clearTimeout).call(win, job.id);
+  }
+
+  function dropFooter() {
+    if (footer.timer != null) win.clearTimeout(footer.timer);
+    footer.timer = null;
+    cancelFooterJob();
+    const had = footer.nodes.length > 0 || st.foot >= 0;
+    footer.key = null;
+    footer.subject = null;
+    footer.rows = [];
+    footer.nodes = [];
+    preview.setFooter(null);
+    scopePreview.setFooter(null);
+    st.foot = -1;
+    if (had) layoutPop();
+  }
+
+  // The rows the footer shows now (none while its pane is hidden).
+  function footerRows() {
+    if (!footer.nodes.length) return [];
+    const pane = footerPane();
+    return !pane.node.hidden && pane.footerRows ? footer.rows : [];
+  }
+
+  // The pane draws what the subject is about (a row preview is drawn at idle,
+  // after the key that highlighted the row).
+  function footerPaneShows(subject) {
+    if (subject.pane === "scopePreview") return st.phase === "SCOPE" && !scopePreview.node.hidden;
+    return !preview.node.hidden && model?.drillKey === subject.modelKey;
+  }
+
+  function footerDwell() {
+    footer.timer = null;
+    const subject = footerSubject();
+    if (!subject || footerKeyOf(subject) !== footer.key) return;
+    let text;
+    let pageUid = subject.uid;
+    try {
+      if (subject.kind === "block") {
+        const pulled = api.pull("[:block/string {:block/page [:block/uid]}]", [":block/uid", subject.uid]);
+        text = footerText({ string: readableText(pulled?.[":block/string"]) });
+        pageUid = pulled?.[":block/page"]?.[":block/uid"] ?? null;
+      } else {
+        text = footerText({ title: subject.title, children: tree.children(subject.uid).slice(0, FOOTER_CHILDREN).map((kid) => readableText(kid.string)) });
+      }
+    } catch { return; }
+    if (!text) return;
+    trace({ ev: "footer", step: "ask", key: footer.key });
+    foot.ask({ kind: "((", query: text, uid: subject.uid, subjectKey: footer.key, info: { subjectUid: subject.uid, pageUid } });
+  }
+
+  function onFooterReply(token, list) {
+    if (!setting("semanticRelated") || token.subjectKey !== footer.key) { trace({ ev: "footer", step: "drop", why: "subject-changed" }); return; }
+    cancelFooterJob();
+    if (!list.length) return;
+    const job = { token, queue: list.slice(), done: [], id: null, tries: 0 };
+    footer.job = job;
+    job.id = idle(() => footerPullSlice(job));
+  }
+
+  // Everything the footer must not repeat: Burrow's rows, the Related band,
+  // the drill panel, the block being edited, what the pane itself lists.
+  function footerSkip() {
+    const skip = relatedSkip();
+    for (const row of related.rows) skip.add(row.uid);
+    for (const row of st.scope?.rows || []) { if (row.uid) skip.add(row.uid); if (row.node?.uid) skip.add(row.node.uid); }
+    const shownModel = footer.subject?.pane === "scopePreview" ? scopeModel : model;
+    for (const item of shownModel?.items || []) if (item.uid) skip.add(item.uid);
+    return skip;
+  }
+
+  function footerHit(uid) {
+    let pulled;
+    try { pulled = api.pull(FOOTER_PULL, [":block/uid", uid]); } catch { return null; }
+    if (!pulled) return null;
+    return { uid, string: pulled[":block/string"], title: pulled[":node/title"], pageUid: pulled[":block/page"]?.[":block/uid"] ?? null };
+  }
+
+  const footerRow = (hit) => ({
+    kind: "related", page: false, foot: true, key: `foot:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`,
+    ...rowText(hit.string), rich: richFor(hit.uid, hit.string), source: hit.string,
+  });
+
+  function footerPullSlice(job) {
+    job.id = null;
+    if (footer.job !== job) return;
+    if (footerKeyOf(footerSubject()) !== job.token.subjectKey) { footer.job = null; return; }
+    const t0 = performance.now();
+    const skip = footerSkip();
+    while (job.queue.length && job.done.length < FOOTER_POOL && performance.now() - t0 < RELATED_STOP_MS) {
+      const hit = footerHit(job.queue.shift().uid);
+      if (hit && footerKeep(hit, job.token.info, skip)) { job.done.push(footerRow(hit)); skip.add(hit.uid); }
+    }
+    perf.push("related.footer.pull", performance.now() - t0);
+    const more = job.queue.length && job.done.length < FOOTER_POOL;
+    job.id = idle(() => (more ? footerPullSlice(job) : footerDrawSlice(job)));
+  }
+
+  function footerDrawSlice(job) {
+    job.id = null;
+    if (footer.job !== job) return;
+    if (footerKeyOf(footerSubject()) !== job.token.subjectKey) { footer.job = null; return; }
+    if (!footerPaneShows(footer.subject)) {
+      job.tries += 1;
+      if (job.tries > FOOTER_WAIT) { footer.job = null; trace({ ev: "footer", step: "give-up" }); return; }
+      job.id = idle(() => footerDrawSlice(job));
+      return;
+    }
+    footer.job = null;
+    const t0 = performance.now();
+    const rows = relatedVisible(job.done, FOOTER_ROWS);
+    if (!rows.length) return;
+    footer.rows = rows;
+    footer.nodes = rows.map((row, i) => rowNode(row, i));
+    footerPane().setFooter(footer.nodes);
+    paintFooter();
+    layoutPop();
+    perf.push("related.footer.draw", performance.now() - t0);
+    trace({ ev: "footer", step: "draw", n: rows.length });
+  }
+
+  function paintFooter() {
+    footer.nodes.forEach((node, i) => {
+      node.classList.toggle("burrow-active", i === st.foot);
+      node.setAttribute("aria-selected", String(i === st.foot));
+    });
+  }
+
+  function setFoot(index) {
+    st.foot = index;
+    paintFooter();
+    layoutPop();
+  }
+
+  const footerTarget = (row) => ({ type: "block", uid: row.uid, text: resolveRefs(row.source) });
+  const footerCommit = (row) => footerRows().includes(row) && commit({ kind: "related", key: row.key, uid: row.uid, insertion: row.insertion });
+
+  // ⌥R moves into the footer (first in the order footer, Related band, back),
+  // and while a footer row holds the selection its keys come first. Returns
+  // true when the key was handled. Modifier keys alone change nothing.
+  function footerKey(event) {
+    if (st.prompt || st.phase === "IDLE" || st.phase === "RELATED" || MODIFIER_KEYS.has(event.key)) return false;
+    const rows = footerRows();
+    if (st.foot >= 0 && !rows.length) setFoot(-1);
+    if (isAltR(event)) {
+      if (st.foot >= 0) {
+        setFoot(-1);
+        if (st.phase !== "SCOPE" && bandRows().length) enterRelated(0);
+      } else if (rows.length) setFoot(0);
+      else return false;
+      consume(event);
+      return true;
+    }
+    if (st.foot < 0) return false;
+    const row = rows[st.foot];
+    const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      setFoot(Math.max(0, Math.min(rows.length - 1, st.foot + (event.key === "ArrowDown" ? 1 : -1))));
+      consume(event);
+      return true;
+    }
+    if (plain && event.key === "Escape") { setFoot(-1); consume(event); return true; }
+    if (plain && (event.key === "Enter" || event.key === "Tab")) {
+      consume(event);
+      if (!footerCommit(row)) refused();
+      return true;
+    }
+    const variant = variantOf(event, setting);
+    if (variant && row) {
+      consume(event);
+      runVariant(variant, footerTarget(row), st.phase === "SCOPE" ? scopeLevel().query : labelQuery(row));
+      return true;
+    }
+    setFoot(-1);
+    return false;
+  }
+
+  function onFooterMouseMove(event) {
+    const at = `${event.clientX},${event.clientY}`;
+    if (at === lastPointer) return;
+    lastPointer = at;
+    if (st.prompt || st.help || st.phase === "IDLE") return;
+    const node = event.target.closest?.(".burrow-preview-related .burrow-row");
+    if (!node) return;
+    const index = Number(node.dataset.index);
+    if (!footerRows()[index] || st.foot === index) return;
+    if (st.phase === "RELATED") leaveRelated();
+    setFoot(index);
+  }
+
+  function onFooterMouseDown(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = event.target.closest?.(".burrow-preview-related .burrow-row");
+    const row = node ? footerRows()[Number(node.dataset.index)] : null;
+    if (!row) return;
+    if (event.shiftKey && setting("openInSidebar")) { if (!openSidebar(footerTarget(row))) refused(); return; }
+    if (!footerCommit(row)) reset("click-refused");
+  }
+
+  function footerTip(node) {
+    const row = footerRows()[Number(node.dataset.index)];
+    if (!row) return null;
+    return { el: node, title: row.text, lines: [
+      ["↵", `or click: insert ${row.insertion}`],
+      setting("openInSidebar") ? ["⇧+click", "open it in the sidebar"] : null,
+      [keyLabel("altR"), "move into these rows"],
+      ["", "from Roam's semantic search, for the highlighted block"],
+    ].filter(Boolean) };
+  }
 
   // ---- popup attach / detach ----
 
@@ -1809,6 +2105,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     contextFor = null;
     cancelContext();
     semantic.reset();
+    foot.reset();
+    dropFooter();
     cancelRelatedJob();
     related.key = null;
     related.rows = [];
@@ -1846,6 +2144,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.phase = "OWNED";
     st.active = index;
     st.rel = -1;
+    st.foot = -1;
     trace({ ev: "own", index });
   }
 
@@ -1925,7 +2224,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     // moved without an event Burrow saw yet): rank again before the key acts.
     // Enter or Tab then only redraws; the highlight the user saw was Burrow's,
     // so the key never falls through to a Roam row that was not highlighted.
-    if ((st.phase === "OWNED" || st.phase === "RELATED") && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
+    if ((st.phase === "OWNED" || st.phase === "RELATED" || st.foot >= 0) && event.target === st.ta && (ACTION_KEYS.has(event.key) || event.altKey) && stale(st.ta)) {
       trace({ ev: "stale-key", key: event.key });
       evaluate(st.ta);
       if (frameQueued) inFrameDo(draw);
@@ -1943,6 +2242,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.prompt) { promptKey(event); return; }
     const count = shown.length;
     const key = event.key;
+    // The footer under the preview comes first in the ⌥R order (footer, band, back).
+    if (footerKey(event)) return;
     if (st.phase === "SCOPE") { scopeKey(event); return; }
     if (isAltR(event) && (st.phase === "ARMED" || st.phase === "OWNED" || st.phase === "RELATED")) {
       // With no band the key passes untouched.
@@ -2404,7 +2705,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (!scope) return;
     st.scope = null;
     scopePanel.hide();
-    scopePreview.hide();
+    hideScopePreview();
     scopeModel = null;
     st.pop?.classList.remove(SCOPE_OPEN);
     st.phase = scope.returnTo.phase;
@@ -2461,13 +2762,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   }
 
   function showScopePreview() {
+    showScopePreviewNow();
+    footerFollow();
+  }
+
+  function showScopePreviewNow() {
     const level = scopeLevel();
-    if (!st.scope.preview) { scopePreview.hide(); return; }
+    if (!st.scope.preview) { hideScopePreview(); return; }
     const row = st.scope.rows[level.active];
     const target = row && row.more == null ? row.node : (level.page?.uid === level.uid ? null : tree.get(level.uid));
     const first = tree.trail(level.uid)[0];
     const page = level.page || (first ? { uid: first.uid, title: first.title } : null);
-    if (!page) { scopePreview.hide(); return; }
+    if (!page) { hideScopePreview(); return; }
     const key = `${page.uid}:${target?.uid ?? ""}:${setting("previewTables")}`;
     if (scopeModel?.drillKey !== key) {
       scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
@@ -2705,11 +3011,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function onShiftPointer(event) {
     if (!event.shiftKey || st.phase === "IDLE" || !setting("openInSidebar")) return;
     const inStrip = strip.contains(event.target);
-    if (!inStrip && !scopePanel.node.contains(event.target)) return;
+    const inFooter = Boolean(event.target.closest?.(".burrow-preview-related"));
+    if (!inStrip && !inFooter && !scopePanel.node.contains(event.target)) return;
     // preventDefault on a pointerdown would cancel the mousedown that follows.
     if (event.type.startsWith("pointer")) { event.stopPropagation(); event.stopImmediatePropagation(); return; }
     consume(event);
-    if (event.type === "mousedown") (inStrip ? onStripMouseDown : onScopeMouseDown)(event);
+    if (event.type === "mousedown") (inStrip ? onStripMouseDown : inFooter ? onFooterMouseDown : onScopeMouseDown)(event);
   }
 
   function onScopeMouseDown(event) {
@@ -2870,6 +3177,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function previewTip(target, pane) {
     const node = target.closest?.(".burrow-preview");
     if (!node) return null;
+    const foot = target.closest?.(".burrow-preview-related .burrow-row");
+    if (foot) return footerTip(foot);
     const trail = [...node.querySelectorAll(".burrow-trail .burrow-crumb")].map((n) => n.textContent).join(" › ");
     if (pane === scopePreview) return { el: node, title: trail, lines: [[keyLabel("ctrlO"), "show or hide this preview"], ["", "read-only; the highlighted line is the selected block"]] };
     if (st.drill) return { el: node, title: trail, lines: [["↵", "insert the highlighted block"], ["", "read-only; follows what you type after # and >"]] };
@@ -2881,7 +3190,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // exception is Enter or Tab while Burrow's row or panel held the
   // highlight: Roam's own row was not highlighted, so the key stops here.
   const guarded = (name, handler) => (event) => {
-    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "RELATED" || st.phase === "SCOPE" || Boolean(st.prompt))
+    const held = name === "keydown" && (st.phase === "OWNED" || st.phase === "RELATED" || st.phase === "SCOPE" || Boolean(st.prompt) || st.foot >= 0)
       && (event.key === "Enter" || event.key === "Tab");
     try {
       handler(event);
@@ -2967,6 +3276,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   lifecycle.event(scopePanel.node, "click", guarded("click", onHelpClick));
   lifecycle.event(sheet.node, "mousedown", (event) => { event.preventDefault(); event.stopPropagation(); });
   for (const p of [preview, scopePreview]) lifecycle.event(p.node, "mousedown", (event) => { event.preventDefault(); event.stopPropagation(); });
+  for (const p of [preview, scopePreview]) {
+    lifecycle.event(p.node, "mousemove", guarded("mousemove", onFooterMouseMove));
+    lifecycle.event(p.node, "mousedown", guarded("mousedown", (event) => { if (event.target.closest?.(".burrow-preview-related")) onFooterMouseDown(event); }));
+  }
   tips.attach(strip, guardedTip(stripTip));
   tips.attach(band, guardedTip(relatedTip));
   tips.attach(hints, guardedTip(hintTip));

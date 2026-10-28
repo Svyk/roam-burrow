@@ -40,6 +40,7 @@ export function hintsKey(items) {
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
 //   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them (s.recentAbove: all of them recent rows);
 //   s.related: "available" (the Related band has rows) | "active" (one of them holds the selection) | null;
+//   s.footer: the same for the Related footer under the preview: "available" | "active" | null;
 //   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline,
 //     insertVariants, openInSidebar }; s.held: ⇧, ⌥ or ⌘ held on a Burrow row (the line
 //     is full already, so the variants take its place while a modifier is held).
@@ -48,9 +49,16 @@ export function pickerHints(s, mac = IS_MAC) {
   if (s.related === "active") {
     return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
   }
+  if (s.footer === "active") {
+    return [["↵", "insert", "Insert the highlighted block related to the previewed one (Roam's semantic search)"], ["↑↓", "move", "Move between the related blocks under the preview"], ["esc", "back", "Back to the highlighted row"]];
+  }
   const items = baseHints(s, mac);
   // Not in the alias chips, a prompt or the held-modifier variants: those lines name only their own keys.
-  if (s.related === "available" && !s.prompt && !s.chips && !s.held) items.push([keyLabel("altR", mac), "related", "Move into the Related rows from Roam's semantic search"]);
+  // One ⌥R item whether the footer, the band or both are there (the footer comes first).
+  if ((s.related === "available" || s.footer === "available") && !s.prompt && !s.chips && !s.held) {
+    const tip = s.footer === "available" ? "Move into the blocks related to the highlighted one (Roam's semantic search)" : "Move into the Related rows from Roam's semantic search";
+    items.push([keyLabel("altR", mac), "related", tip]);
+  }
   return items;
 }
 
