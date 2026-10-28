@@ -1,4 +1,4 @@
-/* Burrow v0.9.0 | MIT | generated; edit src/ */
+/* Burrow v0.9.1 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -591,14 +591,46 @@ function buildAliasIndex(rows, keyword, memo = null) {
       if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map(), memo: { parsed, keys } };
+  return { entries, byPage, pageAliases, refsByPage: /* @__PURE__ */ new Map(), usesByAlias: /* @__PURE__ */ new Map(), aliasesByUse: /* @__PURE__ */ new Map(), memo: { parsed, keys } };
 }
 function setAliasRefs(index, rows) {
   const refsByPage = new Map(rows || []);
   for (const entry of index.entries) entry.refs = refsByPage.get(entry.uid) ?? null;
   index.refsByPage = refsByPage;
 }
-function groupAliasHits(hits, index) {
+var useKey = (uid, alias) => `${uid}\0${String(alias).trim().toLowerCase()}`;
+function countAliasUses(index, rows) {
+  const uses = /* @__PURE__ */ new Map();
+  const titles = /* @__PURE__ */ new Map();
+  const names = /* @__PURE__ */ new Map();
+  for (const entry of index?.entries || []) {
+    titles.set(entry.uid, entry.title);
+    if (!names.has(entry.uid)) names.set(entry.uid, /* @__PURE__ */ new Set());
+    names.get(entry.uid).add(entry.alias.trim().toLowerCase());
+  }
+  for (const [uid, , string] of rows || []) {
+    if (typeof string !== "string" || !titles.has(uid)) continue;
+    for (const m of string.matchAll(/\[([^\[\]]+)\]\(\[\[([^\]]+)\]\]\)/g)) {
+      const text = m[1].trim().toLowerCase();
+      if (m[2] !== titles.get(uid) || !names.get(uid).has(text)) continue;
+      const key = useKey(uid, text);
+      uses.set(key, (uses.get(key) || 0) + 1);
+    }
+  }
+  return uses;
+}
+function setAliasUses(index, uses) {
+  index.usesByAlias = uses || /* @__PURE__ */ new Map();
+  index.aliasesByUse = /* @__PURE__ */ new Map();
+  if (!index.usesByAlias.size) return;
+  for (const [uid, list] of index.pageAliases) {
+    index.aliasesByUse.set(uid, [...list].sort((a, b) => aliasUses(index, uid, b) - aliasUses(index, uid, a)));
+  }
+}
+function aliasUses(index, uid, alias) {
+  return index?.usesByAlias?.get(useKey(uid, alias)) || 0;
+}
+function groupAliasHits(hits, index, { byUse = false } = {}) {
   const seen = /* @__PURE__ */ new Set();
   const rows = [];
   for (const hit of hits) {
@@ -613,7 +645,7 @@ function groupAliasHits(hits, index) {
       tier: hit.tier,
       refs: hit.refs ?? null,
       seenByRoamAliases: hit.seenByRoamAliases,
-      aliases: index.pageAliases?.get(hit.uid) || [hit.alias]
+      aliases: byUse && index.aliasesByUse?.get(hit.uid) || index.pageAliases?.get(hit.uid) || [hit.alias]
     });
   }
   return rows;
@@ -1046,6 +1078,7 @@ var TITLES = "[:find ?t ?u :where [?p :node/title ?t] [?p :block/uid ?u]]";
 var WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] [?p :block/children ?c]]";
 var ALIAS_PULL = "[{:block/_refs [:block/string {:block/page [:node/title :block/uid]}]}]";
 var ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p]]";
+var ALIAS_USES = `[:find ?u ?r ?s :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p] [?r :block/string ?s] [(clojure.string/includes? ?s "]([[")]]`;
 var yieldTo = () => new Promise((resolve) => setTimeout(resolve, 0));
 function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globalThis, doc = globalThis.document ?? null, now = () => performance.now() }) {
   let aliases = null;
@@ -1054,6 +1087,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
   let recent = null;
   let builtAt = 0;
   let keyword = null;
+  let usesRead = false;
   let pending = false;
   const listeners = /* @__PURE__ */ new Set();
   const notify = () => {
@@ -1145,6 +1179,7 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     const t0 = performance.now();
     const next = buildAliasIndex(rows, kw, aliases.memo);
     setAliasRefs(next, [...aliases.refsByPage]);
+    setAliasUses(next, aliases.usesByAlias);
     titles.setAliases(next);
     const left = rekey?.refs === refs ? rekey.entries.slice(rekey.at) : [];
     const entries = [.../* @__PURE__ */ new Set([...left, ...aliasKeyTargets(refs, next.byPage, aliases.byPage)])];
@@ -1182,6 +1217,12 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     const aliasRows = readAliasRows(nextKeyword);
     const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
     const aliasRefRows = aliasUids.length ? await q(ALIAS_REFS, aliasUids) : [];
+    let useRows = null;
+    if (aliasUids.length && setting("aliasUsage")) {
+      const tu = performance.now();
+      useRows = await q(ALIAS_USES, aliasUids);
+      perf.push("aliasUses", performance.now() - tu);
+    }
     if (!first && refs && !quiet()) {
       perf.counters.rebuildsDeferred = (perf.counters.rebuildsDeferred || 0) + 1;
       return false;
@@ -1202,6 +1243,8 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     const t1 = performance.now();
     const nextAliases = buildAliasIndex(aliasRows, nextKeyword);
     setAliasRefs(nextAliases, aliasRefRows);
+    if (useRows) setAliasUses(nextAliases, countAliasUses(nextAliases, useRows));
+    usesRead = Boolean(useRows) || !aliasUids.length;
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
@@ -1274,6 +1317,10 @@ function createIndexes({ api, perf, setting, idle, lifecycle = null, win = globa
     },
     get watched() {
       return [...watches.keys()];
+    },
+    // Counts exist once a build with the switch on has read them.
+    get usesRead() {
+      return usesRead;
     },
     // A popup opened: an index older than the TTL is rebuilt at the next
     // quiet moment (after this popup closes and the typing stops), never now.
@@ -1467,6 +1514,8 @@ var DEFAULTS = Object.freeze({
   aliasInline: true,
   aliasPreselect: true,
   aliasChips: true,
+  aliasUsage: true,
+  aliasPrefix: true,
   refRanking: true,
   refPreselect: true,
   refProse: true,
@@ -1506,6 +1555,8 @@ var SWITCHES = [
   ["aliasInline", "Alias rows with their page", "One row per page an alias matches, alias ↳ Page with its reference count, also when roam-aliases is installed: its Aliases column folds into these rows instead of lying beside or over Roam's list. Off: Burrow leaves aliases that roam-aliases lists to its column."],
   ["aliasPreselect", "Pre-select the alias row", "When an alias starts with what you typed and no page has exactly that title, its row starts selected, so Enter inserts it."],
   ["aliasChips", "Alias chips", "Under a selected alias row, the page's other aliases as chips. ⌥↓ moves into them, ←/→ picks one (the line also scrolls with the mouse wheel or trackpad, and a chip shows its full alias when selected or hovered), Enter inserts the page shown as that alias, Esc goes back to the rows."],
+  ["aliasUsage", "Order alias chips by use", "Chips under an alias row start with the alias you link most: each is counted by how many times [alias]([[Page]]) appears in your graph, most used first, ties in the alias block's order. A chip's tip adds ×N. Counted once at idle (about 75 ms for 24 alias pages in svy), never while typing. Off: the alias block's order."],
+  ["aliasPrefix", "alias: prefix", "Type [[alias:lo to see only alias rows for lo (up to three), then Roam's list as usual. Enter inserts [alias]([[Page]]) in place of the whole [[alias:lo]]. Nothing else (recent rows, pages, drill-down) shows for that text. Off: [[alias:lo is an ordinary search."],
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["refProse", "Prose before code in ((", "Burrow's (( rows match a block's own words: code blocks, inline code and the insides of {{embed}}, {{roam/render}} and other macros count only when what you type looks like code (it has ( ) . _ = or the like). A block of more than 64 words ranks after shorter blocks that match as well, and a match inside a [[page]] or #tag the block links comes first among equals. Off: code counts like any text and length does not count (0.6.1)."],
@@ -2189,6 +2240,7 @@ function helpGroups(setting, mac = IS_MAC) {
   groups.push(pick);
   const aliases = { title: "Aliases", items: [], notes: [] };
   if (on("aliasPages")) aliases.items.push(["[[alias", setting("aliasLinkFormat") === "[[Page]]" ? "↵ inserts [[Page]]" : "↵ inserts [alias]([[Page]])"]);
+  if (on("aliasPages") && on("aliasPrefix")) aliases.items.push(["[[alias:lo", "only alias rows for lo"]);
   if (on("aliasPages") && on("aliasChips")) aliases.items.push([k("altDown"), "the page's other aliases, ←→"]);
   if (on("aliasCreate")) aliases.items.push([k("altA"), "add an alias to the page"]);
   if (on("aliasDelete") && on("aliasChips")) aliases.items.push([k("altBackspace"), "delete the selected alias"]);
@@ -3625,6 +3677,7 @@ var POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
 var HAS_KIDS = "[(limit :block/children 1)]";
 var MIN_REF_QUERY = 3;
 var MIN_ALIAS_QUERY = 2;
+var ALIAS_PREFIX = /^alias:\s*(.*)$/is;
 var RECENT_QUERY = 2;
 var PLACEHOLDERS = /* @__PURE__ */ new Set(["search for a page", "search for a block"]);
 var NATIVE_PICK_FRAMES = 2;
@@ -3655,7 +3708,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     chip: -1,
     scope: null,
     prompt: null,
-    help: false
+    help: false,
+    aliasOnly: null
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -3752,7 +3806,15 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   }
   function rank(token) {
     st.drill = null;
+    st.aliasOnly = null;
     st.filters = null;
+    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
+      const m = ALIAS_PREFIX.exec(token.query);
+      if (m) {
+        st.aliasOnly = m[1];
+        return m[1].trim() ? mainRows(token, setting("betterMatch"), m[1]) : [];
+      }
+    }
     if (indexes.refs !== richRefs) {
       richRefs = indexes.refs;
       richCache.clear();
@@ -3773,11 +3835,11 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     return rows;
   }
   const frequent = (kind) => setting("frecency") ? frecency?.scores(kind) : null;
-  function mainRows(token, recall) {
-    const filters = setting("queryFilters") ? parseFilters(token.query) : null;
+  function mainRows(token, recall, query = token.query) {
+    const filters = setting("queryFilters") ? parseFilters(query) : null;
     st.filters = filters;
-    const searchText = filters ? filters.text : token.query;
-    const planText = filters ? filters.planText : token.query;
+    const searchText = filters ? filters.text : query;
+    const planText = filters ? filters.planText : query;
     const plan = searchPlan(planText);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
@@ -3810,7 +3872,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string)
       }));
     }
-    if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
+    if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY && st.aliasOnly == null) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
     const format = setting("aliasLinkFormat");
     const accepted = pageFilter(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
@@ -3821,7 +3883,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       skip: accepted ? (entry) => !accepted(entry) : void 0
     });
     if (setting("aliasInline")) {
-      return groupAliasHits(hits, indexes.aliases).map((hit) => ({
+      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit) => ({
         kind: "alias",
         key: `alias:${hit.uid}`,
         uid: hit.uid,
@@ -4017,6 +4079,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (!st.pop) return [];
     const inline = setting("aliasInline");
     const pages = st.rows.some((row) => row.kind === "page");
+    if (st.aliasOnly != null) return st.rows.slice(0, ROW_LIMIT);
     if (st.token?.kind !== "[[" || st.drill || inline && !pages) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = /* @__PURE__ */ new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
@@ -4058,7 +4121,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
-    const searchText = st.filters ? st.filters.planText : query;
+    const searchText = st.filters ? st.filters.planText : st.aliasOnly ?? query;
     const filterText = rows.length ? filtersText() : "";
     const same = query === shownQuery && filterText === shownFilters && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
@@ -4297,7 +4360,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     return node;
   }
-  const searchWords = () => st.filters ? st.filters.planText : st.token?.query;
+  const searchWords = () => st.filters ? st.filters.planText : st.aliasOnly ?? st.token?.query;
   let highlightFor = null;
   let highlightRe = null;
   function highlightPattern(query) {
@@ -4400,6 +4463,10 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   let chipsScrolled = false;
   let revealedChip = -1;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
+  const chipTitle = (row, alias) => {
+    const n = setting("aliasUsage") ? aliasUses(indexes.aliases, row.uid, alias) : 0;
+    return n > 0 ? `${alias} ×${n}` : alias;
+  };
   function paintChips() {
     const row = shown[st.active];
     const show = chipsAvailable(row);
@@ -4427,7 +4494,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
           chipsNode.replaceChildren(
             Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
             ...row.aliases.map((alias, i) => {
-              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: alias });
+              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: chipTitle(row, alias) });
               chip.dataset.index = String(i);
               return chip;
             })
@@ -5760,7 +5827,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const active = shown[st.active];
     if (chip && active?.kind === "alias") {
       const i = Number(chip.dataset.index);
-      return { el: chip, title: active.aliases[i], lines: [
+      return { el: chip, title: chipTitle(active, active.aliases[i]), lines: [
         ["↵", `or click: insert ${chipRow(active, i).insertion}`],
         ["←→", "move between the aliases"],
         setting("aliasDelete") ? [keyLabel("altBackspace"), "delete the selected alias (asks first)"] : null
@@ -5960,9 +6027,9 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.9.0";
+var VERSION = "0.9.1";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;
@@ -6051,6 +6118,10 @@ async function onload({ extensionAPI, extension }) {
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       onChange: (id, event) => {
         if (id === "aliasKeyword") indexes?.schedule();
+        if (id === "aliasUsage") {
+          const on = typeof event === "boolean" ? event : event?.target?.checked;
+          if (on !== false && indexes && !indexes.usesRead) indexes.schedule();
+        }
         if (id !== "refSearch") return;
         const value = typeof event === "boolean" ? event : event?.target?.checked;
         if (typeof value === "boolean") void syncRefCommand(value);
