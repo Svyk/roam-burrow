@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CACHE_LIMIT, CACHE_TTL_MS, DEBOUNCE_MS, candidates, createSemantic, eligibleQuery } from "../src/semantic.js";
+import { CACHE_LIMIT, CACHE_TTL_MS, DEBOUNCE_MS, SYNC_RETRIES, SYNC_RETRY_MS, candidates, createSemantic, eligibleQuery } from "../src/semantic.js";
 
 // Fake timers and a fake Roam: each semanticSearch call waits for the test to settle it.
 function harness({ enabled = true, graph = "g" } = {}) {
@@ -257,4 +257,45 @@ test("a closed popup's request that fails still lets the new popup's queued quer
   h.calls[1].resolve([chunk("c2")]);
   await h.flush();
   assert.deepEqual(h.replies.map((r) => r.query), ["second popup query"]);
+});
+
+test("Initial sync in progress: asked again after a wait, no failure, no console line", async () => {
+  const h = harness();
+  const logged = [];
+  const original = console.debug;
+  console.debug = (...args) => logged.push(args);
+  try {
+    h.semantic.schedule(h.token("black panther"));
+    h.tick(DEBOUNCE_MS);
+    h.calls[0].reject(new Error("Initial sync in progress"));
+    await h.flush();
+    assert.equal(h.semantic.failed, false);
+    h.tick(SYNC_RETRY_MS);
+    assert.equal(h.calls.length, 2, "asked again");
+    h.calls[1].resolve([chunk("a")]);
+    await h.flush();
+    assert.deepEqual(h.replies.map((r) => r.list), [[{ kind: "block", uid: "a" }]]);
+    assert.equal(logged.length, 0);
+    // A newer pause wins over the wait; a reset cancels it.
+    h.semantic.schedule(h.token("black panther two"));
+    h.tick(DEBOUNCE_MS);
+    h.calls[2].reject(new Error("Initial sync in progress"));
+    await h.flush();
+    h.semantic.reset();
+    h.tick(SYNC_RETRY_MS);
+    assert.equal(h.calls.length, 3, "no retry after reset");
+    // Past the retries it is a failure like any other.
+    h.semantic.schedule(h.token("black panther three"));
+    h.tick(DEBOUNCE_MS);
+    for (let i = 0; i <= SYNC_RETRIES; i += 1) {
+      h.calls.at(-1).reject(new Error("Initial sync in progress"));
+      await h.flush();
+      h.tick(SYNC_RETRY_MS);
+    }
+    assert.equal(h.calls.length, 4 + SYNC_RETRIES);
+    assert.equal(h.semantic.failed, true);
+    assert.equal(logged.length, 1);
+  } finally {
+    console.debug = original;
+  }
 });

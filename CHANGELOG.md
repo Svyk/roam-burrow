@@ -8,6 +8,7 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ### Fixed
 
+- **Related rows in svy during Roam's re-embedding.** Roam's semantic search throws `Initial sync in progress` while it re-embeds a graph (svy: about 10 s of every minute on 2026-10-28), and a throw turned the band off until the popup reopened. That error now waits 2 s and asks the same query again (up to 6 times, only while it is still the newest query, no console line).
 - **A phrase in `((` cost 6 ms a key** (notes, `how to stay focused`, 0.7.0 too, with the band on or off). With fewer than three exact rows, the recall pass fuzzy-matched every referenced block that holds any query word, and `to` or `how` are in hundreds of them. A word that common now seeds recall candidates only when every word of the query is that common (more than 200 blocks); a block whose only exact word is such a word is no longer a recall row. notes, the Related typing: 1.3–1.5 ms p95 per key.
 
 ### Added

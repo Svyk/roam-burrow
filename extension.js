@@ -3705,6 +3705,9 @@ var MIN_CHARS = 8;
 var K = 10;
 var CACHE_LIMIT = 50;
 var CACHE_TTL_MS = 5 * 60 * 1e3;
+var SYNC_RETRY_MS = 2e3;
+var SYNC_RETRIES = 6;
+var syncing = (error) => /sync in progress/i.test(String(error?.message || error));
 function eligibleQuery(query) {
   const text = String(query ?? "").trim();
   return text.length >= MIN_CHARS && text.split(/\s+/).length >= MIN_WORDS;
@@ -3729,6 +3732,7 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
 } }) {
   const cache = /* @__PURE__ */ new Map();
   let timer = null;
+  let retryTimer = null;
   let latest = null;
   let pending = null;
   let inFlight = null;
@@ -3769,6 +3773,8 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
   function cancel() {
     if (timer != null) win.clearTimeout(timer);
     timer = null;
+    if (retryTimer != null) win.clearTimeout(retryTimer);
+    retryTimer = null;
   }
   function ask(token) {
     if (failed || !available()) return;
@@ -3810,6 +3816,18 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
       if (entry.gen !== generation) {
         servePending();
         return;
+      }
+      if (syncing(error)) {
+        if (servePending()) return;
+        entry.tries = (entry.tries ?? 0) + 1;
+        if (latest === entry && entry.tries <= SYNC_RETRIES) {
+          trace({ ev: "related", step: "sync-wait", query, tries: entry.tries });
+          retryTimer = win.setTimeout(() => {
+            retryTimer = null;
+            if (latest === entry && entry.gen === generation && !inFlight) void request(entry);
+          }, SYNC_RETRY_MS);
+          return;
+        }
       }
       failed = true;
       pending = null;

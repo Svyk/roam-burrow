@@ -9,6 +9,12 @@ export const MIN_CHARS = 8;
 export const K = 10;
 export const CACHE_LIMIT = 50;
 export const CACHE_TTL_MS = 5 * 60 * 1000;
+// Roam throws "Initial sync in progress" while it re-embeds the graph (svy:
+// about 10 s of every minute, 2026-10-28). That is a wait, not a failure:
+// the same query is asked again, a few times, while it is still the newest.
+export const SYNC_RETRY_MS = 2000;
+export const SYNC_RETRIES = 6;
+const syncing = (error) => /sync in progress/i.test(String(error?.message || error));
 
 // Two words and eight characters: shorter queries are keywords, which
 // Roam's own list answers better than an embedding does.
@@ -39,6 +45,7 @@ export function candidates(hits, kind) {
 export function createSemantic({ api, win = globalThis, perf = null, trace = () => {}, graph = () => "", now = () => Date.now(), onReply = () => {} }) {
   const cache = new Map();
   let timer = null;
+  let retryTimer = null;
   // The newest pause that asked, the one waiting for the request in flight,
   // the request in flight. An entry is { token, key, gen }.
   let latest = null;
@@ -83,6 +90,8 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
   function cancel() {
     if (timer != null) win.clearTimeout(timer);
     timer = null;
+    if (retryTimer != null) win.clearTimeout(retryTimer);
+    retryTimer = null;
   }
 
   function ask(token) {
@@ -123,6 +132,18 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
       // A failure after the popup closed says nothing about the next one:
       // a query the new popup queued behind it is asked now.
       if (entry.gen !== generation) { servePending(); return; }
+      if (syncing(error)) {
+        if (servePending()) return;
+        entry.tries = (entry.tries ?? 0) + 1;
+        if (latest === entry && entry.tries <= SYNC_RETRIES) {
+          trace({ ev: "related", step: "sync-wait", query, tries: entry.tries });
+          retryTimer = win.setTimeout(() => {
+            retryTimer = null;
+            if (latest === entry && entry.gen === generation && !inFlight) void request(entry);
+          }, SYNC_RETRY_MS);
+          return;
+        }
+      }
       failed = true;
       pending = null;
       if (!logged) {
