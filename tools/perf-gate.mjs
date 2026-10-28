@@ -476,7 +476,7 @@ if (args.includes("--json")) {
   if (drill) {
     const on = report.results.filter((r) => r.arm === "on");
     console.log(`  drill: ${on.map((r) => r.keys).join(" / ")} keys per run, data fetches ${on.map((r) => r.drillFetches).join(" / ")} per run, preview open at the end: ${on.every((r) => r.previewAtEnd)}`);
-    if (table) console.log(`  table: chain pulls ${on.map((r) => r.tableChains).join(" / ")} per run (${on.map((r) => r.keys).join(" / ")} keys), table drawn at the end: ${on.map((r) => r.tableAtEnd).join(" / ")}`);
+    if (table) console.log(`  table: chain pulls ${on.map((r) => r.tableChains).join(" / ")} per run (${on.map((r) => r.keys).join(" / ")} keys), table on screen after the last key (the typed " > " deleted again, so false): ${on.map((r) => r.tableAtEnd).join(" / ")}`);
   }
 }
 process.exitCode = process.exitCode || (verdict.pass ? 0 : 1);
