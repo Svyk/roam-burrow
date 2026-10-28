@@ -59,7 +59,7 @@ export function buildAliasIndex(rows, keyword, memo = null) {
       if (!pageAliases.get(uid).includes(alias)) pageAliases.get(uid).push(alias);
     }
   }
-  return { entries, byPage, pageAliases, refsByPage: new Map(), memo: { parsed, keys } };
+  return { entries, byPage, pageAliases, refsByPage: new Map(), usesByAlias: new Map(), aliasesByUse: new Map(), memo: { parsed, keys } };
 }
 
 // rows: [[pageUid, count], ...]. Counts are read at idle, never per key.
@@ -69,9 +69,50 @@ export function setAliasRefs(index, rows) {
   index.refsByPage = refsByPage;
 }
 
+const useKey = (uid, alias) => `${uid}\u0000${String(alias).trim().toLowerCase()}`;
+
+// rows: [[pageUid, refBlockUid, blockString], ...], the blocks that reference
+// an alias page and contain `](`[[`. Counts every `[alias]([[Page]])` whose
+// link is that page's exact title and whose text is one of its aliases.
+export function countAliasUses(index, rows) {
+  const uses = new Map();
+  const titles = new Map();
+  const names = new Map();
+  for (const entry of index?.entries || []) {
+    titles.set(entry.uid, entry.title);
+    if (!names.has(entry.uid)) names.set(entry.uid, new Set());
+    names.get(entry.uid).add(entry.alias.trim().toLowerCase());
+  }
+  for (const [uid, , string] of rows || []) {
+    if (typeof string !== "string" || !titles.has(uid)) continue;
+    for (const m of string.matchAll(/\[([^\[\]]+)\]\(\[\[([^\]]+)\]\]\)/g)) {
+      const text = m[1].trim().toLowerCase();
+      if (m[2] !== titles.get(uid) || !names.get(uid).has(text)) continue;
+      const key = useKey(uid, text);
+      uses.set(key, (uses.get(key) || 0) + 1);
+    }
+  }
+  return uses;
+}
+
+// Stores the counts and, per page, its aliases most used first (ties keep the
+// alias block's order), so a keystroke only reads a ready list.
+export function setAliasUses(index, uses) {
+  index.usesByAlias = uses || new Map();
+  index.aliasesByUse = new Map();
+  if (!index.usesByAlias.size) return;
+  for (const [uid, list] of index.pageAliases) {
+    index.aliasesByUse.set(uid, [...list].sort((a, b) => aliasUses(index, uid, b) - aliasUses(index, uid, a)));
+  }
+}
+
+export function aliasUses(index, uid, alias) {
+  return index?.usesByAlias?.get(useKey(uid, alias)) || 0;
+}
+
 // hits: matchAliases output, best first. One row per page: its best alias,
-// plus every alias the page has, for the chips.
-export function groupAliasHits(hits, index) {
+// plus every alias the page has, for the chips (byUse: most used first).
+export function groupAliasHits(hits, index, { byUse = false } = {}) {
   const seen = new Set();
   const rows = [];
   for (const hit of hits) {
@@ -80,7 +121,7 @@ export function groupAliasHits(hits, index) {
     rows.push({
       uid: hit.uid, title: hit.title, alias: hit.alias, level: hit.level, score: hit.score, tier: hit.tier,
       refs: hit.refs ?? null, seenByRoamAliases: hit.seenByRoamAliases,
-      aliases: index.pageAliases?.get(hit.uid) || [hit.alias],
+      aliases: (byUse && index.aliasesByUse?.get(hit.uid)) || index.pageAliases?.get(hit.uid) || [hit.alias],
     });
   }
   return rows;
@@ -98,8 +139,9 @@ export function matchAliases(index, plan, { strict = false, limit = 3, skip, pic
     if (match.score < 0 || match.tier === "close") continue;
     hits.push({ ...entry, score: match.score, level: match.level, tier: match.tier });
   }
-  const pick = (hit) => picked?.get(`${hit.uid}:${hit.alias}`) || 0;
-  hits.sort((a, b) => pick(b) - pick(a) || b.score - a.score || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
+  // picked: page uid -> frecency score (spec §18), a tie-break after the match.
+  const pick = (hit) => picked?.get(hit.uid) || 0;
+  hits.sort((a, b) => b.score - a.score || pick(b) - pick(a) || a.title.localeCompare(b.title) || a.alias.localeCompare(b.alias));
   return hits.slice(0, limit);
 }
 

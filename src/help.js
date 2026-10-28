@@ -32,6 +32,7 @@ export function helpGroups(setting, mac = IS_MAC) {
 
   const aliases = { title: "Aliases", items: [], notes: [] };
   if (on("aliasPages")) aliases.items.push(["[[alias", setting("aliasLinkFormat") === "[[Page]]" ? "↵ inserts [[Page]]" : "↵ inserts [alias]([[Page]])"]);
+  if (on("aliasPages") && on("aliasPrefix")) aliases.items.push(["[[alias:lo", "only alias rows for lo"]);
   if (on("aliasPages") && on("aliasChips")) aliases.items.push([k("altDown"), "the page's other aliases, ←→"]);
   if (on("aliasCreate")) aliases.items.push([k("altA"), "add an alias to the page"]);
   if (on("aliasDelete") && on("aliasChips")) aliases.items.push([k("altBackspace"), "delete the selected alias"]);
@@ -59,6 +60,21 @@ export function helpGroups(setting, mac = IS_MAC) {
   preview.items.push([k("ctrlO"), on("rowPreview") ? "Roam's preview, for Burrow's rows too" : "Roam's preview"]);
   if (on("tabDrill") && on("drillPreview")) preview.items.push([k("ctrlO"), "in a drill: its own preview"]);
   groups.push(preview);
+
+  if (on("queryFilters")) {
+    groups.push({
+      title: "Filters",
+      items: [
+        ["\"…\"", "words that stand together"],
+        ["-word", "leave out blocks with the word"],
+        ["in:here", "blocks on this page"],
+        ["in:Page", "blocks on that page (to the next filter)"],
+        ["ns:A/", "pages under A/"],
+        ["is:todo", "open tasks; is:done for done"],
+      ],
+      notes: [],
+    });
+  }
   return groups;
 }
 

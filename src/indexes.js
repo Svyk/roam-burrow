@@ -1,5 +1,6 @@
-import { aliasRowsFromPull, buildAliasIndex, keywordTitles, setAliasRefs } from "./aliases.js";
+import { aliasRowsFromPull, buildAliasIndex, countAliasUses, keywordTitles, setAliasRefs, setAliasUses } from "./aliases.js";
 import { aliasKeyTargets, buildRefIndexSliced, rekeyAliases } from "./refindex.js";
+import { RECENT_DAYS, latestEdits, pullBlocks } from "./recents.js";
 import { buildTitleIndex } from "./titles.js";
 
 const TTL_MS = 60_000;
@@ -18,6 +19,11 @@ const REKEY_SLICE_MS = 3;
 
 const REFERENCED_BLOCKS = `[:find ?u ?s (count ?r) ?pt
   :where [?r :block/refs ?b] [?b :block/string ?s] [?b :block/uid ?u] [?b :block/page ?p] [?p :node/title ?pt]]`;
+// The blocks edited in the last RECENT_DAYS days with their pages (recent
+// rows, spec §18): about 185 ms on the main thread in notes (105k blocks), so
+// it runs only inside the quiet build, with the long query above.
+const EDITED_SINCE = `[:find ?u ?t ?pu ?pt :in $ ?since
+  :where [?b :edit/time ?t] [(> ?t ?since)] [?b :block/uid ?u] [?b :block/page ?p] [?p :block/uid ?pu] [?p :node/title ?pt]]`;
 const TITLES = "[:find ?t ?u :where [?p :node/title ?t] [?p :block/uid ?u]]";
 const WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] [?p :block/children ?c]]";
 // The blocks that reference an alias attribute page, read with one pull per
@@ -25,6 +31,10 @@ const WITH_CONTENT = "[:find [?t ...] :in $ [?t ...] :where [?p :node/title ?t] 
 // the main thread for 70 ms). Roam re-runs the same pull for the watch.
 export const ALIAS_PULL = "[{:block/_refs [:block/string {:block/page [:node/title :block/uid]}]}]";
 const ALIAS_REFS = "[:find ?u (count ?r) :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p]]";
+// The strings of the blocks that link an alias page as `[alias]([[Page]])`,
+// for the chip order (spec §20). ?r keeps equal strings from different
+// blocks apart.
+const ALIAS_USES = `[:find ?u ?r ?s :in $ [?u ...] :where [?p :block/uid ?u] [?r :block/refs ?p] [?r :block/string ?s] [(clojure.string/includes? ?s "]([[")]]`;
 
 // Both indexes are built at idle and refreshed lazily when a popup opens and
 // they are older than the TTL. Nothing here runs on a keystroke.
@@ -34,8 +44,10 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
   let aliases = null;
   let refs = null;
   let titles = null;
+  let recent = null;
   let builtAt = 0;
   let keyword = null;
+  let usesRead = false;
   let pending = false;
   const listeners = new Set();
   const notify = () => { for (const fn of listeners) { try { fn(); } catch (error) { console.error("[burrow] index listener failed", error); } } };
@@ -141,6 +153,7 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     const t0 = performance.now();
     const next = buildAliasIndex(rows, kw, aliases.memo);
     setAliasRefs(next, [...aliases.refsByPage]);
+    setAliasUses(next, aliases.usesByAlias);
     titles.setAliases(next);
     const left = rekey?.refs === refs ? rekey.entries.slice(rekey.at) : [];
     const entries = [...new Set([...left, ...aliasKeyTargets(refs, next.byPage, aliases.byPage)])];
@@ -178,20 +191,38 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     const aliasRows = readAliasRows(nextKeyword);
     const aliasUids = [...new Set((aliasRows || []).map((row) => row[2]))];
     const aliasRefRows = aliasUids.length ? await q(ALIAS_REFS, aliasUids) : [];
+    let useRows = null;
+    if (aliasUids.length && setting("aliasUsage")) {
+      const tu = performance.now();
+      useRows = await q(ALIAS_USES, aliasUids);
+      perf.push("aliasUses", performance.now() - tu);
+    }
     // The long query: not now if the user is typing or a popup opened meanwhile.
     if (!first && refs && !quiet()) { perf.counters.rebuildsDeferred = (perf.counters.rebuildsDeferred || 0) + 1; return false; }
     const rows = await q(REFERENCED_BLOCKS);
+    // The newest edits: blocks (with their text, pulled once) and pages.
+    // Quiet only, the first build too; skipped, the last list stays.
+    let nextRecent = setting("recentRows") ? recent : null;
+    if (setting("recentRows") && quiet()) {
+      try {
+        const edited = latestEdits(await q(EDITED_SINCE, Date.now() - RECENT_DAYS * 86_400_000), { blocks: 30 });
+        nextRecent = { blocks: pullBlocks(api, edited.blocks), pages: edited.pages, builtAt: Date.now() };
+      } catch (error) { console.error("[burrow] recent edits unavailable", error); }
+    }
     const titleRows = await q(TITLES);
     const separated = (titleRows || []).map(([t]) => t).filter((t) => /[#>]/.test(t));
     const withContent = new Set(separated.length ? await q(WITH_CONTENT, separated) : []);
     const t1 = performance.now();
     const nextAliases = buildAliasIndex(aliasRows, nextKeyword);
     setAliasRefs(nextAliases, aliasRefRows);
+    if (useRows) setAliasUses(nextAliases, countAliasUses(nextAliases, useRows));
+    usesRead = Boolean(useRows) || !aliasUids.length;
     const nextRefs = await buildRefIndexSliced(rows, nextAliases.byPage, { yieldTo });
     await yieldTo();
     titles = buildTitleIndex(titleRows, nextAliases, withContent);
     rekey = null;
     refs = nextRefs;
+    recent = nextRecent;
     aliases = nextAliases;
     aliasPrint = printOf(aliasRows);
     keyword = nextKeyword;
@@ -233,12 +264,15 @@ export function createIndexes({ api, perf, setting, idle, lifecycle = null, win 
     get aliases() { return aliases; },
     get refs() { return refs; },
     get titles() { return titles; },
+    get recent() { return recent; },
     schedule,
     build,
     refreshAliases,
     // fn() runs after a build or an alias refresh.
     listen(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     get watched() { return [...watches.keys()]; },
+    // Counts exist once a build with the switch on has read them.
+    get usesRead() { return usesRead; },
     // A popup opened: an index older than the TTL is rebuilt at the next
     // quiet moment (after this popup closes and the typing stops), never now.
     refreshIfStale() {

@@ -4,17 +4,63 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
-## [0.8.3] - 2026-10-27
+## [0.9.2] - 2026-10-27
 
 ### Added
 
 - **Images in the preview** (`previewImages`, on). In Burrow's previews (the row preview over Roam's, the `[[` drill-down preview and the preview beside the Tab list), the highlighted block's first `![](url)` shows as a thumbnail under its line in a box reserved when the line is drawn (at most 240×160, `object-fit: contain`), with `+N` when the block has more images. It loads after the row has stayed highlighted for 150 ms, only for that row: a newer highlight cancels the wait, and a result that arrives after the highlight moved is not shown. A plain graph's image is an `<img loading="lazy">`; in an encrypted graph, or for a `.enc` URL, Roam's `file.get` decrypts it into an object URL. Up to 8 object URLs are kept, revoked on eviction, when the popup closes and on unload. A decrypted file over 5 MB, a failed download or a failed decode keeps the `image` label with the alt text, in the same box; nothing throws. No Roam component is mounted in the popup. Burrow's rows keep the `image` label.
-- Live gates: thumbnails in svy (encrypted) and notes, the box reserved before load and unmoved after, `+N`, a broken image's label, ↓ through 10 image blocks in the Tab list starting at most one download, no object URL left after the popup closes, the `[[` drill preview, the switch off; thumbnails in the text-box overlap pass. `tools/shots.mjs` scenarios 58–61.
+- Live gates: thumbnails in svy (encrypted) and notes, the box reserved before load and unmoved after, `+N`, a broken image's label, ↓ through 10 image blocks in the Tab list starting at most one download, no object URL left after the popup closes, the `[[` drill preview, the switch off; thumbnails in the text-box overlap pass. `tools/shots.mjs` scenarios 69–72.
 - `__BURROW_PERF` `scope.key`: the time of each ↑/↓ in the drill panel, whose preview is redrawn in the key.
 
 ### Fixed
 
 - Gate tooling: a gate started right after another one could meet the previous run's cleanup still deleting in the page (svy is slow to delete): it aborted on a "stale fixture tree", or lost its own fixture when the old cleanup finished. Setup now waits for it, and a cleanup clears only its own fixture. A crashed run's block whose page was deleted under it is moved onto the fixture page before it is deleted (Roam's delete throws on a block without a parent).
+
+## [0.9.1] - 2026-10-27
+
+### Added
+
+- **Order alias chips by use** (`aliasUsage`, on; BRW-19). Chips under an alias row start with the alias you link most: each is counted by how many times `[alias]([[Page]])` appears in the graph (the link must be that page's exact title, the alias text is read without case), most used first, ties in the alias block's order. A chip's tip adds a quiet `×N` when N is above 0 (`zq used three ×3`). ⌥↓ still enters the chips on the alias that matched, wherever it now sits. Off: the alias block's order and plain tips.
+- **`alias:` prefix** (`aliasPrefix`, on). `[[alias:lo` lists only alias rows for `lo` (up to three, one character is enough), then Roam's list as usual below. Enter inserts `[alias]([[Page]])` (or `[[Page]]`, per the link format) in place of the whole `[[alias:lo]]`. No recent rows, page rows or drill-down for that text, and an empty `[[alias:` shows nothing of Burrow's. The first row is selected by the usual alias rule, judged on `lo`. Off: `[[alias:lo` is an ordinary search. The key list names it. **Disable all features** also turns off both new switches.
+
+### Changed
+
+- **Shared aliases, checked and tested.** When two pages carry the same alias, Burrow shows one row per page, never merged and never guessed, each with its own reference count and, on its chips, its own use count. That was already so (with `aliasInline` on and off); 0.9.1 adds the unit cases.
+- Cost: the chip order costs one more idle query in the build, next to the reference counts (`[:find ?u ?r ?s … includes? ?s "]([["]`, 56 ms async for 8 alias pages in notes and 73–76 ms for 24 alias pages in svy, read-only; the existing count query returns only a number per page, so it cannot carry the alias text), counted in `__BURROW_PERF` as `aliasUses`. An alias edit carries the counts over to the refreshed index; a keystroke reads a ready list: 0 queries, 0 pulls. Turning the switch on without counts read schedules a build.
+- Live gates: chips in use order with `×N` tips on a scratch fixture page (notes has 8 alias pages, none with three aliases, and no `[alias]([[Page]])` links), `[[alias:` rows only, shared-alias fixture with two rows.
+
+## [0.9.0] - 2026-10-27
+
+### Added
+
+- **Query filters** (`queryFilters`, on) in Burrow's `((` and `[[` rows (BRW-18; precedents RefX R5 filters, Omnisearch, Search+, Logseq's search in page):
+  - `"quoted words"` must stand together, whole words in order (`(("black panther"` leaves out `the black cat and the panther`); while the closing quote is not typed yet, the last word may be a prefix.
+  - `-word` (or `-"two words"`) leaves out blocks that have it.
+  - `in:here` keeps blocks on the page being edited; `in:Page Title` keeps that page's blocks, the title running to the next filter or the end (`((pcr in:PhD/Cronobacter & Spore Control in PIF`), matched like a drill title (case and separators ignored) or by an alias; `in:"Title"` ends at its quote.
+  - `ns:Systems/` keeps pages under that namespace (and the page `Systems` itself). `in:here` and `ns:` are one word (`ns:"Media Captures/"` for one with a space), so search words may follow them: `((in:here pcr`, `((ns:Systems/ grok`.
+  - `is:todo` and `is:done` keep blocks whose first task macro is a TODO or a DONE (Better Tasks' `{{[[DONE]]:((uid))}}` counts), read as Burrow draws checkboxes; `is:t` already means todo while you type.
+  - Several page filters add up (a block passes when any names its page); every other filter must hold.
+  - A word is a filter only with its colon (`in:`, `ns:`, `is:`), its quotes, or a leading `-` before a letter or quote: `in here`, `ant-man`, `a - b` and `-20` stay search text. `in:`, `ns:` and `is:` need their value right after the colon, so `what it is: foo` is text. Search words go before `in:Page Title`.
+  - Burrow never rewrites the token: Roam's own list searches the text as typed, and a Burrow pick replaces the whole token, filters included, with `((uid))` as before. A filter that matches nothing leaves no Burrow rows; Roam's list is untouched. `[[` rows are pages, so `is:` leaves none there, and `in:`/`ns:` keep the pages they name.
+  - Burrow's rows show the filters in force as one quiet plain-text line above them (`is:todo · -closed`, `in:here (October 27th, 2026)`), no pills. The key list has a Filters group while the switch is on.
+  - The pool is unchanged: Burrow's `((` rows are referenced blocks; filters narrow it, they do not read a page's other blocks.
+  - Off: every word is search text, as in 0.8.1.
+- Live gates: fixture cases for `is:todo`, `is:done`, `-word`, `"quilt pattern"` against `quilt pattern`, `in:`, `in:here`, `ns:`, a filter with no match, the switch off and two `[[` cases; svy `((watch is:todo` and `(("black panther"` against `((black panther` and notes `((pcr in:PhD/Cronobacter & Spore Control in PIF` on real data; Escape and Enter on a filtered query byte-for-byte against Burrow off and gone. `tools/shots.mjs` scenarios 63–65.
+- Gate run (2026-10-27, this build): svy 18 of 18 filter cases PASS, notes 9 of 9 PASS (including the byte-for-byte Escape and Enter cases in the on, off and gone arms). Per key p95 with three filters: svy `((ant man is:todo -wakanda in:MCU Watch Order` 2.0–2.1 ms (1.8–1.9 ms without filters), notes `(("pcr screen" -wgs in:PhD/Cronobacter & Spore Control in PIF` 1.6–1.7 ms; input-to-paint p95 delta at most +1.75 ms; 0 queries per key. After merging 0.8.1: svy 7/7 and notes 3/3 key cases PASS again, three-filter p95 svy 2.1–2.3 ms, notes 1.6–1.8 ms.
+
+## [0.8.1] - 2026-10-27
+
+### Added
+
+- **Recent rows** (`recentRows`, on; BRW-14). With up to two characters after `((` or `[[`, Burrow shows up to three rows: the blocks or pages you picked most recently, then the ones edited most recently (the last 14 days). Nothing is selected, so Enter does what Roam does; ↑ from Roam's first row moves onto them. A character narrows them to those with a word that starts with it. In `[[`, alias rows come first and recent pages fill what is left; a page Roam already lists is not shown twice. The block or page you are editing is never offered. Hover says `Recent pick` or `Edited recently`.
+- **Frequent first** (`frecency`, on). Every pick feeds a score that halves every two weeks. Among rows that match equally well and have as many references, the ones you pick more often and more lately come first, for any query and also for alias rows. Picks of Roam's own rows count too: Burrow reads back what Roam inserted. Kept in this browser only: uids, a score and a time (never block text), at most 500 per graph.
+- **Burrow: forget recent picks** in the command palette clears this graph's history. **Disable all features** also turns off the two new switches.
+
+### Changed
+
+- **Frequent first replaces Pick memory.** The exact-query rule is gone with its `pickMemory` switch; what you had picked under `burrow:picks:<graph>` is folded into the new store the first time 0.8.1 loads (each pick at its own time; the query text and alias are dropped) and the old key is removed.
+- Cost: the last-14-days query (about 185 ms in notes, 274 ms the first time; 105k blocks, 4,006 edits) runs only inside the quiet idle build, the first one included, never with a popup open; a keystroke does a few array operations on lists made at idle, 0 queries and 0 pulls.
+- Live gates: recent pick first and not selected with the same Enter in the off and gone arms, three picks flip two equal rows, forget clears; the pick-memory case is gone.
 
 ## [0.7.0] - 2026-10-26
 

@@ -1,16 +1,16 @@
+import { createFrecency } from "./frecency.js";
 import { createIndexes } from "./indexes.js";
 import { createLifecycle } from "./lifecycle.js";
 import { createPerf } from "./perf.js";
-import { createPickMemory } from "./picks.js";
 import { createRefSearch } from "./refsearch.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.8.3";
+export const VERSION = "0.9.2";
 
 let activeLifecycle = null;
 
-const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pickMemory", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
 
 function safeLocalStorage() {
   try { return globalThis.localStorage ?? null; } catch { return null; }
@@ -78,6 +78,8 @@ export async function onload({ extensionAPI, extension }) {
     await initializeSettings(extensionAPI);
     let indexes = null;
     let refSearch = null;
+    let frecency = null;
+    let strip = null;
     let added = false;
     const commandApi = extensionAPI.ui.commandPalette;
     const refLabel = "Burrow: block reference search";
@@ -94,6 +96,10 @@ export async function onload({ extensionAPI, extension }) {
     await lifecycle.settingsPanel(extensionAPI, createSettingsPanel({
       onChange: (id, event) => {
         if (id === "aliasKeyword") indexes?.schedule();
+        if (id === "aliasUsage") {
+          const on = typeof event === "boolean" ? event : event?.target?.checked;
+          if (on !== false && indexes && !indexes.usesRead) indexes.schedule();
+        }
         if (id !== "refSearch") return;
         const value = typeof event === "boolean" ? event : event?.target?.checked;
         if (typeof value === "boolean") void syncRefCommand(value);
@@ -104,15 +110,19 @@ export async function onload({ extensionAPI, extension }) {
       if (added) { added = false; await commandApi.removeCommand({ label: refLabel }); }
     });
     await syncRefCommand();
+    // Clears this graph's pick history, stored and in memory.
+    const forgetPicks = () => { frecency?.clear(); strip?.forget(); };
     if (api && globalThis.document) {
       indexes = createIndexes({ api, perf, setting, idle: idleScheduler(lifecycle), lifecycle, win: globalThis.window });
-      const picks = createPickMemory({ storage: safeLocalStorage(), key: `burrow:picks:${api.graph?.name ?? "graph"}` });
-      const strip = createStrip({ setting, indexes, perf, lifecycle, api, picks, saveSetting: (id, value) => extensionAPI.settings.set(id, value) });
+      const graph = api.graph?.name ?? "graph";
+      frecency = createFrecency({ storage: safeLocalStorage(), key: `burrow:frecency:${graph}`, legacyKey: `burrow:picks:${graph}` });
+      frecency.load();
+      strip = createStrip({ setting, indexes, perf, lifecycle, api, frecency, saveSetting: (id, value) => extensionAPI.settings.set(id, value) });
       refSearch = createRefSearch({ api, lifecycle, setting });
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, picks, refSearch };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;
@@ -127,6 +137,7 @@ export async function onload({ extensionAPI, extension }) {
         await syncRefCommand();
       },
     });
+    await lifecycle.command(extensionAPI.ui.commandPalette, { label: "Burrow: forget recent picks", callback: forgetPicks });
     console.info(`[burrow] Loaded v${extension?.version || VERSION}`);
   } catch (error) {
     if (activeLifecycle === lifecycle) activeLifecycle = null;

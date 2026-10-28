@@ -172,17 +172,18 @@ export function refreshAliasKeys(index, aliasesByPage, previousByPage = null) {
   return rekeyAliases(index, aliasKeyTargets(index, aliasesByPage, previousByPage), aliasesByPage).changed;
 }
 
-// Ranking (spec §3): match band, a row picked before for this query (pick
-// memory, most recent first), originals before quoters, long blocks (more
-// than 64 words) after shorter ones, inbound refs in log2 steps, alias hit,
+// Ranking (spec §3): match band, originals before quoters, long blocks (more
+// than 64 words) after shorter ones, inbound refs in log2 steps, a block
+// picked often and lately (frecency: uid -> score, spec §18), alias hit,
 // on the page being edited, a match inside a linked [[page]] or #tag, score
 // (start of block and word distance), shorter text, uid. With prose off the
 // long and title steps are skipped and code matches like prose (the 0.6.1
 // order).
-// Pass 1 is strict only;
+// accept (query filters, src/filters.js) tests the row's block after a
+// quoter folds into its original. Pass 1 is strict only;
 // recall (typos, abbreviations) runs only when the strip is not yet full,
 // because recall rows rank below every strict row.
-export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, picked = null, currentPage = null, prose = true, code = false } = {}) {
+export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = true, frequent = null, currentPage = null, prose = true, code = false, accept = null } = {}) {
   if (!index || !plan) return [];
   const hits = new Map();
   const withCode = !prose || code;
@@ -208,6 +209,7 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
     if (!isPrecise(match)) return false;
     let target = entry;
     if (entry.pureQuote && index.byUid.has(entry.pureQuote)) target = index.byUid.get(entry.pureQuote);
+    if (accept && !accept(target)) return false;
     const previous = hits.get(target.uid);
     if (previous && rankOf(previous.match) >= rankOf(match)) return true;
     hits.set(target.uid, { entry: target, match, viaAlias, inCode });
@@ -231,7 +233,7 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
   }
   for (const hit of hits.values()) hit.quoter = hit.entry.quotes.some((uid) => uid !== hit.entry.uid && hits.has(uid));
   const rows = [...hits.values()];
-  const pick = (hit) => picked?.get(hit.entry.uid) || 0;
+  const freq = (hit) => frequent?.get(hit.entry.uid) || 0;
   const onPage = (hit) => Number(currentPage != null && hit.entry.page === currentPage);
   // 1 when the query matches inside a page or tag the block links; worked out
   // once per hit, and only when the comparator gets this far.
@@ -243,10 +245,10 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
     return hit.titled;
   };
   rows.sort((a, b) => rankOf(b.match) - rankOf(a.match)
-    || pick(b) - pick(a)
     || Number(a.quoter) - Number(b.quoter)
     || (prose ? Number(a.entry.long) - Number(b.entry.long) : 0)
     || refStep(b.entry.refs) - refStep(a.entry.refs)
+    || freq(b) - freq(a)
     || Number(b.viaAlias) - Number(a.viaAlias)
     || onPage(b) - onPage(a)
     || (prose ? titled(b) - titled(a) : 0)
@@ -256,7 +258,7 @@ export function rankRefs(index, plan, { limit = 3, recall = true, aliasExpand = 
   return rows.slice(0, limit).map(({ entry, match, viaAlias, quoter, inCode }) => ({
     uid: entry.uid, string: entry.string, refs: entry.refs, page: entry.page, level: match.level, tier: match.tier, score: match.score, viaAlias, quoter,
     inCode, long: entry.long,
-    picked: Boolean(picked?.get(entry.uid)), onPage: currentPage != null && entry.page === currentPage,
+    frequent: Boolean(frequent?.get(entry.uid)), onPage: currentPage != null && entry.page === currentPage,
   }));
 }
 

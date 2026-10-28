@@ -14,12 +14,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
-import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles } from "./fixture.mjs";
+import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport, onAbort, placeLow, placeNormal, primeFixture, setupFixture, snapshotTitles, waitAliasFixtures } from "./fixture.mjs";
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
 const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
@@ -27,8 +27,8 @@ const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
-  "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "previewImages"];
+  "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -107,14 +107,29 @@ const SCENARIOS = [
   { id: "55-rich-preview", query: "((zebra rich", keys: ["preview-open", "wait:500"] },
   { id: "56-rich-scope", query: `[[${FIXTURE_PAGE}`, keys: ["Tab", "wait:400"], loose: true },
   { id: "57-rich-html", query: "((zebra html", keys: ["preview-closed"] },
+  // 0.8.1 recent rows: a pick seeded first (uids only), nothing selected; ↑ moves onto them.
+  { id: "58-recent-empty-block", query: "((", keys: ["preview-closed"], seedPicks: true },
+  { id: "59-recent-moved-onto", query: "((", keys: ["preview-closed", "ArrowUp"], seedPicks: true },
+  { id: "60-recent-two-chars", query: "((ze", keys: ["preview-closed"], seedPicks: true },
+  { id: "61-recent-empty-page", query: "[[", keys: ["preview-closed"], seedPicks: true },
+  { id: "62-tip-recent-row", query: "((", keys: ["preview-closed", "hover:.burrow-strip .burrow-row", "wait:700"], seedPicks: true },
+  // 0.9.0: query filters. The filter line sits above the rows.
+  { id: "63-filter-is-todo", query: "((zebra task is:todo", keys: ["preview-closed"] },
+  { id: "64-filter-quoted-phrase", query: "((zebra \"quilt pattern\"", keys: ["preview-closed"] },
+  { id: "65-filter-real-data", query: `((${config.filtered}`, keys: ["preview-closed"] },
+  // 0.9.1: chips ordered by use (the hovered chip's tip carries its count), two pages sharing an alias, the `alias:` prefix.
+  { id: "66-chips-by-use", query: "[[zq used", keys: ["alt+ArrowDown", "hover:.burrow-chips .burrow-chip", "wait:700"] },
+  { id: "67-shared-alias-rows", query: "[[zq twin sh", keys: [] },
+  { id: "68-alias-prefix-rows", query: "[[alias:zq", keys: [] },
   // previewImages: thumbnails in the previews (the fixture's image blocks; waits poll for the state, up to 6 s).
-  { id: "58-thumb-one", query: "((zebra photo one", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
-  { id: "59-thumb-many", query: "((zebra photo many", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
-  { id: "60-thumb-broken", query: "((zebra photo broken", keys: ["preview-open", "wait-thumb:failed:6000", "wait:500"] },
-  { id: "61-thumb-tab-drill", query: "((zebra photos", keys: ["preview-open", "Tab", "ArrowDown", "ArrowDown", "wait-thumb:ok:6000", "wait:500"] },
+  { id: "69-thumb-one", query: "((zebra photo one", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
+  { id: "70-thumb-many", query: "((zebra photo many", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
+  { id: "71-thumb-broken", query: "((zebra photo broken", keys: ["preview-open", "wait-thumb:failed:6000", "wait:500"] },
+  { id: "72-thumb-tab-drill", query: "((zebra photos", keys: ["preview-open", "Tab", "ArrowDown", "ArrowDown", "wait-thumb:ok:6000", "wait:500"] },
 ];
 
 const c = await connect(title);
+let fixture = null;
 
 async function setArm(arm) {
   const code = await readFile(codePath, "utf8");
@@ -280,6 +295,13 @@ let cleaning = null;
 const cleanup = () => (cleaning ||= (async () => {
   try {
     await placeNormal(c).catch(() => {});
+    await c.evaluate(() => {
+      for (const { key, value } of window.__burrowShotsPicks || []) {
+        if (value == null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      }
+      window.__burrowShotsPicks = null;
+    }).catch(() => {});
     await setArm("gone");
     await cleanupFixture(c);
   } catch (error) {
@@ -307,9 +329,10 @@ if (installed.error) { await cleanup(); throw new Error(installed.error); }
 try {
   await mkdir(outDir, { recursive: true });
   await setArm("gone");
-  await setupFixture(c, { drillTree: true });
+  fixture = await setupFixture(c, { drillTree: true });
   const loaded = await setArm("on");
   if (!loaded.refs) throw new Error("index not built");
+  await waitAliasFixtures(c);
   const stamp = `${label}-${theme || "default"}`;
   for (const scenario of SCENARIOS.filter((x) => !only || only.some((id) => x.id.startsWith(id)))) {
     await c.evaluate((settings) => {
@@ -318,6 +341,16 @@ try {
       values.helpNudgeSeen = true;
       Object.assign(values, settings || {});
     }, scenario.settings);
+    // The browser's own pick store is put back after the run (restorePicks).
+    if (scenario.seedPicks) {
+      await c.evaluate(({ uids, page }) => {
+        const f = window.__BURROW.frecency;
+        window.__burrowShotsPicks ??= [`burrow:frecency:${window.roamAlphaAPI.graph?.name ?? "graph"}`].map((key) => ({ key, value: localStorage.getItem(key) }));
+        f.clear();
+        for (const uid of uids) f.record("block", uid);
+        if (page) f.record("page", page);
+      }, { uids: [fixture.drill.pickB, fixture.drill.pickA], page: fixture.chipsUid });
+    }
     await snapshotTitles(c);
     let primed = await primeFixture(c, SEED);
     if (!primed.ok) { await sleep(800); primed = await primeFixture(c, SEED); }

@@ -1,11 +1,13 @@
-import { aliasInsertion, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
+import { aliasInsertion, aliasUses, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
+import { parseFilters, pageFilter, refFilter } from "./filters.js";
 import { createHelpSheet, helpGroups, helpKeyAction } from "./help.js";
 import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints.js";
 import { createTreeSource, PAUSE } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
+import { createPickInfo, filterCandidates, mergeCandidates } from "./recents.js";
 import { rankRefs } from "./refindex.js";
 import { createRichCache, renderParts, richParts, snippet } from "./rich.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
@@ -41,6 +43,14 @@ const POP_CLASSES = [DRILL_CLASS, FOLD_ALIASES, LAYOUT, SCOPE_OPEN, HELP_OPEN];
 const HAS_KIDS = "[(limit :block/children 1)]";
 const MIN_REF_QUERY = 3;
 const MIN_ALIAS_QUERY = 2;
+// `[[alias:lo`: only alias rows for what follows the prefix (spec §20).
+const ALIAS_PREFIX = /^alias:\s*(.*)$/is;
+// Recent rows show with this many characters typed or fewer (spec §18).
+const RECENT_QUERY = 2;
+// Roam's own placeholder rows: titles that are not pages.
+const PLACEHOLDERS = new Set(["search for a page", "search for a block"]);
+// Frames to wait for Roam to apply its own pick before reading it back.
+const NATIVE_PICK_FRAMES = 2;
 const POPUP_WAIT_FRAMES = 12;
 // The row preview's idle slices stay under the per-key budget (4 ms).
 const PREVIEW_SLICE_MS = 3;
@@ -66,11 +76,11 @@ const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaEleme
 // Drill (spec §5) is OWNED with one row, the block the expression resolves
 // to: Enter and Tab insert it, ↑ and ↓ do nothing (no arrow keys in the
 // preview), Esc passes through. Deleting the `#` or `>` ends drill mode.
-export function createStrip({ setting, indexes, perf, lifecycle, api, picks = null, saveSetting = null, doc = document, win = window }) {
+export function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, saveSetting = null, doc = document, win = window }) {
   const st = {
-    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null,
+    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
-    auto: false, chip: -1, scope: null, prompt: null, help: false,
+    auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null,
   };
   const debug = { lastFailure: null, lastWrite: null, commits: 0, trace: [] };
   const trace = (event) => {
@@ -92,6 +102,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // Under the highlighted block row: where the block lives (refContext).
   const contextNode = doc.createElement("div");
   contextNode.className = "burrow-context";
+  // Above the rows: the query filters in force (queryFilters).
+  const filtersNode = doc.createElement("div");
+  filtersNode.className = "burrow-filters";
   const hints = doc.createElement("div");
   hints.className = "burrow-hints";
   hints.hidden = true;
@@ -134,7 +147,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     onFetch: (kind) => { perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] = (perf.counters[kind === "query" ? "drillQueries" : "drillPulls"] || 0) + 1; },
   });
 
-  const anyFeature = () => setting("aliasPages") || setting("refRanking") || setting("drill") || setting("tabDrill")
+  const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
     || setting("paneLayout") || setting("keyHints") || setting("helpSheet");
 
   // Has this page or block children? The page tree knows when it has read
@@ -172,6 +185,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function rank(token) {
     st.drill = null;
+    st.aliasOnly = null;
+    st.filters = null;
+    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
+      const m = ALIAS_PREFIX.exec(token.query);
+      if (m) {
+        st.aliasOnly = m[1];
+        return m[1].trim() ? mainRows(token, setting("betterMatch"), m[1]) : [];
+      }
+    }
     if (indexes.refs !== richRefs) { richRefs = indexes.refs; richCache.clear(); }
     const recall = setting("betterMatch");
     if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
@@ -182,41 +204,64 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         return [drillRow(result)];
       }
     }
-    const plan = searchPlan(token.query);
+    const rows = mainRows(token, recall);
+    // Up to two characters: the recent picks and edits after the matches
+    // (alias rows in [[), nothing selected (spec §18).
+    if (token.query.length <= RECENT_QUERY && setting("recentRows") && !(token.kind === "[[" && st.ta?.value[token.start - 1] === "#")) {
+      return rows.concat(recentRows(token, rows));
+    }
+    return rows;
+  }
+
+  const frequent = (kind) => (setting("frecency") ? frecency?.scores(kind) : null);
+
+  // query: the text ranked on (after `alias:` in prefix mode, spec §20).
+  function mainRows(token, recall, query = token.query) {
+    const filters = setting("queryFilters") ? parseFilters(query) : null;
+    st.filters = filters;
+    const searchText = filters ? filters.text : query;
+    const planText = filters ? filters.planText : query;
+    const plan = searchPlan(planText);
     if (!plan) return [];
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
-    const memory = setting("pickMemory") ? picks : null;
     if (token.kind === "((") {
       if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
       return rankRefs(indexes.refs, plan, {
         limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
-        picked: memory?.lookup("ref", token.query), currentPage: setting("pageBoost") ? st.pageTitle : null,
-        prose: setting("refProse"), code: looksLikeCode(token.query),
+        frequent: frequent("block"), currentPage: setting("pageBoost") ? st.pageTitle : null,
+        prose: setting("refProse"), code: looksLikeCode(searchText),
+        accept: refFilter(filters, {
+          currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null,
+          withCode: !setting("refProse") || looksLikeCode(searchText),
+        }),
       })
         .map((hit) => ({
           kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
-          ...rowText(hit.string), insertion: `((${hit.uid}))`, pick: hit.uid,
+          ...rowText(hit.string), insertion: `((${hit.uid}))`,
           // A query that matched inside code shows the code line it matched.
-          rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(token.query) }) : richFor(hit.uid, hit.string),
+          rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
         }));
     }
-    if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY) return [];
+    if (!setting("aliasPages") || (compact < MIN_ALIAS_QUERY && st.aliasOnly == null)) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
     const format = setting("aliasLinkFormat");
     // No cut here: visibleRows drops rows Roam or roam-aliases already show,
     // and a cut before that could hide a row nobody else lists.
-    const hits = matchAliases(indexes.aliases, plan, { strict: !recall, limit: Infinity, picked: memory?.lookup("alias", token.query) });
+    const accepted = pageFilter(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
+    const hits = matchAliases(indexes.aliases, plan, {
+      strict: !recall, limit: Infinity, picked: frequent("page"),
+      skip: accepted ? (entry) => !accepted(entry) : undefined,
+    });
     if (setting("aliasInline")) {
-      return groupAliasHits(hits, indexes.aliases).map((hit) => ({
+      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit) => ({
         kind: "alias", key: `alias:${hit.uid}`, uid: hit.uid, alias: hit.alias, title: hit.title, aliases: hit.aliases,
-        refs: hit.refs, level: hit.level, insertion: aliasInsertion(hit, format), pick: `${hit.uid}:${hit.alias}`,
+        refs: hit.refs, level: hit.level, insertion: aliasInsertion(hit, format),
       }));
     }
     return hits
       .map((hit) => ({
         kind: "alias", key: `alias:${hit.uid}:${hit.alias}`, uid: hit.uid, alias: hit.alias, title: hit.title,
         level: hit.level, insertion: aliasInsertion(hit, format), seenByRoamAliases: hit.seenByRoamAliases,
-        pick: `${hit.uid}:${hit.alias}`,
       }));
   }
 
@@ -232,6 +277,58 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       crumb: target ? crumb : null, text: target ? readableText(target.string) : page.title,
       rich: target ? richFor(target.uid, target.string) : null,
     };
+  }
+
+  // ---- recent rows (spec §18) ----
+
+  // What the keystroke does: a merge of two short lists that were prepared
+  // off the key path, a word-start filter over at most 30 candidates, and a
+  // row each for the first few. No query, no pull.
+  const pickInfo = frecency ? createPickInfo({
+    api, frecency, idle: (run) => idle(() => { if (!lifecycle.disposed) run(); }),
+    known: (uid) => Boolean(indexes.refs?.byUid.has(uid) || indexes.recent?.blocks.some((b) => b.uid === uid)),
+  }) : null;
+  const blockText = (uid) => {
+    const entry = indexes.refs?.byUid.get(uid);
+    if (entry) return { uid, text: entry.string, page: entry.page };
+    const edited = indexes.recent?.blocks.find((b) => b.uid === uid);
+    if (edited) return { uid, text: edited.string, page: edited.page };
+    const picked = pickInfo?.get(uid);
+    return picked ? { uid, text: picked.string, page: picked.page } : null;
+  };
+
+  function recentRows(token, existing) {
+    const blocks = token.kind === "((";
+    let picks;
+    let edited;
+    if (blocks) {
+      picks = (frecency?.recent("block", 10) || []).map(blockText);
+      edited = (indexes.recent?.blocks || []).map((b) => ({ uid: b.uid, text: b.string, page: b.page }));
+    } else {
+      picks = (frecency?.recent("page", 10) || []).map((uid) => ({ uid, text: indexes.titles?.byUid(uid) }));
+      edited = (indexes.recent?.pages || []).map((p) => ({ uid: p.uid, text: p.title }));
+    }
+    const taken = new Set(existing.map((row) => row.uid));
+    const merged = mergeCandidates({ picks: picks.filter(Boolean), edited, skipUid: blocks ? st.uid : null, skipText: blocks ? null : st.pageTitle })
+      .filter((c) => !taken.has(c.uid));
+    // Roam's list may already hold some pages: look past the first three.
+    return filterCandidates(merged, token.query, blocks ? ROW_LIMIT : ROW_LIMIT * 2).map((c) => {
+      if (!blocks) {
+        const refs = indexes.aliases?.refsByPage?.get(c.uid) ?? null;
+        return { kind: "page", key: `page:${c.uid}`, uid: c.uid, title: c.text, refs, recent: c.recent, insertion: `[[${c.text}]]` };
+      }
+      return {
+        kind: "ref", key: `ref:${c.uid}`, uid: c.uid, refs: indexes.refs?.byUid.get(c.uid)?.refs ?? 0, level: 0, page: c.page,
+        ...rowText(c.text), insertion: `((${c.uid}))`, recent: c.recent, rich: richFor(c.uid, c.text),
+      };
+    });
+  }
+
+  // Burrow: forget recent picks.
+  function forget() {
+    pickInfo?.clear();
+    nativePick = null;
+    if (st.phase !== "IDLE" && st.ta?.isConnected) { scheduleEvaluate(st.ta); }
   }
 
   // Block text as a reader sees it, for the drill row and the preview:
@@ -274,12 +371,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   const ROW_HEIGHT = 33;
   const CHIPS_HEIGHT = 28;
   const CONTEXT_HEIGHT = 18;
+  const FILTERS_HEIGHT = 18;
   // .burrow-strip padding (4 + 3) and its bottom border.
   const STRIP_FRAME = 8;
   let stripHeight = null;
   function sizeStrip(count = shown.length) {
     const lines = (chipsNode.isConnected && chipsNode.parentNode === strip ? CHIPS_HEIGHT : 0)
-      + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0);
+      + (contextNode.isConnected && contextNode.parentNode === strip ? CONTEXT_HEIGHT : 0)
+      + (filtersNode.isConnected && filtersNode.parentNode === strip ? FILTERS_HEIGHT : 0);
     const promptRow = strip.firstChild === promptNode ? 1 : 0;
     const height = (count || promptRow) ? (count || promptRow) * ROW_HEIGHT + lines + STRIP_FRAME : 0;
     if (height === stripHeight) return;
@@ -354,12 +453,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function visibleRows() {
     if (!st.pop) return [];
-    if (st.token?.kind !== "[[" || st.drill || setting("aliasInline")) return st.rows.slice(0, ROW_LIMIT);
+    const inline = setting("aliasInline");
+    const pages = st.rows.some((row) => row.kind === "page");
+    if (st.aliasOnly != null) return st.rows.slice(0, ROW_LIMIT);
+    if (st.token?.kind !== "[[" || st.drill || (inline && !pages)) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
-      const title = row.getAttribute("title");
-      if (title) nativeTitles.add(title.toLowerCase());
+      const title = row.getAttribute("title")?.toLowerCase();
+      if (title && !PLACEHOLDERS.has(title)) nativeTitles.add(title);
     }
+    if (inline) return st.rows.filter((row) => row.kind !== "page" || !nativeTitles.has(row.title.toLowerCase())).slice(0, ROW_LIMIT);
     const listed = new Set();
     for (const button of st.pop.querySelectorAll(".rm-aliases .rm-autocomplete-result")) {
       const m = button.textContent.match(/^\[(.*)\]\(\[\[(.*)\]\]\)$/s);
@@ -369,14 +472,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const roamAliasesPresent = Boolean(roamAliasesSheet) || Boolean(st.pop.querySelector(".rm-aliases"));
     const query = st.token.query;
     return st.rows.filter((row) => !nativeTitles.has(row.title.toLowerCase())
-      && !(roamAliasesPresent && roamAliasesWillList(row, query))
-      && !listed.has(`${row.alias.toLowerCase()}\u0000${row.title.toLowerCase()}`)).slice(0, ROW_LIMIT);
+      && (row.kind === "page" || (!(roamAliasesPresent && roamAliasesWillList(row, query))
+        && !listed.has(`${row.alias.toLowerCase()}\u0000${row.title.toLowerCase()}`)))).slice(0, ROW_LIMIT);
   }
 
   // ---- rendering ----
 
   let shown = [];
   let shownQuery = null;
+  let shownFilters = "";
+  // The filter label line: each filter as typed, in:here with its page.
+  function filtersText() {
+    const labels = st.filters?.labels;
+    if (!labels?.length) return "";
+    return labels.map((label) => (label.toLowerCase() === "in:here" && st.pageTitle ? `in:here (${st.pageTitle})` : label)).join(" · ");
+  }
   function render() {
     if (st.phase === "SCOPE") { placeScope(); return; }
     placeInFlow();
@@ -384,9 +494,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (st.prompt?.kind === "add") { renderPrompt(); return; }
     const rows = visibleRows();
     const query = st.token?.query ?? null;
-    const same = query === shownQuery && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
+    const searchText = st.filters ? st.filters.planText : (st.aliasOnly ?? query);
+    const filterText = rows.length ? filtersText() : "";
+    const same = query === shownQuery && filterText === shownFilters && rows.length === shown.length && rows.every((row, i) => row.key === shown[i].key);
     if (!same) {
-      strip.replaceChildren(...rows.map((row, i) => rowNode(row, i)));
+      strip.replaceChildren(...(filterText ? [filtersNode] : []), ...rows.map((row, i) => rowNode(row, i)));
+      shownFilters = filterText;
+      if (filterText) { filtersNode.textContent = filterText; filtersNode.title = `Query filters: ${filterText}`; }
       sizeStrip(rows.length);
       shown = rows;
       shownQuery = query;
@@ -401,8 +515,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2)
-      || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, query) && !exactTitle(query));
+    const wanted = !rows[0].recent && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2)
+      || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText)));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       // Native rows arrived late, or the query moved on: give the selection back.
       st.phase = "ARMED";
@@ -456,7 +570,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function previewTarget() {
     if (st.prompt) return { kind: "alias", key: `page:${st.prompt.page.uid}`, uid: st.prompt.page.uid, title: st.prompt.page.title };
     const row = st.phase === "OWNED" ? shown[st.active] : null;
-    return row?.kind === "alias" || row?.kind === "ref" ? row : null;
+    return row?.kind === "alias" || row?.kind === "page" || row?.kind === "ref" ? row : null;
   }
 
   function showPreview() {
@@ -574,7 +688,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function rowModel(row, read) {
     let page;
     let target = null;
-    if (row.kind === "alias") page = { uid: row.uid, title: row.title };
+    if (row.kind === "alias" || row.kind === "page") page = { uid: row.uid, title: row.title };
     else {
       const first = read.trail(row.uid)[0];
       if (!first) return null;
@@ -593,7 +707,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     node.dataset.index = String(i);
     const text = doc.createElement("span");
     text.className = "burrow-text";
-    if (row.kind === "alias") {
+    if (row.kind === "page") {
+      text.append(highlight(row.title));
+      node.title = row.title;
+    } else if (row.kind === "alias") {
       text.append(highlight(row.alias), Object.assign(doc.createElement("span"), { className: "burrow-arrow", textContent: " ↳ " }), row.title);
       node.title = `${row.alias} → ${row.title}`;
     } else if (row.kind === "drill") {
@@ -608,13 +725,13 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       node.title = row.text;
     }
     node.append(text);
-    if (row.kind === "ref") {
+    if (row.kind === "ref" && row.refs > 0) {
       const count = doc.createElement("sup");
       count.className = "rm-autocomplete__ref-count";
       count.textContent = String(row.refs);
       count.title = `${row.refs} block reference${row.refs === 1 ? "" : "s"}`;
       node.append(count);
-    } else if (row.kind === "alias" && row.refs != null) {
+    } else if ((row.kind === "alias" || row.kind === "page") && row.refs != null) {
       const count = doc.createElement("sup");
       count.className = "rm-autocomplete__ref-count";
       count.textContent = String(row.refs);
@@ -623,6 +740,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     }
     return node;
   }
+
+  // What the rows are searched and highlighted on: the query without its filters.
+  const searchWords = () => (st.filters ? st.filters.planText : (st.aliasOnly ?? st.token?.query));
 
   // The query's words as one pattern, made once per query (rows render per key).
   let highlightFor = null;
@@ -638,10 +758,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   // A row's block as Roam draws it, cut around the match when long.
   function richContent(row) {
-    return renderParts(doc, snippet(row.rich, highlightPattern(st.token?.query)), (t) => highlight(t));
+    return renderParts(doc, snippet(row.rich, highlightPattern(searchWords())), (t) => highlight(t));
   }
 
-  function highlight(text, query = st.token?.query) {
+  function highlight(text, query = searchWords()) {
     const fragment = doc.createDocumentFragment();
     const re = highlightPattern(query);
     if (!re) { fragment.append(text); return fragment; }
@@ -744,6 +864,12 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   let revealedChip = -1;
   const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
 
+  // The alias, and ×N when the graph links it that often (aliasUsage).
+  const chipTitle = (row, alias) => {
+    const n = setting("aliasUsage") ? aliasUses(indexes.aliases, row.uid, alias) : 0;
+    return n > 0 ? `${alias} ×${n}` : alias;
+  };
+
   function paintChips() {
     const row = shown[st.active];
     const show = chipsAvailable(row);
@@ -773,7 +899,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
           chipsNode.replaceChildren(
             Object.assign(doc.createElement("span"), { className: "burrow-chips-label", textContent: "aliases:" }),
             ...row.aliases.map((alias, i) => {
-              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: alias });
+              const chip = Object.assign(doc.createElement("span"), { className: "burrow-chip", textContent: alias, title: chipTitle(row, alias) });
               chip.dataset.index = String(i);
               return chip;
             }),
@@ -892,6 +1018,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsNode.remove();
     chipsFor = null;
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelContext();
     cancelRowPreview();
@@ -919,6 +1047,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     chipsNode.remove();
     chipsFor = null;
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelContext();
     hints.hidden = true;
@@ -989,7 +1119,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       prompt: st.prompt?.kind ?? null,
       chips: Boolean(row) && chipsAvailable(row) && st.chip >= 0,
       row: row ? {
-        kind: row.kind, chips: chipsAvailable(row), aliasNew: aliasNew(row.kind === "alias"),
+        kind: row.kind, chips: chipsAvailable(row), aliasNew: aliasNew(row.kind === "alias" || row.kind === "page"),
         drill: canDrill(ownedSource(row, st.chip)), block: Boolean(ownedSource(row, -1)?.block),
       } : null,
       native: !row && kind === "[[" ? (() => {
@@ -997,6 +1127,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         return source ? { drill: canDrill(source), aliasNew: aliasNew(source) } : null;
       })() : null,
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
+      recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline") },
     };
     return pickerHints(state);
@@ -1320,6 +1451,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     st.rows = [];
     st.active = -1;
     st.token = null;
+    st.filters = null;
     st.released = null;
     st.drill = null;
     st.auto = false;
@@ -1335,6 +1467,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     tree.clear();
     shown = [];
     shownQuery = null;
+    shownFilters = "";
     chipsFor = null;
     hintsFor = null;
     strip.replaceChildren();
@@ -1388,6 +1521,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (!isBlockInput(ta)) return;
     if (st.prompt && (composer.input(event) || composer.stray(event))) return;
     if (st.ignoreNextInput) { st.ignoreNextInput = false; return; }
+    if (nativePick?.ta === ta) readNative();
     if (st.prompt) st.prompt = null;
     if (st.phase === "SCOPE") exitScope();
     if (!anyFeature()) { if (st.phase !== "IDLE") reset("off"); return; }
@@ -1448,6 +1582,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (st.phase === "ARMED") {
       if (key === "Tab" && !event.shiftKey && setting("tabDrill") && st.token.kind === "[[" && enterScope(armedSource(), event)) return;
+      if ((key === "Enter" || key === "Tab") && !event.shiftKey) rememberNative();
       if (key === "ArrowUp" && !event.shiftKey && count && !strip.hidden && nativeActiveIsFirst()) {
         own(count - 1);
         st.auto = false;
@@ -1550,7 +1685,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   function aliasSource() {
     if (st.phase === "OWNED") {
       const row = shown[st.active];
-      return row?.kind === "alias" ? { uid: row.uid, title: row.title } : null;
+      return row?.kind === "alias" || row?.kind === "page" ? { uid: row.uid, title: row.title } : null;
     }
     const native = armedSource();
     return native ? { uid: native.page.uid, title: native.page.title } : null;
@@ -1587,6 +1722,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     sizeStrip(0);
     shown = [];
     shownQuery = null;
+    shownFilters = "";
     chipsFor = null;
     chipsNode.remove();
     strip.hidden = false;
@@ -1636,7 +1772,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     debug.lastWrite = { kind: "add", at: Date.now(), ...result };
     trace({ ev: "alias-added", uid: p.page.uid, block: result.blockUid });
     indexes.refreshAliases?.();
-    const row = { kind: "alias", key: `alias-new:${p.page.uid}`, insertion: aliasInsertion({ alias: check.alias, title: p.page.title }, setting("aliasLinkFormat")), pick: null };
+    const row = { kind: "alias", key: `alias-new:${p.page.uid}`, uid: p.page.uid, insertion: aliasInsertion({ alias: check.alias, title: p.page.title }, setting("aliasLinkFormat")) };
     if (!commit(row)) reset("commit-refused");
   }
 
@@ -1694,7 +1830,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
 
   function chipRow(row, index) {
     const alias = row.aliases[index];
-    return { ...row, insertion: aliasInsertion({ alias, title: row.title }, setting("aliasLinkFormat")), pick: `${row.uid}:${alias}` };
+    return { ...row, insertion: aliasInsertion({ alias, title: row.title }, setting("aliasLinkFormat")) };
   }
 
   // ---- Tab drill (scope) ----
@@ -1702,6 +1838,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // Where Tab would drill from: the active Burrow row when OWNED ...
   function ownedSource(row, chip) {
     if (!row) return null;
+    if (row.kind === "page") return { uid: row.uid, label: row.title, page: { uid: row.uid, title: row.title }, insertion: row.insertion };
     if (row.kind === "alias") {
       const insertion = chip >= 0 ? chipRow(row, chip).insertion : row.insertion;
       return { uid: row.uid, label: row.title, page: { uid: row.uid, title: row.title }, insertion };
@@ -1775,6 +1912,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     strip.classList.remove(OWNING);
     chipsNode.remove();
     contextNode.remove();
+    filtersNode.remove();
+    shownFilters = "";
     contextFor = null;
     cancelRowPreview();
     hidePreview();
@@ -1969,7 +2108,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     valueSetter.call(ta, next);
     ta.dispatchEvent(new Event("input", { bubbles: true }));
     st.ignoreNextInput = false;
-    if (row.pick && setting("pickMemory")) picks?.record(row.kind, token.query, row.pick);
+    recordPick(row);
     reset("committed");
     debug.commits += 1;
     trace({ ev: "commit", row: row.key });
@@ -1981,6 +2120,57 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
       try { ta.setSelectionRange(caret, caret); } catch { /* textarea replaced */ }
     });
     return true;
+  }
+
+  // A pick feeds the frecency scores and the recent rows: the block when the
+  // insertion is a ((uid)), else the row's page. Uids only.
+  function recordPick(row) {
+    if (!frecency || !(setting("frecency") || setting("recentRows"))) return;
+    const block = /^\(\(([\w-]{9})\)\)$/.exec(row.insertion);
+    if (block) frecency.record("block", block[1]);
+    else if (row.uid && (row.kind === "alias" || row.kind === "page" || row.kind === "drill")) frecency.record("page", row.uid);
+    else return;
+    pickInfo?.refresh();
+  }
+
+  // The row Roam's own list picked (Enter, Tab or a click while Burrow holds
+  // nothing) is read back from the block a moment later: the text at the token
+  // starts with ((uid)) or [[Title]]. A few string operations, no query.
+  let nativePick = null;
+  function rememberNative() {
+    if (!frecency || !st.token || !st.ta || !(setting("frecency") || setting("recentRows"))) return;
+    const memo = { ta: st.ta, start: st.token.start, kind: st.token.kind };
+    nativePick = memo;
+    let frames = NATIVE_PICK_FRAMES;
+    const wait = () => {
+      if (frames-- > 0 && nativePick === memo) { win.requestAnimationFrame(wait); return; }
+      if (nativePick === memo) { readNative(); nativePick = null; }
+    };
+    win.requestAnimationFrame(wait);
+  }
+
+  function readNative() {
+    const memo = nativePick;
+    if (!memo || lifecycle.disposed || !memo.ta.isConnected) return false;
+    const text = memo.ta.value.slice(memo.start);
+    if (memo.kind === "((") {
+      const m = /^\(\(([\w-]{9})\)\)/.exec(text);
+      if (!m) return false;
+      frecency.record("block", m[1]);
+    } else {
+      const m = /^\[\[([^\]]+)\]\]/.exec(text);
+      const uid = m ? indexes.titles?.resolve(m[1])?.uid : null;
+      if (!uid) return false;
+      frecency.record("page", uid);
+    }
+    nativePick = null;
+    pickInfo?.refresh();
+    return true;
+  }
+
+  function onNativeMouseDown(event) {
+    if (st.phase === "IDLE" || st.phase === "SCOPE" || !st.token) return;
+    if (event.target.closest?.(NATIVE_ROWS) && st.pop?.contains(event.target)) rememberNative();
   }
 
   // ---- mouse ----
@@ -2053,7 +2243,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
     const active = shown[st.active];
     if (chip && active?.kind === "alias") {
       const i = Number(chip.dataset.index);
-      return { el: chip, title: active.aliases[i], lines: [
+      return { el: chip, title: chipTitle(active, active.aliases[i]), lines: [
         ["↵", `or click: insert ${chipRow(active, i).insertion}`],
         ["←→", "move between the aliases"],
         setting("aliasDelete") ? [keyLabel("altBackspace"), "delete the selected alias (asks first)"] : null,
@@ -2084,11 +2274,20 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
         setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null,
       ].filter(Boolean) };
     }
+    if (row.kind === "page") {
+      return { el: node, title: row.title, lines: [
+        ["", row.recent === "pick" ? "Recent pick" : "Edited recently"],
+        ["↵", `or click: insert ${row.insertion}`],
+        drillLine(row.uid, "list the blocks on this page"),
+        setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null,
+      ].filter(Boolean) };
+    }
     const upLine = setting("refOutline") ? ["⇧⇥", "go up to its parent (the parent's children, this block highlighted)"] : null;
     if (row.kind === "ref") {
       return { el: node, title: row.text, lines: [
         ["↵", `or click: insert ((${row.uid}))`],
-        ["", `${row.refs} block${row.refs === 1 ? "" : "s"} reference it`],
+        row.recent ? ["", row.recent === "pick" ? "Recent pick" : "Edited recently"] : null,
+        row.refs > 0 ? ["", `${row.refs} block${row.refs === 1 ? "" : "s"} reference it`] : null,
         drillLine(row.uid, "list the children of this block"),
         upLine,
       ].filter(Boolean) };
@@ -2221,6 +2420,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.event(strip, "wheel", guarded("wheel", onStripWheel), { passive: false });
   lifecycle.event(chipsNode, "scroll", () => { chipsScrolled = chipsNode.scrollLeft > 0; }, { passive: true });
   lifecycle.event(strip, "mousedown", guarded("mousedown", onStripMouseDown));
+  lifecycle.event(win, "mousedown", guarded("mousedown", onNativeMouseDown), true);
   lifecycle.event(hints, "mousedown", guarded("mousedown", onHintsMouseDown));
   lifecycle.event(hints, "click", guarded("click", onHelpClick));
   lifecycle.event(scopePanel.node, "click", guarded("click", onHelpClick));
@@ -2233,6 +2433,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   // An alias edited anywhere (Burrow's watch, src/indexes.js) re-ranks an
   // open popup at once, unless the user has picked a row or is in the chips.
   const unlisten = indexes.listen?.(() => {
+    pickInfo?.refresh();
     if (!st.ta || !st.token || st.phase === "IDLE" || st.phase === "SCOPE" || st.prompt || st.help || st.chip >= 0) return;
     if (st.phase === "OWNED" && !st.auto) return;
     if (doc.activeElement === st.ta) scheduleEvaluate(st.ta);
@@ -2242,7 +2443,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, picks = nu
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 
-  return { state: st, debug, reset, tree };
+  return { state: st, debug, reset, tree, forget };
 }
 
 function escapeRe(s) {

@@ -70,6 +70,9 @@
 .burrow-check.burrow-done { border: none; background-color: rgb(19, 124, 189); }
 .burrow-check.burrow-done::after { content: ""; position: absolute; left: 3.5px; top: 0.25px; width: 5px; height: 10px; box-sizing: border-box; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(40deg) scale(0.8); }
 
+/* Above the rows: the query filters in force (queryFilters). Plain text. */
+.burrow-filters { box-sizing: border-box; height: 18px; padding: 0 6px 2px 18px; font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0.6; }
+
 /* Under the highlighted block row: its page and parent (refContext). */
 .burrow-context { display: flex; align-items: baseline; gap: 8px; box-sizing: border-box; height: 18px; padding: 0 6px 2px 18px; font-size: 11px; line-height: 16px; white-space: nowrap; overflow: hidden; }
 .burrow-context-trail { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; opacity: 0.6; }

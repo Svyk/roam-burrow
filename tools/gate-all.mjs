@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Every live gate on both graphs, one command, about 30 minutes:
-// byte-for-byte + acceptance + alias rows + drill + pick memory (live-gate)
+// byte-for-byte + acceptance + alias rows + drill + recent rows and frequent first (live-gate)
 // and the cost budget for (( typing (also with Roam's preview open in svy) and for drill typing with the preview
 // open (perf-gate, 3 interleaved runs per arm, median paired delta), and the first draw of a large
 // page's preview (perf-gate --cold). Needs Roam Desktop with CDP on :9223 and both windows open (svy
