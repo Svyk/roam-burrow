@@ -427,6 +427,8 @@ Where this section differs from earlier ones, it wins. Research: BRW-12 report �
 - svy: `((marvel movies in order` → the band shows (`7UvUSfO56`, `64PbvzMbX`, `6L3YF9sMB`); switch off removes it and asks nothing more;
 - both: ⌥R / ↓ / Esc / Enter; a late band leaves Roam's rows, Burrow's rows, the phase and Roam's highlighted row exactly where they were (popover below and flipped); hidden-row Enter with the request in flight and with the band shown, Roam's row and Burrow's row highlighted, equal to the band off and Burrow gone; byte-for-byte after Enter, Esc, Tab and arrows, band on / off / unavailable; ⌥R free in Roam; a failing search; no console output beyond the one debug line.
 
+Final run on this build: related-gate 9/9 in svy and notes; live-gate PASS in both (107 byte-for-byte runs each); `perf-gate --related` (the band drawn 4–6 times per run) svy 2.0–2.1 ms p95 per key, notes 1.3–1.5 ms, Related pulls at most 2.5 ms and draws at most 3.0 ms; `perf-gate --related --band off` and the 0.7.0 build are the controls for the per-key cost. In the alias chips and the alias prompt the hint line names only their own keys, never `⌥R related`.
+
 ## Also noticed
 
 - `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
