@@ -78,8 +78,9 @@ export const DRILL_TREE = [
     { key: "twinLinkB2", string: "see also [[@{twinBPage}]]" },
   ] },
   // Native Roam Grid tables for the table preview (BRW-20): a 8x7 table and a 200-row one.
-  { key: "tables", string: "Tables section", children: [{ key: "tableSmall", string: "{{[[table]]}}", children: tableRows("t", SMALL_TABLE_ROWS) }] },
-  { key: "bigTables", string: "Big table section", children: [{ key: "tableBig", string: "{{[[table]]}}", children: tableRows("b", BIG_TABLE_ROWS) }] },
+  // Collapsed: ~470 rendered blocks in the sidebar would tax every key's layout in every gate.
+  { key: "tables", string: "Tables section", open: false, children: [{ key: "tableSmall", string: "{{[[table]]}}", children: tableRows("t", SMALL_TABLE_ROWS) }] },
+  { key: "bigTables", string: "Big table section", open: false, children: [{ key: "tableBig", string: "{{[[table]]}}", children: tableRows("b", BIG_TABLE_ROWS) }] },
 ];
 
 export const RICH_KEYS = ["richCode", "richMarks", "richMacros", "richMedia", "richLong", "richHtml"];
@@ -221,7 +222,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : k === "usedPage" ? scratch[0].title : k === "twinAPage" ? scratch[1].title : k === "twinBPage" ? scratch[2].title : drill[k]));
         const make = async (nodes, parent) => {
           for (const n of nodes) {
-            await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: fill(n.string), uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}) } });
+            await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: fill(n.string), uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}), ...(n.open === false ? { open: false } : {}) } });
             if (parent === pageUid) created.drill.push(drill[n.key]);
             if (n.children) await make(n.children, drill[n.key]);
           }
