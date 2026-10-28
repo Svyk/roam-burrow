@@ -27,6 +27,7 @@ import {
 
 const CONFIGS = {
   svy: {
+    encrypted: true,
     ref: { query: "((ant man", uid: "3XSu0IJ8f" },
     // Svy's case (2026-10-25): two 60-90 KB R code blocks were Burrow's rows for `((black pan`.
     accept: [{ query: "((black pan", uid: "cs1PFq5go" }],
@@ -42,6 +43,7 @@ const CONFIGS = {
     refHasChildren: true,
   },
   notes: {
+    encrypted: false,
     ref: { query: "((real time pcr", uid: "6ZtlGN-Np" },
     filterAccept: { page: "((pcr in:PhD/Cronobacter & Spore Control in PIF", pageTitle: "PhD/Cronobacter & Spore Control in PIF" },
     alias: { query: "[[holy gost", insert: "[Holy Ghost]([[Concepts/Holy Spirit]])" },
@@ -57,8 +59,10 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages"];
 const REF_COMMAND = "Burrow: block reference search";
+// The drill panel's ↓ limit for the image cases; BURROW_SCOPE_KEY_LIMIT=0 prints their samples.
+const SCOPE_KEY_LIMIT = Number(process.env.BURROW_SCOPE_KEY_LIMIT ?? 4);
 
 const [title, configName, ...flags] = process.argv.slice(2);
 const config = CONFIGS[configName];
@@ -217,6 +221,47 @@ async function state() {
           nativeHidden: [...document.querySelectorAll(".rm-autocomplete__results.burrow-drill .rm-autocomplete__preview > *")].every((n) => getComputedStyle(n).visibility === "hidden"),
         };
       })(),
+      thumb: (() => {
+        for (const pane of document.querySelectorAll(".burrow-preview:not([hidden])")) {
+          const t = pane.querySelector(".burrow-thumb");
+          if (!t) continue;
+          const box = t.getBoundingClientRect();
+          const img = t.querySelector("img.burrow-thumb-img");
+          // Text lines in the pane (not the thumbnail's own label): the thumb's box may not cover any.
+          const range = document.createRange();
+          let overlaps = false;
+          const walker = document.createTreeWalker(pane, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node && !overlaps; node = walker.nextNode()) {
+            if (!node.textContent.trim() || !node.parentElement || t.contains(node)) continue;
+            range.selectNodeContents(node);
+            for (const r of range.getClientRects()) {
+              const w = Math.min(r.right, box.right) - Math.max(r.left, box.left);
+              const h = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
+              if (r.width > 1 && r.height > 1 && w > 2 && h > 2) { overlaps = true; break; }
+            }
+          }
+          return {
+            state: t.getAttribute("data-state"), w: Math.round(box.width), h: Math.round(box.height),
+            rect: { left: Math.round(box.left), top: Math.round(box.top), width: Math.round(box.width), height: Math.round(box.height) },
+            inTarget: t.closest(".burrow-target") != null,
+            // Where the box sits in the pane's content (the pane itself may be re-placed by Roam's popover).
+            inPane: (() => { const p = pane.getBoundingClientRect(); return { left: Math.round(box.left - p.left), top: Math.round(box.top - p.top + pane.scrollTop) }; })(),
+            pane: (() => { const p = pane.getBoundingClientRect(); return { left: Math.round(p.left), top: Math.round(p.top), width: Math.round(p.width), height: Math.round(p.height) }; })(),
+            img: img ? { src: (img.getAttribute("src") || "").split(":")[0], head: (img.getAttribute("src") || "").slice(0, 48), lazy: img.loading, natural: img.naturalWidth } : null,
+            line: (t.closest(".burrow-node")?.textContent || "").slice(0, 60),
+            more: t.querySelector(".burrow-thumb-more")?.textContent ?? null,
+            label: t.querySelector(".burrow-label")?.textContent ?? null,
+            text: t.textContent,
+            overlaps,
+          };
+        }
+        return null;
+      })(),
+      thumbAny: document.querySelectorAll(".burrow-thumb").length,
+      thumbCounters: { loads: window.__BURROW_PERF?.counters?.thumbLoads ?? null, urls: window.__BURROW_PERF?.counters?.thumbUrls ?? null, keyP95: window.__BURROW_PERF?.summary?.("input")?.p95 ?? null, keys: (window.__BURROW_PERF?.samples?.["scope.key"] || []).slice(-40).map((x) => Math.round(x * 100) / 100), frames: (window.__BURROW_PERF?.samples?.["scope.preview"] || []).slice(-40).map((x) => Math.round(x * 100) / 100) },
+      thumbLog: window.__burrowThumbLog ?? null,
+      urlNet: window.__burrowUrlNet ?? null,
+      pageErrors: window.__burrowGateErrors ? window.__burrowGateErrors.length : null,
       rowPreview: (() => {
         const pane = document.querySelector(".burrow-preview.burrow-preview-docked:not([hidden])");
         if (!pane) return null;
@@ -565,6 +610,16 @@ async function palette(label) {
   }
 }
 
+// Hooks the thumbnail keys install, removed when the case ends.
+const removeThumbHooks = () => c.evaluate(() => {
+  if (window.__burrowUrlWrap) { URL.createObjectURL = window.__burrowUrlWrap.create; URL.revokeObjectURL = window.__burrowUrlWrap.revoke; window.__burrowUrlWrap = null; }
+  if (window.__burrowThumbWatch) { window.__burrowThumbWatch.disconnect(); window.__burrowThumbWatch = null; }
+  window.__burrowUrlNet = undefined;
+  const h = window.__burrowGateErrorHooks;
+  if (h) { window.removeEventListener("error", h.onError, true); window.removeEventListener("unhandledrejection", h.onReject); window.__burrowGateErrorHooks = null; }
+  window.__burrowGateErrors = undefined;
+});
+
 const restoreFocus = () => c.evaluate(() => {
   if (window.__burrowGateFocus) { window.roamAlphaAPI.ui.getFocusedBlock = window.__burrowGateFocus; window.__burrowGateFocus = null; }
 });
@@ -584,6 +639,57 @@ async function runKeys(keys, snaps = []) {
     else if (k === "ctrl+o") await ctrlO();
     else if (k === "meta+p") await metaP();
     else if (k === "preview-open") { if (!(await isExpanded())) await ctrlO(); }
+    else if (k.startsWith("wait-thumb:")) {
+      // wait-thumb:<state>:<maxMs>: poll every 100 ms until the first visible thumbnail has that data-state.
+      const [, want, max] = k.split(":");
+      for (let t0 = Date.now(); Date.now() - t0 < Number(max);) {
+        if (await c.evaluate((want) => document.querySelector(".burrow-preview:not([hidden]) .burrow-thumb")?.getAttribute("data-state") === want, want)) break;
+        await sleep(100);
+      }
+    } else if (k === "reset-loads") await c.evaluate(() => { if (window.__BURROW_PERF?.counters) window.__BURROW_PERF.counters.thumbLoads = 0; if (window.__BURROW_PERF?.samples) window.__BURROW_PERF.samples["scope.key"] = []; window.__BURROW_PERF.samples["scope.preview"] = []; });
+    else if (k === "count-urls") {
+      await c.evaluate(() => {
+        if (window.__burrowUrlWrap) return;
+        window.__burrowUrlNet = 0;
+        const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+        window.__burrowUrlWrap = { create, revoke };
+        URL.createObjectURL = function (...a) { window.__burrowUrlNet += 1; return create.apply(this, a); };
+        URL.revokeObjectURL = function (u, ...a) { if (typeof u === "string" && u.startsWith("blob:")) window.__burrowUrlNet -= 1; return revoke.call(this, u, ...a); };
+      });
+    } else if (k === "watch-thumbs") {
+      // Every state a preview thumbnail goes through, with its size and its place in the pane's content,
+      // recorded as it happens (a snap may come after the image has already arrived).
+      await c.evaluate(() => {
+        if (window.__burrowThumbWatch) return;
+        window.__burrowThumbLog = [];
+        const record = () => {
+          // From the moment the box exists, also while its pane is still hidden (drawn, then shown in a frame).
+          for (const t of document.querySelectorAll(".burrow-preview .burrow-thumb")) {
+            const pane = t.closest(".burrow-preview");
+            const shown = !pane.hidden;
+            const b = t.getBoundingClientRect();
+            const p = pane.getBoundingClientRect();
+            const entry = { state: t.getAttribute("data-state"), shown, w: shown ? Math.round(b.width) : null, h: shown ? Math.round(b.height) : null,
+              left: shown ? Math.round(b.left - p.left) : null, top: shown ? Math.round(b.top - p.top + pane.scrollTop) : null, img: Boolean(t.querySelector("img")) };
+            const last = window.__burrowThumbLog[window.__burrowThumbLog.length - 1];
+            if (!last || JSON.stringify(last) !== JSON.stringify(entry)) window.__burrowThumbLog.push(entry);
+          }
+        };
+        window.__burrowThumbWatch = new MutationObserver(record);
+        window.__burrowThumbWatch.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-state", "src", "hidden"] });
+      });
+    } else if (k === "count-errors") {
+      await c.evaluate(() => {
+        if (window.__burrowGateErrorHooks) return;
+        window.__burrowGateErrors = [];
+        // Window errors only: a failing <img> fires its own error event, which is expected.
+        const onError = (e) => { if (e.target === window) window.__burrowGateErrors.push(String(e.message)); };
+        const onReject = (e) => window.__burrowGateErrors.push(`rejection: ${e.reason?.message ?? e.reason}`);
+        window.__burrowGateErrorHooks = { onError, onReject };
+        window.addEventListener("error", onError, true);
+        window.addEventListener("unhandledrejection", onReject);
+      });
+    }
     else if (k.startsWith("down:")) {
       for (let i = 0; i < Number(k.slice(5)); i++) { await c.key("ArrowDown"); await sleep(40); }
     } else if (k.startsWith("scope-to:")) {
@@ -1209,6 +1315,84 @@ const BLOCK_CASES = [
     name: `filters: ${config.filterAccept.phrase} (unquoted, rows reported)`, query: config.filterAccept.phrase, keys: ["snap", "Escape"],
     check: ({ snaps: [a] }) => (a?.uids.length ? null : `no rows for the unquoted words; filters ${JSON.stringify(a?.filters)}`),
   }] : []),
+  // Image thumbnails (previewImages) in Burrow's previews, on the fixture's image blocks.
+  {
+    name: "(( image thumbnail in the row preview, reserved before load", query: "((zebra photo one", restorePreview: true,
+    beforeQuery: ["watch-thumbs"],
+    keys: ["reset-loads", "preview-open", "wait:60", "snap", "wait-thumb:ok:10000", "snap", "Escape", "wait:200", "snap"],
+    check: ({ snaps: [a, b, d] }) => {
+      const t = a?.thumb;
+      if (!t || !t.inTarget || !(t.w <= 240 && t.h <= 160 && t.h > 0)) return `first snap ${JSON.stringify(t)}`;
+      // The box is there, empty and full size, before the image: its first recorded state is "wait", without an img,
+      // and every later state up to "ok" keeps its size and place.
+      const log = b?.thumbLog || [];
+      // The watch starts before the query is typed, so it sees the box from its first draw.
+      if (!log[0] || log[0].state !== "wait" || log[0].img) return `not reserved before load: ${JSON.stringify(log)}`;
+      const seen = log.filter((e) => e.shown);
+      const box = seen.find((e) => !e.img) || seen[0];
+      if (!box || box.w !== t.w || box.h !== t.h) return `no full-size box shown before the image: ${JSON.stringify(log)}`;
+      if (!seen.some((e) => e.state === "ok")) return `never ok: ${JSON.stringify(log)}`;
+      if (seen.some((e) => e.w !== box.w || e.h !== box.h || e.left !== box.left || e.top !== box.top)) return `layout shift while loading: ${JSON.stringify(log)}`;
+      const u = b?.thumb;
+      if (!u || u.state !== "ok" || !(u.img?.natural > 0)) return `second snap ${JSON.stringify(u)}`;
+      const scheme = config.encrypted ? "blob" : "https";
+      if (u.img.src !== scheme) return `image src scheme ${u.img.src} != ${scheme}: ${JSON.stringify(u)}`;
+      if (!config.encrypted && u.img.lazy !== "lazy") return `loading ${u.img.lazy} != lazy`;
+      // The image arriving moves nothing: the box keeps its size and its place in the pane's content.
+      if (t.w !== u.w || t.h !== u.h || JSON.stringify(t.inPane) !== JSON.stringify(u.inPane)) return `layout shift ${JSON.stringify([t.rect, t.inPane, t.pane])} -> ${JSON.stringify([u.rect, u.inPane, u.pane])}`;
+      if (t.overlaps || u.overlaps) return `thumbnail overlaps text ${JSON.stringify([t.overlaps, u.overlaps])}`;
+      return d?.thumbCounters?.urls === 0 && d.thumbAny === 0 ? null : `after Escape ${JSON.stringify(d?.thumbCounters)} thumbs ${d?.thumbAny}`;
+    },
+  },
+  {
+    name: "(( image +N: a block with three images says +2", query: "((zebra photo many", restorePreview: true,
+    keys: ["preview-open", "wait-thumb:ok:6000", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.thumb?.state === "ok" && a.thumb.more === "+2" ? null : `thumb ${JSON.stringify(a?.thumb)}`),
+  },
+  {
+    name: "(( broken image keeps the label with its alt", query: "((zebra photo broken", restorePreview: true,
+    keys: ["count-errors", "preview-open", "wait:60", "snap", "wait-thumb:failed:6000", "snap", "Escape"],
+    check: ({ snaps: [a, b] }) => {
+      const t = b?.thumb;
+      if (t?.state !== "failed" || !t.label?.includes("image") || !t.text.includes("zebra broken alt")) return `failed state ${JSON.stringify(t)}`;
+      if (a?.thumb && (a.thumb.w !== t.w || a.thumb.h !== t.h || JSON.stringify(a.thumb.inPane) !== JSON.stringify(t.inPane))) return `box changed ${JSON.stringify([a.thumb.rect, a.thumb.inPane])} -> ${JSON.stringify([t.rect, t.inPane])}`;
+      return b.pageErrors === 0 ? null : `page errors ${b.pageErrors}`;
+    },
+  },
+  {
+    name: "Tab through 10 image rows fast starts at most one download", query: "((zebra photos", restorePreview: true,
+    keys: ["preview-open", "wait:400", "Tab", "wait:300", "reset-loads", "count-urls", ...Array(9).fill("ArrowDown"), "wait-thumb:ok:6000", "snap", "Escape", "Escape", "wait:200", "snap"],
+    check: ({ snaps: [a, b] }) => {
+      if (!(a?.thumbCounters?.loads <= 1)) return `loads ${JSON.stringify(a?.thumbCounters)}`;
+      // Each ↓ paints the row in the key ("scope.key": held to the 4 ms budget); the preview beside the list, with its box, is drawn in the next frame ("scope.preview": reported in the failure message, not asserted).
+      const downs = [...a.thumbCounters.keys].sort((x, y) => x - y);
+      const p95 = downs[Math.min(downs.length - 1, Math.floor(0.95 * downs.length))];
+      // The preview redraw left the key (it was about 5 ms in the key in notes, 0.7.0): the key's part alone is held to SCOPE_KEY_LIMIT.
+      if (!(downs.length >= 9 && p95 <= SCOPE_KEY_LIMIT)) return `↓ keys p95 ${p95} ms (limit ${SCOPE_KEY_LIMIT}): keys ${JSON.stringify(a.thumbCounters.keys)} frames ${JSON.stringify(a.thumbCounters.frames)}`;
+      if (a.thumb?.state !== "ok" || !a.preview?.target?.includes("zebra photo 10")) return `last row ${JSON.stringify(a?.thumb)} ${JSON.stringify(a?.preview?.target)}`;
+      return b?.thumbCounters?.urls === 0 && b.urlNet === 0 ? null : `after close ${JSON.stringify(b?.thumbCounters)} urlNet ${b?.urlNet}`;
+    },
+  },
+  {
+    name: "Tab through 10 image rows, images off: the ↓ keys' cost without thumbnails", query: "((zebra photos", restorePreview: true, settings: { previewImages: false },
+    keys: ["preview-open", "wait:400", "Tab", "wait:300", "reset-loads", ...Array(9).fill("ArrowDown"), "wait:600", "snap", "Escape", "Escape"],
+    check: ({ snaps: [a] }) => {
+      const downs = [...(a?.thumbCounters?.keys || [])].sort((x, y) => x - y);
+      const p95 = downs[Math.min(downs.length - 1, Math.floor(0.95 * downs.length))];
+      if (a?.thumbAny || a?.thumbCounters?.loads) return `thumbnails with the switch off ${a.thumbAny} ${JSON.stringify(a.thumbCounters)}`;
+      return downs.length >= 9 && p95 <= SCOPE_KEY_LIMIT ? null : `↓ keys p95 ${p95} ms (limit ${SCOPE_KEY_LIMIT}): keys ${JSON.stringify(a?.thumbCounters?.keys)} frames ${JSON.stringify(a?.thumbCounters?.frames)}`;
+    },
+  },
+  {
+    name: "[[ drill preview shows the target's thumbnail", query: `[[${FIXTURE_PAGE} > zebra photos > zebra photo 03`, restorePreview: true, mayCreatePage: true,
+    keys: ["wait-thumb:ok:6000", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a?.thumb?.inTarget && a.thumb.state === "ok" ? null : `thumb ${JSON.stringify(a?.thumb)} preview ${JSON.stringify(a?.preview?.target)}`),
+  },
+  {
+    name: "(( images off: no thumbnail anywhere, nothing loaded", query: "((zebra photo one", restorePreview: true, settings: { previewImages: false },
+    keys: ["reset-loads", "preview-open", "wait:1500", "snap", "Escape"],
+    check: ({ snaps: [a] }) => (a && a.thumbAny === 0 && !a.thumb && !a.thumbCounters.loads ? null : `thumbs ${a?.thumbAny} ${JSON.stringify(a?.thumbCounters)}`),
+  },
   ...(config.accept || []).map(({ query, uid }) => ({
     // Real data, no fixture: the original block leads and no code block outranks it.
     name: `acceptance: ${query} → ((${uid})) first and pre-selected, no code rows`, query,
@@ -1781,6 +1965,8 @@ async function runAliasCase(kase) {
     wheelSteps = 0;
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed", primed };
+    // Keys that must run before the query is typed (with Roam's preview already open, a thumbnail is drawn while typing).
+    if (kase.beforeQuery) await runKeys(kase.beforeQuery, []);
     if (kase.query) {
       await c.type(kase.query, TYPE_MS);
       // A "noRows" case expects no Burrow row; give roam-aliases time to draw.
@@ -1804,6 +1990,7 @@ async function runAliasCase(kase) {
       await runKeys(kase.keys, snaps);
       after = await readBack();
     } finally {
+      await removeThumbHooks();
       if (kase.restorePreview) await restorePreviewState(initialPreview);
     }
     // Blocks created anywhere in the graph while the keys ran (a footnote, a
@@ -2012,6 +2199,8 @@ async function runTextOverlap() {
       await visit(`(( Roam's row highlighted, ${p}`, config.ref.query, ["down-past-strip"], { preview });
       await visit(`(( tasks, ${p}`, "((zebra task", [], { preview });
       await visit(`(( rich rows, ${p}`, "((zebra rich", [], { preview });
+      await visit(`(( image thumbnail, ${p}`, "((zebra photo one", preview ? ["wait-thumb:ok:6000"] : [], { preview });
+      await visit(`(( image thumbnail with +N, ${p}`, "((zebra photo many", preview ? ["wait-thumb:ok:6000"] : [], { preview });
       await visit(`(( code row, ${p}`, "((zebra_plot", [], { preview });
       await visit(`(( a cut long row, ${p}`, "((zebra snippet", [], { preview });
       // The preview scrolls to a line far down its siblings: its header stays on top.
