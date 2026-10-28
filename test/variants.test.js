@@ -51,11 +51,15 @@ test("what each variant inserts", () => {
   // A ] would end the label early.
   assert.equal(variantInsertion("label", block, "a]b [c"), "[ab c](((3XSu0IJ8f)))");
   assert.equal(variantInsertion("label", { type: "block", uid: "x", text: "![](https://img)" }, ""), "[x](((x)))");
+  // Code: the code itself, no fence, language or backticks.
+  assert.equal(variantInsertion("label", { type: "block", uid: "abcdefghi", text: "```js\nconst x = 1;\n```" }, ""), "[const x = 1;](((abcdefghi)))");
+  assert.equal(variantInsertion("label", { type: "block", uid: "abcdefghi", text: "run `npm test` first" }, ""), "[run npm test first](((abcdefghi)))");
+  assert.equal(variantInsertion("label", { type: "block", uid: "abcdefghi", text: "```\n```" }, ""), "[abcdefghi](((abcdefghi)))");
 });
 
 test("label helpers", () => {
   assert.equal([...blockLabel("🙂".repeat(50))].length, 40, "40 characters, not UTF-16 units");
-  assert.equal(blockLabel("{{[[TODO]]}} call [[Lori Boyd]] about `x`"), "call Lori Boyd about `x`");
+  assert.equal(blockLabel("{{[[TODO]]}} call [[Lori Boyd]] about `x`"), "call Lori Boyd about x");
   assert.equal(lastStep("MCU Watch Order > watch order > ant man"), "ant man");
   assert.equal(lastStep("Page#"), "");
   assert.deepEqual(sidebarWindow(page), { type: "outline", "block-uid": "pg1" });
@@ -220,5 +224,35 @@ test("⌥↵ with query filters labels with the search words only", async () => 
     assert.equal(ta.value, "[ant man](((3XSu0IJ8f)))");
   } finally {
     await lifecycle.dispose();
+  }
+});
+
+test("an alias row: ⌥ held shows the variants for a page, ⇧↵ embeds the page, ⌥↵ inserts [alias]([[Page]])", async () => {
+  const { buildAliasIndex } = await import("../src/aliases.js");
+  const { buildTitleIndex } = await import("../src/titles.js");
+  const aliases = buildAliasIndex([["Aliases:: lorinator", "Lori Boyd", "pgLoriBoy"]], "Aliases");
+  const titles = buildTitleIndex([["Lori Boyd", "pgLoriBoy"]], aliases);
+  for (const [init, want] of [[{ shiftKey: true }, "seed {{[[embed]]: [[Lori Boyd]]}} tail"], [{ altKey: true }, "seed [lorinator]([[Lori Boyd]]) tail"]]) {
+    doc.body.innerHTML = `<textarea class="rm-block-input" id="block-input-uuid-x-fixtureU1"></textarea>${POPOVER}`;
+    const ta = doc.querySelector("textarea");
+    ta.value = "seed [[lorina]] tail";
+    ta.focus();
+    ta.setSelectionRange(13, 13);
+    const api = { ui: { getFocusedBlock: () => ({ "block-uid": "fixtureU1" }) }, pull: () => null, q: () => [] };
+    const lifecycle = createLifecycle();
+    const strip = createStrip({ setting: (id) => (id === "aliasLinkFormat" ? "[[Page]]" : DEFAULTS[id]), indexes: { refs: null, aliases, titles, refreshIfStale() {} }, perf: createPerf(), lifecycle, api, doc, win });
+    ta.dispatchEvent(new win.Event("input", { bubbles: true }));
+    await settle();
+    try {
+      assert.equal(strip.state.phase, "OWNED", "the alias row starts selected");
+      ta.dispatchEvent(new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Alt", altKey: true }));
+      await new Promise((r) => setTimeout(r, 350));
+      assert.match(doc.querySelector(".burrow-hints-list")?.textContent ?? "", /embed.*label.*sidebar/);
+      win.dispatchEvent(new win.KeyboardEvent("keyup", { key: "Alt" }));
+      ta.dispatchEvent(new win.KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter", ...init }));
+      assert.equal(ta.value, want);
+    } finally {
+      await lifecycle.dispose();
+    }
   }
 });

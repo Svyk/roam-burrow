@@ -3688,7 +3688,8 @@ function variantOf(event, setting, mac = IS_MAC) {
 }
 var clean2 = (text) => String(text ?? "").replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
 function blockLabel(text) {
-  const plain = stripRoamMarkup(String(text ?? "").replace(/!?\[([^\]]*)\]\((?!\(|\[\[)[^)]*\)/g, "$1"));
+  const prose = String(text ?? "").replace(/```[^\n`]*\n?/g, " ").replace(/`/g, "").replace(/!?\[([^\]]*)\]\((?!\(|\[\[)[^)]*\)/g, "$1");
+  const plain = stripRoamMarkup(prose);
   return [...clean2(plain)].slice(0, LABEL_MAX).join("").trim();
 }
 var lastStep = (query) => String(query ?? "").split(/[#>]/).pop().trim();

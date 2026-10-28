@@ -22,9 +22,14 @@ export function variantOf(event, setting, mac = IS_MAC) {
 const clean = (text) => String(text ?? "").replace(/[[\]]/g, "").replace(/\s+/g, " ").trim();
 
 // The block's first 40 plain characters, as a reader sees them: a markdown
-// image or link keeps only its text.
+// image or link keeps only its text, code keeps its code without the fence,
+// its language or backticks (a backtick in a link label turns it into code).
 export function blockLabel(text) {
-  const plain = stripRoamMarkup(String(text ?? "").replace(/!?\[([^\]]*)\]\((?!\(|\[\[)[^)]*\)/g, "$1"));
+  const prose = String(text ?? "")
+    .replace(/```[^\n`]*\n?/g, " ")
+    .replace(/`/g, "")
+    .replace(/!?\[([^\]]*)\]\((?!\(|\[\[)[^)]*\)/g, "$1");
+  const plain = stripRoamMarkup(prose);
   return [...clean(plain)].slice(0, LABEL_MAX).join("").trim();
 }
 
