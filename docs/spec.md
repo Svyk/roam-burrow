@@ -166,6 +166,8 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `paneLayout` | switch | on | BRW-5: roam-aliases' column, Roam's list and Roam's preview each in their own space |
 | `keyHints` | switch | on | BRW-5: key-hint line under Roam's list and in the drill panel (BRW-6: RefX wording; BRW-7: only keys that apply to the highlighted row) |
 | `rowPreview` | switch | on | BRW-6: with Roam's preview open, a selected Burrow row previews its page or block |
+| `previewImages` | switch | on | BRW-16: the highlighted preview line's first image as a thumbnail (§21) |
+| `previewTables` | switch | on | BRW-20: a highlighted `{{[[table]]}}` block's first 6x5 cells as a grid (§22) |
 | `aliasCreate` | switch | **off** | BRW-6: ⌥A on a highlighted page row adds an alias to its alias block (graph write) |
 | `aliasDelete` | switch | **off** | BRW-6: Alt+Backspace on the active chip removes that alias, after a confirm (graph write) |
 | `drillOrdinals` | switch | on | BRW-6: `1`, `2`, `(b)`, `iii` rank blocks starting with that ordinal first while drilled in |
@@ -469,7 +471,49 @@ Two switches, both on: `aliasUsage` and `aliasPrefix`. `Disable all features` tu
 
 **Data note.** In notes (checked read-only 2026-10-27) there are 8 alias pages, none with three or more aliases, and 0 `[alias]([[Page]])` links, so the live gate builds a scratch fixture page for the order.
 
-## 21. Tables in the preview (BRW-20)
+## 21. Images in the preview (BRW-16)
+
+**What.** Images appear in 2,055 notes blocks and 1,374 svy blocks (204 and 94 of them referenced, so in Burrow's `((` pool; BRW-12). Until 0.9.2 the previews drew them as an `image` label. With `previewImages` (on), the highlighted line of a preview (the row preview over Roam's, the `[[` drill-down preview, the preview beside the Tab list) gets its block's first `![alt](url)` as a thumbnail. Only the highlighted block: `previewModel(…, { images })` puts `image: { url, alt, more }` on the target item alone. Burrow's rows and the drill panel keep the label.
+
+**Parse** (`firstImage`, `src/thumbs.js`). `![alt](url)` outside fenced and inline code; the URL is the text up to the matching `)` (parentheses balanced), cut at the first space; only `https://`, `http://` and `data:image/` count (anything else is neither shown nor counted). `more` is the number of further images, drawn as `+N`.
+
+**Box.** `div.burrow-thumb`, the target line's last child, made when the line is drawn: 240 px wide (at most the line's width) and 160 px high, `object-fit: contain` for the image, a quiet background (light `rgba(16,22,26,.06)`, dark `rgba(255,255,255,.06)`), `+N` as plain small text in its corner. The line drops its three-line clamp while it holds a box. Because the box exists before anything loads, the image arriving moves nothing (gate: the box's rect before and after load is the same), and the scroll to the highlighted line already counts it. `data-state` is `wait`, `loading`, `ok` or `failed`.
+
+**Load.** One request at a time, for one pane's highlighted line. `want()` starts a 150 ms timer and cancels any earlier one; the row preview also cancels when the highlight moves to a row whose outline is not drawn yet, so the old line never starts a download. When the timer fires and the box is still in the page:
+- plain graph and a URL whose path does not end in `.enc`: `<img loading="lazy" decoding="async">` with the URL;
+- `roamAlphaAPI.graph.isEncrypted` or a `.enc` path: `roamAlphaAPI.file.get({ url })`, which decrypts (svy, 650 KB PNG: 1.4 s cold) and resolves to a `File`; over 5 MB it is dropped without an object URL; otherwise `URL.createObjectURL`. A result for a highlight that has moved goes into the cache but is not shown. A rejected `file.get` for a URL that is not `.enc` falls back once to the plain `<img>`.
+
+The 5 MB cap applies where the size is known before anything is decoded, the decrypted `File`; a plain `<img>` is the browser's own lazy load, as in Roam's page.
+
+**Object URLs.** An LRU of 8 (`url → objectURL`): a hit shows at once, with no dwell and no download; eviction revokes; the popup closing (`reset`, every reason) and unload revoke them all, and a `file.get` that resolves after that makes none. `__BURROW_PERF.counters.thumbLoads` counts downloads started and `thumbUrls` the live object URLs.
+
+**Failure.** A failed download, decode, a missing `file.get` or a file too large: the box keeps its size and shows the `image` label with the alt text. Every path is wrapped; nothing throws into Roam. No Roam component is mounted (no `renderString`): the popup keeps Burrow's own DOM.
+
+**Cost.** Nothing on the per-key path but one `div` for a highlighted line with an image; parsing runs once per model, for the target only.
+
+**Gates (0.9.2).** The fixture gets image blocks built from URLs already in the graph (read-only query; svy: a `.enc` upload, notes: a Firebase upload): `zebra photo one`, `zebra photo many` (three images), `zebra photo broken` (a missing upload; `.enc` in svy) and `zebra photos` with ten image children. New `live-gate` cases:
+- row preview: the box is in the highlighted line with no image when it is first drawn (a MutationObserver started before the query is typed records every state with the box's size and place in the pane's content), the same size and place when the image is `ok`, an `https` `<img loading="lazy">` in notes and a `blob:` image in svy, no overlap with any text in the pane, and after Esc `thumbUrls` 0;
+- `+2` on a block with three images; a broken upload ends `failed` with `image zebra broken alt` in the same box and no page error;
+- Tab on `zebra photos`, then ↓ nine times back to back: at most one download (`thumbLoads`), the last row's image shown; after Esc Esc no object URL left, counted both by Burrow (`thumbUrls`) and by wrapping `URL.createObjectURL`/`revokeObjectURL` in the page (net 0);
+- the `[[Burrow/Fixtures > zebra photos > zebra photo 03` drill preview shows the thumbnail; with the switch off no box anywhere and no download;
+- the text-box pass visits `((zebra photo one` and `((zebra photo many` with the preview open after the image is in.
+
+Results on the final build: every thumbnail case in svy and notes; the full gate in svy and notes, light and dark, 107 byte-for-byte case runs each, 36 picker states with 0 overlapping text boxes (1,286–1,300 boxes). Typing stays in the 4 ms budget (`perf-gate`, 3 interleaved runs per arm):
+
+| Per key, p95 (budget 4 ms) | svy | notes |
+|---|---|---|
+| `((` | 2.8–2.9 ms | 1.7–2.0 ms |
+| `((` with Roam's preview open | 2.5 ms | 1.7 ms |
+| preview idle slices | 3.2–3.3 ms | 1.5–2.2 ms |
+| input-to-paint p95 delta | +1.5 ms | +1.1–1.5 ms |
+
+**↓ in the drill panel.** Until the review, a Tab list redrew its preview inside the key (0.7.0). Measured then on `zebra photos`, nine ↓ per run, three runs per arm: notes p95 4.0–4.8 ms with images, 1.6–4.0 ms without; svy 4.8–7.1 ms with, 2.6–6.0 ms without. Now ↑/↓ only move the highlight in the key (`__BURROW_PERF` `scope.key`, the row paint) and the preview follows in the next animation frame (`scope.preview`; several keys in one frame draw once; reset and unload cancel the frame). Enter and Tab act on the highlighted row, never on the preview, so a frame still pending changes nothing about what a key does (unit test `test/scopepreview.test.js`). Ctrl-O, typing a filter and Tab/Shift-Tab still draw the drill panel's preview in their key. The gate holds `scope.key` to 4 ms again (`BURROW_SCOPE_KEY_LIMIT`). After the review, perf gates were dropped at Svy's request (he accepts that Burrow is fast), so the per-key numbers above are the last ones measured and none were taken after this change.
+
+**Review fixes (BRW-16 review).** ↓ then ↑ back to an image row before the next row's preview was drawn left its box empty: the row change had cancelled the dwell, and the same model drawn again skipped the box. Now a preview shown again with the same model re-arms its box (`thumbs.ensure`: nothing to do if it is current, loaded or failed), and an encrypted file has one decrypt in flight per URL, so the re-armed box gets the image from the running `file.get` (one download; a result after the popup closed makes no object URL). A `file.get` that rejects for a non-`.enc` URL falls back to a plain `<img>` without counting a second download. Unit tests in `test/thumbs.test.js` drive `createPreview` and `createThumbs` the way `src/strip.js` does.
+
+**Gate tooling.** Three gate runs in a row raced: a run's in-page cleanup (an async loop of deletes, slow in svy) outlived its node process, so the next run saw a half-deleted tree (`stale fixture tree`), and when the old loop finished it set `__burrowFixture = null` under the new run (`reading 'blockUid'`). Setup now waits for a running cleanup (`__burrowCleaning`) and for the tree to go, and a cleanup clears only its own fixture. A ledger block whose page was deleted under it has no parent, and `block.delete` throws on it ("Expected number or lookup ref for entity id, got nil"); the ledger cleanup moves it onto the fixture page first.
+
+## 22. Tables in the preview (BRW-20)
 
 Precedent: BRW-12 §3 ("Roam Grid tables in the picker"), Roam's native table, Roam Grid (`~/roam-grid`, `tableCells`). Switch `previewTables`, on.
 
@@ -482,11 +526,12 @@ Precedent: BRW-12 §3 ("Roam Grid tables in the picker"), Roam's native table, R
 
 **Drawn at idle.** A key's draw (`show`/`fill`) never writes the table line: `writeLines` stops at it and leaves it to `more()`, which the preview's idle slices already run. A drill that flips between a section and its table on every key (`perf-gate --table`) rebuilt 30 cells per key and measured 5.4 ms p95 per key in svy before this. The drill and Tab-list models are rebuilt when the switch flips; the row preview takes it at the next row.
 
-**Gates (0.9.2).** svy live gate 105/105 and notes (light) 101/101 PASS, including the four `table:` drill cases (grid content, Escape and Enter byte-for-byte across arms, switch off, 6 chain pulls for the 200-row fixture). `tools/grid-gate.mjs` PASS in svy: Roam Grid's arrows move its active cell before and after the popup, and the table and its metadata are unchanged. The fixture's table sections are created collapsed, so their ~470 blocks are not rendered in the gate's sidebar. Per-key performance gates were dropped at Svy's request.
+**Gates (0.9.3).** svy live gate 105/105 and notes (light) 101/101 PASS, including the four `table:` drill cases (grid content, Escape and Enter byte-for-byte across arms, switch off, 6 chain pulls for the 200-row fixture). `tools/grid-gate.mjs` PASS in svy: Roam Grid's arrows move its active cell before and after the popup, and the table and its metadata are unchanged. The fixture's table sections are created collapsed, so their ~470 blocks are not rendered in the gate's sidebar. Per-key performance gates were dropped at Svy's request.
 
 **Not covered.** A drill step cannot name a table that has text siblings: `stripRoamMarkup` drops the macro, so the table has no words, and an empty step takes the first sibling with text. The Tab list reaches any table.
 
 ## Also noticed
+
 
 - `dive2Pro/roam-aliases` `src/roam.ts`: its alias query is case-sensitive `starts-with "Aliases::"`, so the notes block `aliases:: EMP` (page `Environmental Monitoring Program`) is invisible to it. Either rename it to `Aliases::` or note it.
 - `dive2Pro/roam-aliases` `src/roam.ts` `allBlocks()` pulls `[*]` for every entity in the graph (103k blocks in notes) on first unlinked-alias use. That is a heavy cost on this graph, worth knowing if typing feels slow.

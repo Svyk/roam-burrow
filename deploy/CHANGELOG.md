@@ -4,14 +4,29 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
-## [0.9.2] - 2026-10-27
+## [0.9.3] - 2026-10-28
 
 ### Added
 
 - **Tables in the preview** (`previewTables`, on; BRW-20, BRW-12 §3). When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a `{{[[table]]}}` or `{{table}}` block, the line under it is a small read-only grid of its first 6 rows and 5 columns instead of its child outline. Rows are the table block's children; a row's cells are the row block and its first-child chain (Roam's storage, which Roam Grid keeps). Each cell is cut at 40 characters with `…` and drawn like Roam (with Rows drawn like Roam on); a stored `" "` is an empty cell; a formula (`=B2*C2`) shows as its text. A bigger table says so under the grid: `+194 rows`, `+2 cols`, `+2 rows, +2 cols`. `{{[[roam/grid]]}}` large grids keep their `roam/grid` label. Off: the table's rows show as an outline, as in 0.9.1.
 - No Roam Grid code and no `window.roamGrid` call: a Roam Grid table is read as the blocks it is. The cells are `div`s with text nodes and no handlers.
 - Cost: the table's row ids (the preview's existing paged id read) and one pull per shown row: its first five cells with their text, then ids only (recursion-limited) to count the columns past the fifth. Six pulls at most, whatever the table's size, through the same idle-slice guard as the rest of the row preview, kept until the popup closes. They count as `tableChains` in `window.__BURROW_PERF.counters`. The grid itself is drawn in the preview's idle slice, never inside a key's draw.
-- Live gates (2026-10-27, this build): svy 105 of 105 PASS, notes (light) 101 of 101 PASS, each including four new `table:` drill cases. These cases check the 6x5 grid with `+2 rows, +2 cols`, `=B2*C2` as text, a cut cell ending in `…`, bold and link parts, and no `on*` attributes. Escape and Enter are byte-for-byte equal in the on, off, gone and drilloff arms. With the switch off the outline is drawn, and the 200-row fixture reads exactly 6 rows' chains (counted). The hidden-row Enter cases pass as before. New `tools/grid-gate.mjs` in svy (Roam Grid installed) on the enhanced 4x4 grid `Y4A6QVzX6`: a click and ArrowRight/ArrowDown move Roam Grid's active cell before and after Burrow's popup has shown that table (via the Tab list); the table's blocks and its `roam/grid/metadata` block are byte-identical afterwards. `tools/shots.mjs` scenarios 69–70, svy and notes, light and dark. Per-key performance gates were dropped at Svy's request (he accepts that Burrow is fast); no p95 figure is claimed for this build.
+- Live gates (2026-10-27, on the 0.9.2 base before the image previews merged): svy 105 of 105 PASS, notes (light) 101 of 101 PASS, each including four new `table:` drill cases. These cases check the 6x5 grid with `+2 rows, +2 cols`, `=B2*C2` as text, a cut cell ending in `…`, bold and link parts, and no `on*` attributes. Escape and Enter are byte-for-byte equal in the on, off, gone and drilloff arms. With the switch off the outline is drawn, and the 200-row fixture reads exactly 6 rows' chains (counted). The hidden-row Enter cases pass as before. New `tools/grid-gate.mjs` in svy (Roam Grid installed) on the enhanced 4x4 grid `Y4A6QVzX6`: a click and ArrowRight/ArrowDown move Roam Grid's active cell before and after Burrow's popup has shown that table (via the Tab list); the table's blocks and its `roam/grid/metadata` block are byte-identical afterwards. `tools/shots.mjs` scenarios 73–74, svy and notes, light and dark. Per-key performance gates were dropped at Svy's request (he accepts that Burrow is fast); no p95 figure is claimed for this build.
+
+## [0.9.2] - 2026-10-27
+
+### Added
+
+- **Images in the preview** (`previewImages`, on). In Burrow's previews (the row preview over Roam's, the `[[` drill-down preview and the preview beside the Tab list), the highlighted block's first `![](url)` shows as a thumbnail under its line in a box reserved when the line is drawn (at most 240×160, `object-fit: contain`), with `+N` when the block has more images. It loads after the row has stayed highlighted for 150 ms, only for that row: a newer highlight cancels the wait, and a result that arrives after the highlight moved is not shown. A plain graph's image is an `<img loading="lazy">`; in an encrypted graph, or for a `.enc` URL, Roam's `file.get` decrypts it into an object URL. Up to 8 object URLs are kept, revoked on eviction, when the popup closes and on unload. A decrypted file over 5 MB, a failed download or a failed decode keeps the `image` label with the alt text, in the same box; nothing throws. No Roam component is mounted in the popup. Burrow's rows keep the `image` label.
+- Live gates: thumbnails in svy (encrypted) and notes, the box reserved before load and unmoved after, `+N`, a broken image's label, ↓ through 10 image blocks in the Tab list starting at most one download, no object URL left after the popup closes, the `[[` drill preview, the switch off; thumbnails in the text-box overlap pass. `tools/shots.mjs` scenarios 69–72.
+- `__BURROW_PERF` `scope.key`: the time of each ↑/↓ in the drill panel, whose preview is redrawn in the key.
+
+### Fixed
+
+- A thumbnail stayed an empty box when you pressed ↓ then ↑ back to its row before the next row's preview was drawn. The box is re-armed, and the decrypt already running for it is reused (one download).
+- ↓/↑ in the drill panel draw its preview in the next frame instead of inside the key, so the key only moves the highlight.
+- In an encrypted graph, an external image that falls back from `file.get` to a plain image counts one download, not two.
+- Gate tooling: a gate started right after another one could meet the previous run's cleanup still deleting in the page (svy is slow to delete): it aborted on a "stale fixture tree", or lost its own fixture when the old cleanup finished. Setup now waits for it, and a cleanup clears only its own fixture. A crashed run's block whose page was deleted under it is moved onto the fixture page before it is deleted (Roam's delete throws on a block without a parent).
 
 ## [0.9.1] - 2026-10-27
 

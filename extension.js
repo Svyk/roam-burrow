@@ -1,4 +1,4 @@
-/* Burrow v0.9.2 | MIT | generated; edit src/ */
+/* Burrow v0.9.3 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -1531,6 +1531,7 @@ var DEFAULTS = Object.freeze({
   frecency: true,
   pageBoost: true,
   rowPreview: true,
+  previewImages: true,
   aliasCreate: false,
   aliasDelete: false,
   drillOrdinals: true,
@@ -1576,6 +1577,7 @@ var SWITCHES = [
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
   ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
+  ["previewImages", "Images in the preview", "In the previews, the highlighted block's first image shows as a thumbnail (at most 240×160) under its line, +N when it has more. It loads after the row has been highlighted for 150 ms, only for that row; in an encrypted graph it is decrypted with Roam's file API and kept for the popup only (8 at most). Files over 5 MB and images that fail keep the image label with their alt text. Rows keep the label."],
   ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],
   ["aliasDelete", "Delete aliases from the chips (writes to your graph)", "Alt+Backspace on the selected alias chip asks to confirm; Enter removes only that alias from the page's alias block, Esc keeps it. Off by default."],
   ["drillOrdinals", "Ordinal matching in drill-down", "While drilled in, typing 1, 2, (b) or iii ranks blocks that start with that number or letter first."],
@@ -3063,6 +3065,251 @@ function createRichCache(limit = 400) {
   };
 }
 
+// src/thumbs.js
+var FENCE = /```[\s\S]*?(?:```|$)/g;
+var INLINE_CODE = /`[^`\n]*`/g;
+var SCHEME = /^(?:https?:\/\/|data:image\/)/i;
+function firstImage(string) {
+  if (!string || string.indexOf("![") === -1) return null;
+  const s = string.replace(FENCE, " ").replace(INLINE_CODE, " ");
+  let first = null;
+  let more = 0;
+  let at = 0;
+  for (; ; ) {
+    const i = s.indexOf("![", at);
+    if (i === -1) break;
+    at = i + 2;
+    const mid = s.indexOf("](", at);
+    if (mid === -1) break;
+    if (s.indexOf("]", at) !== mid) continue;
+    let depth = 1;
+    let j = mid + 2;
+    for (; j < s.length && depth; j++) {
+      const c = s.charCodeAt(j);
+      if (c === 40) depth++;
+      else if (c === 41) depth--;
+    }
+    if (depth) break;
+    at = j;
+    const url = s.slice(mid + 2, j - 1).trim().split(/\s/)[0];
+    if (!SCHEME.test(url)) continue;
+    if (first) more++;
+    else first = { url, alt: s.slice(i + 2, mid).trim() };
+  }
+  return first && { ...first, more };
+}
+function isEncryptedUrl(url) {
+  let path = String(url).split(/[?#]/)[0];
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+  }
+  return path.toLowerCase().endsWith(".enc");
+}
+function createThumbs({ doc, win, api, perf, lifecycle, encrypted = () => api?.graph?.isEncrypted === true, dwellMs = 150, maxBytes = 5 * 1024 * 1024, cacheSize = 8 }) {
+  const lru = /* @__PURE__ */ new Map();
+  let timer = null;
+  let current = null;
+  let generation = 0;
+  const syncCount = () => {
+    perf.counters.thumbUrls = lru.size;
+  };
+  const count = () => {
+    perf.counters.thumbLoads = (perf.counters.thumbLoads || 0) + 1;
+  };
+  syncCount();
+  function revoke(objectUrl) {
+    try {
+      win.URL.revokeObjectURL(objectUrl);
+    } catch {
+    }
+  }
+  function remember(url, objectUrl) {
+    const old = lru.get(url);
+    if (old) {
+      lru.delete(url);
+      revoke(old);
+    }
+    lru.set(url, objectUrl);
+    while (lru.size > cacheSize) {
+      const oldest = lru.keys().next().value;
+      revoke(lru.get(oldest));
+      lru.delete(oldest);
+    }
+    syncCount();
+  }
+  function setImg(box, img) {
+    box.querySelector(".burrow-thumb-img")?.remove();
+    box.prepend(img);
+  }
+  function fail(box, image) {
+    try {
+      box.dataset.state = "failed";
+      box.querySelector(".burrow-thumb-img")?.remove();
+      box.querySelector(".burrow-label")?.remove();
+      const label = doc.createElement("span");
+      label.className = "burrow-label";
+      label.append("image");
+      if (image.alt) label.append(` ${image.alt}`);
+      box.prepend(label);
+    } catch {
+    }
+  }
+  function showImg(req, src, lazy) {
+    const { box, image } = req;
+    const img = doc.createElement("img");
+    img.className = "burrow-thumb-img";
+    if (lazy) img.setAttribute("loading", "lazy");
+    img.setAttribute("decoding", "async");
+    img.alt = image.alt || "";
+    img.draggable = false;
+    img.addEventListener("load", () => {
+      box.dataset.state = "ok";
+    });
+    img.addEventListener("error", () => fail(box, image));
+    box.dataset.state = "loading";
+    setImg(box, img);
+    img.src = src;
+  }
+  function plain(req, counted = false) {
+    if (!counted) count();
+    showImg(req, req.image.url, true);
+  }
+  const inflight = /* @__PURE__ */ new Map();
+  function download(url) {
+    const known = inflight.get(url);
+    if (known) return known;
+    const gen = generation;
+    count();
+    const p = (async () => {
+      const file = await api.file.get({ url });
+      if (gen !== generation) return void 0;
+      if (!file || !(file.size <= maxBytes)) return null;
+      try {
+        const objectUrl = win.URL.createObjectURL(file);
+        remember(url, objectUrl);
+        return objectUrl;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      if (inflight.get(url) === p) inflight.delete(url);
+    });
+    inflight.set(url, p);
+    return p;
+  }
+  function target(req) {
+    const cur = current;
+    if (!cur || !cur.box.isConnected) return null;
+    return cur === req || cur.box === req.box || cur.image.url === req.image.url ? cur : null;
+  }
+  async function decrypted(req) {
+    const { box, image } = req;
+    box.dataset.state = "loading";
+    let objectUrl;
+    try {
+      objectUrl = await download(image.url);
+    } catch {
+      const cur2 = target(req);
+      if (!isEncryptedUrl(image.url) && cur2) {
+        if (!cur2.box.querySelector(".burrow-thumb-img")) plain(cur2, true);
+      } else fail(box, image);
+      return;
+    }
+    if (objectUrl === void 0) return;
+    if (!objectUrl) {
+      fail(box, image);
+      return;
+    }
+    const cur = target(req);
+    if (!cur || cur.box.querySelector(".burrow-thumb-img")?.getAttribute("src") === objectUrl) return;
+    stopTimer();
+    showImg(cur, objectUrl, false);
+  }
+  function load(req) {
+    try {
+      if (encrypted() || isEncryptedUrl(req.image.url)) {
+        if (!api?.file?.get) {
+          fail(req.box, req.image);
+          return;
+        }
+        decrypted(req).catch(() => fail(req.box, req.image));
+      } else plain(req);
+    } catch {
+      fail(req.box, req.image);
+    }
+  }
+  function stopTimer() {
+    if (timer != null) {
+      win.clearTimeout(timer);
+      timer = null;
+    }
+  }
+  function cancel(owner) {
+    if (owner != null && current?.owner !== owner) return;
+    stopTimer();
+    current = null;
+  }
+  function clear() {
+    cancel();
+    generation++;
+    inflight.clear();
+    for (const objectUrl of lru.values()) revoke(objectUrl);
+    lru.clear();
+    syncCount();
+  }
+  lifecycle.add(() => clear());
+  return {
+    box(image) {
+      const box = doc.createElement("div");
+      box.className = "burrow-thumb";
+      box.dataset.state = "wait";
+      if (image.more > 0) {
+        const more = doc.createElement("span");
+        more.className = "burrow-thumb-more";
+        more.textContent = `+${image.more}`;
+        box.append(more);
+      }
+      return box;
+    },
+    // want() again for a box that may already be armed or drawn: no-op then.
+    ensure(box, image, owner) {
+      if (box.dataset.state === "ok" || box.dataset.state === "failed") return;
+      if (current?.box === box || box.querySelector(".burrow-thumb-img")) return;
+      this.want(box, image, owner);
+    },
+    want(box, image, owner) {
+      stopTimer();
+      const req = { box, image, owner };
+      current = req;
+      try {
+        const cached = lru.get(image.url);
+        if (cached) {
+          lru.delete(image.url);
+          lru.set(image.url, cached);
+          showImg(req, cached, false);
+          return;
+        }
+        timer = win.setTimeout(() => {
+          timer = null;
+          try {
+            if (current === req && box.isConnected) load(req);
+          } catch {
+            fail(box, image);
+          }
+        }, dwellMs);
+      } catch {
+        fail(box, image);
+      }
+    },
+    cancel,
+    clear,
+    get live() {
+      return lru.size;
+    }
+  };
+}
+
 // src/preview.js
 var SIBLING_WINDOW = 24;
 var CHILD_LIMIT = 16;
@@ -3079,7 +3326,7 @@ var readerOf = (tree) => tree.window ? tree : {
   },
   indexOf: (parentUid, uid) => tree.children(parentUid).findIndex((k) => k.uid === uid)
 };
-function previewModel(result, tree, text, { hideEmpty = false, tables = false } = {}) {
+function previewModel(result, tree, text, { hideEmpty = false, tables = false, images = false } = {}) {
   const read = readerOf(tree);
   const { page, target } = result;
   const trailNodes = target ? read.trail(target.uid) : [];
@@ -3088,6 +3335,13 @@ function previewModel(result, tree, text, { hideEmpty = false, tables = false } 
   const items = [];
   const emptyLeaf = (n) => hideEmpty && !text(n.string || "").trim() && Array.isArray(n.kids) && n.kids.length === 0;
   const task = (s) => hasTask(s) ? taskParts(s).find((p) => p.task)?.task ?? null : null;
+  const withImage = (item, string) => {
+    if (images && item.target) {
+      const image = firstImage(string);
+      if (image) item.image = image;
+    }
+    return item;
+  };
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
     const { total: total2, kids } = read.window(uid, 0, CHILD_LIMIT);
@@ -3116,17 +3370,17 @@ function previewModel(result, tree, text, { hideEmpty = false, tables = false } 
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
+    items.push(withImage({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget }, sib.string));
     if (isTarget && !pushTable(sib)) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
   if (!siblings.length) {
-    items.push({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true });
+    items.push(withImage({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true }, target.string));
     pushTable(target);
   }
   return { key: `node:${target.uid}${tables ? ":t" : ""}`, trail, items };
 }
-function createPreview({ doc, win, lifecycle, rich = null }) {
+function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
   const pane = doc.createElement("div");
   pane.className = "burrow-preview bp3-elevation-3";
   pane.hidden = true;
@@ -3139,6 +3393,17 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
   lifecycle.node(pane, doc.body);
   let shownKey = null;
   let pop = null;
+  let thumb = null;
+  let thumbSeen = false;
+  function rearmThumb() {
+    if (thumb?.box.isConnected) thumbs.ensure(thumb.box, thumb.image, pane);
+  }
+  function dropThumb() {
+    if (!thumb) return;
+    thumbs.cancel(pane);
+    thumb.box.remove();
+    thumb = null;
+  }
   let rest = null;
   let restAt = 0;
   function render(model, lines = Infinity, deadline = Infinity) {
@@ -3148,10 +3413,12 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
     const first = model.items.slice(0, lines);
+    thumbSeen = false;
     const wrote = writeLines(first, 0, deadline);
     rest = model.items.length > wrote ? model.items.slice(wrote) : null;
     restAt = wrote;
     const kids = outline.children;
+    if (thumbs && !thumbSeen) dropThumb();
     while (kids.length > model.items.length) kids[kids.length - 1].remove();
     for (let i = wrote; i < kids.length; i++) kids[i].hidden = true;
   }
@@ -3180,6 +3447,7 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
       const depth = String(item.depth);
       if (row.style.getPropertyValue("--burrow-depth") !== depth) row.style.setProperty("--burrow-depth", depth);
       writeContent(row, item);
+      if (thumbs) writeThumb(row, item);
       if (row.hidden) row.hidden = false;
       if (!row.parentNode) made.push(row);
     }
@@ -3235,6 +3503,18 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
     footer.className = "burrow-table-more";
     footer.textContent = more;
     row.replaceChildren(grid, footer);
+  }
+  function writeThumb(row, item) {
+    if (item.target && item.image) {
+      thumbSeen = true;
+      const key = `${item.uid}\0${item.image.url}`;
+      if (thumb?.key !== key) {
+        thumb?.box.remove();
+        thumb = { key, box: thumbs.box(item.image), image: item.image };
+        thumbs.want(thumb.box, item.image, pane);
+      } else thumbs.ensure(thumb.box, item.image, pane);
+      if (thumb.box.parentNode !== row || thumb.box !== row.lastChild) row.append(thumb.box);
+    } else if (thumb && thumb.box.parentNode === row) thumb.box.remove();
   }
   function setText(row, text) {
     if (row.childNodes.length === 1 && row.firstChild.nodeType === 3) {
@@ -3304,7 +3584,10 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
     fill(model, popover, { budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
-      if (model.key === shownKey) return;
+      if (model.key === shownKey) {
+        if (thumbs) rearmThumb();
+        return;
+      }
       render(model, Infinity, performance.now() + budgetMs);
       shownKey = model.key;
       filled = true;
@@ -3322,7 +3605,7 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
       if (model.key !== shownKey) {
         render(model, lines, performance.now() + budgetMs);
         shownKey = model.key;
-      }
+      } else if (thumbs) rearmThumb();
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);
@@ -3362,6 +3645,7 @@ function createPreview({ doc, win, lifecycle, rich = null }) {
       pane.hidden = true;
       shownKey = null;
       filled = false;
+      if (thumbs) dropThumb();
       if (pop) pop.classList.remove(DRILL_CLASS);
       pop = null;
     }
@@ -3880,8 +4164,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   const resolveRef = (uid) => indexes.refs?.byUid.get(uid)?.string ?? tree.get(uid)?.string ?? null;
   const richFor = (uid, string) => setting("richRows") ? richCache.get(uid, string, () => richParts(string, { resolve: resolveRef })) : null;
   const previewRich = (item) => item.string != null ? richFor(item.uid, item.string) : null;
-  const preview = createPreview({ doc, win, lifecycle, rich: previewRich });
-  const scopePreview = createPreview({ doc, win, lifecycle, rich: previewRich });
+  const thumbs = createThumbs({ doc, win, api, perf, lifecycle });
+  const preview = createPreview({ doc, win, lifecycle, rich: previewRich, thumbs });
+  const scopePreview = createPreview({ doc, win, lifecycle, rich: previewRich, thumbs });
   const scopePanel = createScopePanel({
     doc,
     win,
@@ -4332,7 +4617,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (st.drill && setting("drillPreview") && st.pop) {
       cancelRowPreview();
       if (model?.drillKey !== st.drill.key || model.tables !== setting("previewTables")) {
-        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
+        model = previewModel(st.drill, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
         model.drillKey = st.drill.key;
         model.tables = setting("previewTables");
       }
@@ -4356,6 +4641,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         return;
       }
       cancelRowPreview();
+      thumbs.cancel();
       if (model?.drillKey?.startsWith("row:") !== true) hidePreview();
       rowPreviewKey = row.key;
       scheduleRowPreview(row);
@@ -4446,7 +4732,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       page = { uid: first.uid, title: first.title };
       target = tree.get(row.uid);
     }
-    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
+    const next = previewModel({ page, target }, read, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
     next.drillKey = `row:${row.key}`;
     return next;
   }
@@ -5131,6 +5417,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.prompt = null;
     promptRows = [];
     cancelRowPreview();
+    cancelScopeFrame();
+    thumbs.clear();
     model = null;
     scopeModel = null;
     tree.clear();
@@ -5702,17 +5990,32 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     const key = `${page.uid}:${target?.uid ?? ""}:${setting("previewTables")}`;
     if (scopeModel?.drillKey !== key) {
-      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables") });
+      scopeModel = previewModel({ page, target }, tree.full, readableText, { hideEmpty: setting("drillEmpty"), tables: setting("previewTables"), images: setting("previewImages") });
       scopeModel.drillKey = key;
     }
     scopePreview.show(scopeModel, st.pop, { beside: scopePanel.node.getBoundingClientRect(), avoid: st.ta.getBoundingClientRect(), budgetMs: richBudget(1) });
     if (scopePreview.unfinished) scheduleRest(scopePreview, () => st.phase === "SCOPE" && Boolean(st.scope?.preview), "scope");
   }
+  let scopeFrame = null;
+  const cancelScopeFrame = () => {
+    if (scopeFrame != null) {
+      win.cancelAnimationFrame(scopeFrame);
+      scopeFrame = null;
+    }
+  };
+  lifecycle.add(cancelScopeFrame);
   function scopeMove(delta) {
-    const level = scopeLevel();
-    level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
-    scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
-    showScopePreview();
+    perf.time("scope.key", () => {
+      const level = scopeLevel();
+      level.active = Math.max(0, Math.min(Math.max(0, st.scope.rows.length - 1), level.active + delta));
+      scopePanel.paintActive(st.scope, setting("keyHints"), setting("helpSheet"));
+      if (scopeFrame == null) {
+        scopeFrame = win.requestAnimationFrame(() => {
+          scopeFrame = null;
+          if (st.phase === "SCOPE" && st.scope) perf.time("scope.preview", showScopePreview);
+        });
+      }
+    });
   }
   function scopeDeeper() {
     const level = scopeLevel();
@@ -6157,9 +6460,9 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.9.2";
+var VERSION = "0.9.3";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "previewTables"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "previewTables"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;

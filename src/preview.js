@@ -7,6 +7,7 @@
 import { plainText, renderParts } from "./rich.js";
 import { hasTask, taskParts } from "./tasks.js";
 import { clipParts, CELL_CHARS, isTableBlock } from "./table.js";
+import { firstImage } from "./thumbs.js";
 
 const SIBLING_WINDOW = 24;
 const CHILD_LIMIT = 16;
@@ -30,7 +31,7 @@ const readerOf = (tree) => (tree.window ? tree : {
 // table model (src/table.js) in place of its child outline.
 // Reads only what it shows: 16 children per level, 24 siblings around the
 // target, so a page with thousands of blocks costs as much as a small one.
-export function previewModel(result, tree, text, { hideEmpty = false, tables = false } = {}) {
+export function previewModel(result, tree, text, { hideEmpty = false, tables = false, images = false } = {}) {
   const read = readerOf(tree);
   const { page, target } = result;
   const trailNodes = target ? read.trail(target.uid) : [];
@@ -42,6 +43,8 @@ export function previewModel(result, tree, text, { hideEmpty = false, tables = f
   // line itself, so a line stays one element: src/extension.css).
   const task = (s) => (hasTask(s) ? taskParts(s).find((p) => p.task)?.task ?? null : null);
   // kids === null: has children not read yet (or not known).
+  // Only the highlighted block's first image shows (src/thumbs.js).
+  const withImage = (item, string) => { if (images && item.target) { const image = firstImage(string); if (image) item.image = image; } return item; };
   const mayHaveKids = (n) => n.kids == null || n.kids.length > 0;
   const pushKids = (uid, depth, levels) => {
     const { total, kids } = read.window(uid, 0, CHILD_LIMIT);
@@ -70,12 +73,12 @@ export function previewModel(result, tree, text, { hideEmpty = false, tables = f
   for (const sib of siblings) {
     const isTarget = sib.uid === target.uid;
     if (!isTarget && emptyLeaf(sib)) continue;
-    items.push({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget });
+    items.push(withImage({ uid: sib.uid, text: text(sib.string || ""), string: sib.string ?? "", task: task(sib.string), depth: 0, heading: sib.heading, target: isTarget }, sib.string));
     if (isTarget && !pushTable(sib)) pushKids(target.uid, 1, 2);
   }
   if (from + SIBLING_WINDOW < total) items.push({ more: total - from - SIBLING_WINDOW, depth: 0 });
   if (!siblings.length) {
-    items.push({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true });
+    items.push(withImage({ uid: target.uid, text: text(target.string || ""), string: target.string ?? "", task: task(target.string), depth: 0, heading: target.heading, target: true }, target.string));
     pushTable(target);
   }
   return { key: `node:${target.uid}${tables ? ":t" : ""}`, trail, items };
@@ -83,7 +86,7 @@ export function previewModel(result, tree, text, { hideEmpty = false, tables = f
 
 // rich(item) -> parts (src/rich.js) or null: a line is drawn as Roam draws the
 // block (spans only where the block has markup), else as plain text.
-export function createPreview({ doc, win, lifecycle, rich = null }) {
+export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null }) {
   const pane = doc.createElement("div");
   pane.className = "burrow-preview bp3-elevation-3";
   pane.hidden = true;
@@ -96,6 +99,19 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
   lifecycle.node(pane, doc.body);
   let shownKey = null;
   let pop = null;
+  // The highlighted line's thumbnail box (src/thumbs.js): { key, box, image }.
+  let thumb = null;
+  let thumbSeen = false;
+  // A model drawn again unchanged still has its box armed (a row change cancels the dwell).
+  function rearmThumb() {
+    if (thumb?.box.isConnected) thumbs.ensure(thumb.box, thumb.image, pane);
+  }
+  function dropThumb() {
+    if (!thumb) return;
+    thumbs.cancel(pane);
+    thumb.box.remove();
+    thumb = null;
+  }
 
   // One element per line (the bullet is CSS): in svy's theme every node a
   // render adds costs style work, so the 0.4.0 three spans per line were
@@ -114,12 +130,14 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
       trailNode.append(Object.assign(doc.createElement("span"), { className: "burrow-crumb", textContent: part }));
     });
     const first = model.items.slice(0, lines);
+    thumbSeen = false;
     const wrote = writeLines(first, 0, deadline);
     rest = model.items.length > wrote ? model.items.slice(wrote) : null;
     restAt = wrote;
     // Lines of the last outline past this one's end go; those this one draws
     // later wait hidden.
     const kids = outline.children;
+    if (thumbs && !thumbSeen) dropThumb();
     while (kids.length > model.items.length) kids[kids.length - 1].remove();
     for (let i = wrote; i < kids.length; i++) kids[i].hidden = true;
   }
@@ -153,6 +171,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
       const depth = String(item.depth);
       if (row.style.getPropertyValue("--burrow-depth") !== depth) row.style.setProperty("--burrow-depth", depth);
       writeContent(row, item);
+      if (thumbs) writeThumb(row, item);
       if (row.hidden) row.hidden = false;
       if (!row.parentNode) made.push(row);
     }
@@ -208,6 +227,21 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
     footer.className = "burrow-table-more";
     footer.textContent = more;
     row.replaceChildren(grid, footer);
+  }
+
+  // The highlighted line's box is the line's last child, reserved before its
+  // image loads; any other line holds none.
+  function writeThumb(row, item) {
+    if (item.target && item.image) {
+      thumbSeen = true;
+      const key = `${item.uid}\u0000${item.image.url}`;
+      if (thumb?.key !== key) {
+        thumb?.box.remove();
+        thumb = { key, box: thumbs.box(item.image), image: item.image };
+        thumbs.want(thumb.box, item.image, pane);
+      } else thumbs.ensure(thumb.box, item.image, pane);
+      if (thumb.box.parentNode !== row || thumb.box !== row.lastChild) row.append(thumb.box);
+    } else if (thumb && thumb.box.parentNode === row) thumb.box.remove();
   }
 
   function setText(row, text) {
@@ -278,7 +312,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
     fill(model, popover, { budgetMs = Infinity } = {}) {
       if (pop && pop !== popover) pop.classList.remove(DRILL_CLASS);
       pop = popover;
-      if (model.key === shownKey) return;
+      if (model.key === shownKey) { if (thumbs) rearmThumb(); return; }
       render(model, Infinity, performance.now() + budgetMs);
       shownKey = model.key;
       filled = true;
@@ -295,6 +329,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
       const changed = model.key !== shownKey || pane.hidden || filled;
       filled = false;
       if (model.key !== shownKey) { render(model, lines, performance.now() + budgetMs); shownKey = model.key; }
+      else if (thumbs) rearmThumb();
       pane.hidden = false;
       if (docked) dock(docked);
       else place(avoid, beside);
@@ -327,6 +362,7 @@ export function createPreview({ doc, win, lifecycle, rich = null }) {
       pane.hidden = true;
       shownKey = null;
       filled = false;
+      if (thumbs) dropThumb();
       if (pop) pop.classList.remove(DRILL_CLASS);
       pop = null;
     },

@@ -54,6 +54,15 @@ export const DRILL_TREE = [
   { key: "richMedia", string: "zebra media ![zebra](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=) [zebra-report.pdf](https://firebasestorage.googleapis.com/v0/b/zebra/o/zebra-report.pdf) [docs](https://example.com/zebra)" },
   { key: "richLong", string: `zebra long block ${"with plenty of words that run on and on ".repeat(6)}until the zebra snippet target near its end` },
   { key: "richHtml", string: "zebra html <img src=x onerror=\"window.__burrowXss=1\"> <b>not bold</b>" },
+  // Image blocks (previewImages): `@{image}` / `@{image2}` are two image URLs already in the graph,
+  // `@{broken}` a URL that cannot load; all three are filled in at setup, read-only.
+  { key: "photoOne", string: "zebra photo one ![zebra photo alt](@{image})" },
+  { key: "photoMany", string: "zebra photo many ![first](@{image}) ![second](@{image2}) ![third](@{image})" },
+  { key: "photoBroken", string: "zebra photo broken ![zebra broken alt](@{broken})" },
+  { key: "photos", string: "zebra photos", children: Array.from({ length: 10 }, (_, i) => {
+    const n = String(i + 1).padStart(2, "0");
+    return { key: `photo${i + 1}`, string: `zebra photo ${n} ![p${n}](@{${i % 2 ? "image2" : "image"}})` };
+  }) },
   { key: "steps", string: "Steps section", children: [
     { key: "intro", string: "B-side" },
     { key: "one", string: "1. mix" }, { key: "two", string: "2. bake" },
@@ -136,8 +145,19 @@ async function cleanFromLedger(c, ledger) {
     if (ledger.sidebar && ledger.pageUid) {
       try { await api.ui.rightSidebar.removeWindow({ window: { type: "outline", "block-uid": ledger.pageUid } }); } catch { /* window already gone */ }
     }
+    // A block whose page was deleted under it (another run's cleanup) has no parent, and Roam's
+    // block.delete throws on it; it goes onto the fixture page first.
+    const parentless = (uid) => !api.q(`[:find ?p . :where [?e :block/uid "${uid}"] [?p :block/children ?e]]`);
+    const homeUid = () => api.q(`[:find ?u . :where [?p :node/title ${JSON.stringify(prefix)}] [?p :block/uid ?u]]`);
     for (const uid of [ledger.blockUid, ...(ledger.drillUids || [])].filter(Boolean)) {
-      if (exists(uid)) { await api.data.block.delete({ block: { uid } }); done.blocks += 1; }
+      if (!exists(uid)) continue;
+      if (parentless(uid)) {
+        let home = homeUid();
+        if (!home) { home = ledger.pageUid; await api.data.page.create({ page: { title: prefix, uid: home } }); ledger.createdPage = true; }
+        await api.data.block.move({ location: { "parent-uid": home, order: 0 }, block: { uid } });
+      }
+      await api.data.block.delete({ block: { uid } });
+      done.blocks += 1;
     }
     const pages = [[ledger.chipsUid, ledger.createdChips], [ledger.emptyUid, ledger.createdEmpty],
       [ledger.usedUid, ledger.createdUsed], [ledger.twinAUid, ledger.createdTwinA], [ledger.twinBUid, ledger.createdTwinB], [ledger.pageUid, ledger.createdPage]];
@@ -159,6 +179,12 @@ export async function setupFixture(c, { drillTree = false } = {}) {
     console.error(`fixture ledger ${path}: cleaned ${done.blocks} block(s) and ${done.pages} page(s) a crashed run left`);
     await rm(path, { force: true });
   }
+  // A previous run's cleanup may still be deleting in the page: wait for it (and for its tree to go), up to 90 s.
+  await c.evaluate(async (title) => {
+    const api = window.roamAlphaAPI;
+    const tree = () => api.q(`[:find ?b . :where [?p :node/title ${JSON.stringify(title)}] [?p :block/children ?b] [?b :block/string "Alpha section"]]`);
+    for (let i = 0; i < 450 && (window.__burrowCleaning > 0 || tree()); i++) await new Promise((r) => setTimeout(r, 200));
+  }, FIXTURE_PAGE);
   // What exists now (read-only); the stale-tree check runs after the ledger cleanup.
   const found = await c.evaluate(({ title, drillTree, scratch }) => {
     const api = window.roamAlphaAPI;
@@ -219,7 +245,25 @@ export async function setupFixture(c, { drillTree = false } = {}) {
       // The drill tree goes in before the typing block and before keepAll, so
       // the gates never count it as a block Roam created.
       if (drillTree) {
-        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : k === "usedPage" ? scratch[0].title : k === "twinAPage" ? scratch[1].title : k === "twinBPage" ? scratch[2].title : drill[k]));
+        // Two distinct image URLs from the graph (read-only query). Encrypted graph: a Roam upload (`.enc`).
+        const enc = Boolean(api.graph?.isEncrypted);
+        const found = new Set();
+        const tiers = enc ? [".enc"] : ["firebasestorage.googleapis.com", "https://"];
+        for (const needle of tiers) {
+          const strings = api.q(`[:find [?s ...] :where [?b :block/string ?s] [(clojure.string/includes? ?s "![")] [(clojure.string/includes? ?s ${JSON.stringify(needle)})]]`) || [];
+          for (const str of strings.slice(0, 600)) {
+            for (const m of str.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)) {
+              const url = m[1];
+              if (enc ? url.includes(".enc") : /^https:\/\//.test(url)) found.add(url);
+            }
+            if (found.size >= 2) break;
+          }
+          if (found.size) break;
+        }
+        if (!found.size) throw new Error(`fixture: no ${enc ? ".enc upload" : "https"} image block found in this graph for the image cases`);
+        const [image, image2 = image] = [...found];
+        const urls = { image, image2, broken: `https://firebasestorage.googleapis.com/v0/b/zebra-missing/o/burrow-missing.png${enc ? ".enc" : ""}?alt=media` };
+        const fill = (s) => s.replace(/@\{(\w+)\}/g, (_, k) => (k === "page" ? title : k === "usedPage" ? scratch[0].title : k === "twinAPage" ? scratch[1].title : k === "twinBPage" ? scratch[2].title : k in urls ? urls[k] : drill[k]));
         const make = async (nodes, parent) => {
           for (const n of nodes) {
             await api.data.block.create({ location: { "parent-uid": parent, order: "last" }, block: { string: fill(n.string), uid: drill[n.key], ...(n.heading ? { heading: n.heading } : {}), ...(n.open === false ? { open: false } : {}) } });
@@ -230,7 +274,7 @@ export async function setupFixture(c, { drillTree = false } = {}) {
         await make(tree, pageUid);
         // The referenced blocks the (( cases find: the pick-memory pair, the
         // tasks, and a nested block (outline and context cases).
-        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.quiltRun})) ((${drill.quiltScatter})) ((${drill.never})) ((${drill.many50})) ${richKeys.map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
+        await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: `refs ((${drill.pickA})) ((${drill.pickB})) ((${drill.taskTodo})) ((${drill.taskDone})) ((${drill.taskSmart})) ((${drill.quiltRun})) ((${drill.quiltScatter})) ((${drill.never})) ((${drill.many50})) ${[...richKeys, "photoOne", "photoMany", "photoBroken", "photos"].map((k) => `((${drill[k]}))`).join(" ")}`, uid: refsUid } });
         created.drill.push(refsUid);
       }
       await api.data.block.create({ location: { "parent-uid": pageUid, order: "last" }, block: { string: "", uid: blockUid } });
@@ -357,6 +401,9 @@ async function cleanupFixtureInPage(c, { keep }) {
     const api = window.roamAlphaAPI;
     const g = window.__burrowFixture;
     if (!g) return null;
+    // The deletes below can outlive this process (svy applies them slowly): the next run's setup waits for them.
+    window.__burrowCleaning = (window.__burrowCleaning || 0) + 1;
+    try {
     g.guard.armed = false;
     window.removeEventListener("keydown", g.guard.onKeyDown, true);
     window.__burrowGuards = (window.__burrowGuards || []).filter((h) => h !== g.guard.onKeyDown);
@@ -395,8 +442,9 @@ async function cleanupFixtureInPage(c, { keep }) {
         await api.data.page.delete({ page: { uid: g.scratchUid[key] } });
       }
     }
-    window.__burrowFixture = null;
+    if (window.__burrowFixture === g) window.__burrowFixture = null;
     return { blockExists: Boolean(exists) };
+    } finally { window.__burrowCleaning -= 1; }
   }, { keep });
 }
 
