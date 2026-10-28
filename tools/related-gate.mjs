@@ -516,14 +516,32 @@ function lateVerdict({ on }) {
 }
 
 // (a) Enter while the request is in flight, (b) Enter once the band is there.
+// Arm on waits for the band; the other arms wait as long as arm on did for
+// the same case (at least 5 s), so Enter comes at the same time after typing
+// and only the band differs. Roam's own list changes with time in svy (a
+// block the previous case created and deleted can still be listed), so a
+// shorter wait in one arm compared two different lists. Arms run in ARMS
+// order, arm on first.
+const waited = new Map();
+async function armWait(arm, label) {
+  if (arm === "on") {
+    const t0 = Date.now();
+    const seen = (await waitBand()) != null;
+    waited.set(label, Date.now() - t0);
+    return seen;
+  }
+  firstQuery = false;
+  await sleep(Math.max(5000, waited.get(label) ?? 0));
+  return null;
+}
+
 async function hiddenRun(arm, variant, preselect) {
   return withSettings(arm, { refPreselect: preselect }, async () => {
     const primed = await prime(SEED);
     if (!primed.ok) return { error: "focus failed" };
     await typeQuery(QUERY);
     if (variant === "a") await sleep(450);
-    else if (arm === "on") await waitBand();
-    else { firstQuery = false; await sleep(5000); }
+    else await armWait(arm, `hidden ${variant}${preselect ? "+pre" : ""}`);
     const pre = await shot();
     await c.key("Enter");
     const out = await readBack();
@@ -583,9 +601,7 @@ async function bytesCase(arm) {
       if (!primed.ok) return { error: "focus failed" };
       const c0 = await callCount();
       await typeQuery(QUERY);
-      let bandSeen = null;
-      if (arm === "on") bandSeen = (await waitBand()) != null;
-      else { firstQuery = false; await sleep(5000); }
+      const bandSeen = await armWait(arm, `bytes ${seq.name}`);
       for (const k of seq.keys) await key(k);
       const res = await readBack();
       return { ...res, bandSeen, calls: (await callCount()) - c0 };
