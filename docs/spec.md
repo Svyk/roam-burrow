@@ -167,6 +167,7 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `keyHints` | switch | on | BRW-5: key-hint line under Roam's list and in the drill panel (BRW-6: RefX wording; BRW-7: only keys that apply to the highlighted row) |
 | `rowPreview` | switch | on | BRW-6: with Roam's preview open, a selected Burrow row previews its page or block |
 | `previewImages` | switch | on | BRW-16: the highlighted preview line's first image as a thumbnail (§21) |
+| `previewTables` | switch | on | BRW-20: a highlighted `{{[[table]]}}` block's first 6x5 cells as a grid (§22) |
 | `aliasCreate` | switch | **off** | BRW-6: ⌥A on a highlighted page row adds an alias to its alias block (graph write) |
 | `aliasDelete` | switch | **off** | BRW-6: Alt+Backspace on the active chip removes that alias, after a confirm (graph write) |
 | `drillOrdinals` | switch | on | BRW-6: `1`, `2`, `(b)`, `iii` rank blocks starting with that ordinal first while drilled in |
@@ -511,6 +512,23 @@ Results on the final build: every thumbnail case in svy and notes; the full gate
 **Review fixes (BRW-16 review).** ↓ then ↑ back to an image row before the next row's preview was drawn left its box empty: the row change had cancelled the dwell, and the same model drawn again skipped the box. Now a preview shown again with the same model re-arms its box (`thumbs.ensure`: nothing to do if it is current, loaded or failed), and an encrypted file has one decrypt in flight per URL, so the re-armed box gets the image from the running `file.get` (one download; a result after the popup closed makes no object URL). A `file.get` that rejects for a non-`.enc` URL falls back to a plain `<img>` without counting a second download. Unit tests in `test/thumbs.test.js` drive `createPreview` and `createThumbs` the way `src/strip.js` does.
 
 **Gate tooling.** Three gate runs in a row raced: a run's in-page cleanup (an async loop of deletes, slow in svy) outlived its node process, so the next run saw a half-deleted tree (`stale fixture tree`), and when the old loop finished it set `__burrowFixture = null` under the new run (`reading 'blockUid'`). Setup now waits for a running cleanup (`__burrowCleaning`) and for the tree to go, and a cleanup clears only its own fixture. A ledger block whose page was deleted under it has no parent, and `block.delete` throws on it ("Expected number or lookup ref for entity id, got nil"); the ledger cleanup moves it onto the fixture page first.
+
+## 22. Tables in the preview (BRW-20)
+
+Precedent: BRW-12 §3 ("Roam Grid tables in the picker"), Roam's native table, Roam Grid (`~/roam-grid`, `tableCells`). Switch `previewTables`, on.
+
+**What is drawn.** In any of Burrow's preview panes (drill-down, the row preview, the Tab list's preview), when the highlighted block matches `{{[[table]]}}` or `{{table}}` (case and spaces ignored, anywhere in the string; `src/table.js` `isTableBlock`), `previewModel` puts one table item where the target's child outline would go. The pane draws it as `div.burrow-table` (CSS grid, `--burrow-cols`) of `div.burrow-cell`s, 6 rows x 5 columns at most, rectangular (a short row is padded with empty cells), then `div.burrow-table-more` with `+R rows`, `+C cols` or both when the table is bigger. The column count comes from the chain pull (5 levels with text, then ids to a recursion limit of 30), so it is exact up to 36 columns; a wider table shows `+31 cols`. A cell is cut at 40 characters with `…` (`clipParts` over rich parts, or the plain string) and drawn with the rich parser when Rows drawn like Roam is on. `" "` (Roam Grid's stored empty cell) is empty; a formula is its text. `{{[[roam/grid]]}}` does not match, so a large grid keeps its rich label. Text nodes only, no handlers, no `on*` attributes, no Roam Grid code and no `window.roamGrid` call.
+
+**Storage read.** Rows are the table block's children by `:block/order`; a row's cells are the row block and then, level by level, the child with the smallest order (Roam Grid's first-child chain). `src/pagetree.js` `table(uid)` exists on the full reader (drill, Tab list) and the bounded one (row preview):
+- Row ids: the children already known as nodes when the drill read them, else the preview's paged id read (`SLOTS`, then `KID_IDS` and orders 150 at a time past 150 children).
+- One `CHAIN` pull per shown row: five levels with uid, string and order, then ids and orders only with recursion limited to 30 levels to count the columns past the fifth. Measured on notes' tables: 0.1–2.8 ms per whole-table pull; one row's chain is a fraction of that.
+- Through the bounded reader's guard, so a used-up slice throws `PAUSE` between rows and the next slice resumes without pulling a cached chain again. Counted as `tableChains` in `__BURROW_PERF.counters`. Model and chains are kept by uid until the popup closes (`tree.clear()`).
+
+**Drawn at idle.** A key's draw (`show`/`fill`) never writes the table line: `writeLines` stops at it and leaves it to `more()`, which the preview's idle slices already run. A drill that flips between a section and its table on every key (`perf-gate --table`) rebuilt 30 cells per key and measured 5.4 ms p95 per key in svy before this. The drill and Tab-list models are rebuilt when the switch flips; the row preview takes it at the next row.
+
+**Gates (0.9.3).** svy live gate 105/105 and notes (light) 101/101 PASS, including the four `table:` drill cases (grid content, Escape and Enter byte-for-byte across arms, switch off, 6 chain pulls for the 200-row fixture). `tools/grid-gate.mjs` PASS in svy: Roam Grid's arrows move its active cell before and after the popup, and the table and its metadata are unchanged. The fixture's table sections are created collapsed, so their ~470 blocks are not rendered in the gate's sidebar. Per-key performance gates were dropped at Svy's request. After merging 0.9.2's image previews (2026-10-28, this build): the four `table:` cases in svy, the cells case in notes and the `[[` thumbnail drill case in both graphs pass.
+
+**Not covered.** A drill step cannot name a table that has text siblings: `stripRoamMarkup` drops the macro, so the table has no words, and an empty step takes the first sibling with text. The Tab list reaches any table.
 
 ## Also noticed
 

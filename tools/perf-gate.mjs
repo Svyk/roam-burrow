@@ -23,7 +23,15 @@
 // Roam's preview open (each popup starts with nothing read), selects the alias
 // row and times every slice of its preview draw and the time until it shows.
 // An installed Burrow is parked for the run and put back afterwards.
-//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--preview] [--cold "[[plexus"] [--theme light|dark] [--json]
+// --table: like --drill, with the drill expression ending on the fixture's small
+// table (`[[Burrow/Fixtures > tables section` and the typed query ` > `, then
+// backspaced): Burrow's drill preview alternates between the section and the
+// table (the empty last step takes the table, the only child of its section),
+// so the table preview (a chain pull per shown row, counted as table chains)
+// is drawn again and again while typing. Typing a child step instead would move
+// the target onto a row of the table; ` > ` keeps resolving to the section or
+// the table. Reports the table chains read per run beside the drill data line.
+//   node tools/perf-gate.mjs <window-title-prefix> [--runs 3] [--query "ant man"] [--drill] [--table] [--preview] [--cold "[[plexus"] [--theme light|dark] [--json]
 import { readFile } from "node:fs/promises";
 import { connect, sleep } from "./cdp.mjs";
 import { parkInstalled, unparkInstalled } from "./installed.mjs";
@@ -33,7 +41,8 @@ const args = process.argv.slice(2);
 const title = args[0];
 const flag = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
 const runs = Number(flag("--runs", 3));
-const drill = args.includes("--drill");
+const table = args.includes("--table");
+const drill = args.includes("--drill") || table;
 // --preview: Roam's preview open (Ctrl-O) on both arms, where Burrow's rows
 // draw their own preview; Roam's choice is put back afterwards.
 const withPreview = args.includes("--preview");
@@ -45,9 +54,9 @@ const FILTERED = {
   notes: "\"pcr screen\" -wgs in:PhD/Cronobacter & Spore Control in PIF",
 };
 const filtered = args.includes("--filters") ? FILTERED[/^svy/i.test(title) ? "svy" : "notes"] : null;
-const query = flag("--query", filtered ?? (drill ? "never > grand" : "ant man"));
+const query = flag("--query", filtered ?? (table ? " > " : drill ? "never > grand" : "ant man"));
 // The (( opener and the first two characters of the query are the recent rows' keys (BRW-14).
-const opener = drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
+const opener = table ? `[[${FIXTURE_PAGE} > tables section` : drill ? `[[${FIXTURE_PAGE}#alpha > ` : "((";
 const cycles = Math.ceil(200 / (query.length * 2));
 const root = new URL("..", import.meta.url);
 const theme = flag("--theme", null);
@@ -65,7 +74,7 @@ async function setArm(arm) {
     document.getElementById("burrow-dev-css")?.remove();
     if (arm === "gone") return { arm };
     for (const f of ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
-      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters"]) dev.values[f] = true;
+      "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewTables"]) dev.values[f] = true;
     dev.values.helpNudgeSeen = true;
     const style = document.createElement("style");
     style.id = "burrow-dev-css";
@@ -125,6 +134,8 @@ async function endRun() {
       place: perf?.summary ? perf.summary("place") : null,
       queries: perf ? perf.counters.queries : null,
       drillFetches: perf ? (perf.counters.drillPulls || 0) + (perf.counters.drillQueries || 0) : null,
+      tableChains: perf ? perf.counters.tableChains || 0 : null,
+      tableShown: Boolean(document.querySelector(".burrow-preview:not([hidden]) .burrow-table")),
       previewShown: Boolean(document.querySelector(".burrow-preview:not([hidden]) .burrow-target")),
       builds: perf ? perf.counters.builds : null,
       // Burrow's deferred (idle) preview draw: one sample per idle slice.
@@ -367,6 +378,7 @@ try {
         placeP95: r.place?.p95 ?? null, placeMax: r.place?.max ?? null,
         aliasRefreshMax: pct([...(r.aliasRefresh?.read || []), ...(r.aliasRefresh?.swap || []), ...(r.aliasRefresh?.rekey || [])], 1),
         queriesDuringRun: r.queries, buildsDuringRun: r.builds, drillFetches: r.drillFetches, previewAtEnd: r.previewShown,
+        tableChains: r.tableChains, tableAtEnd: r.tableShown,
         quietRebuild: r.quiet ?? null,
         pagesDeleted: r.pages?.deleted,
       });
@@ -448,7 +460,7 @@ report.verdict = verdict;
 if (args.includes("--json")) {
   console.log(JSON.stringify(report, null, 1));
 } else {
-  console.log(`cost gate ${title}${drill ? " (drill)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
+  console.log(`cost gate ${title}${table ? " (table)" : drill ? " (drill)" : ""}${withPreview ? " (preview open)" : ""}${theme ? ` (${theme})` : ""}: ${verdict.pass ? "PASS" : "FAIL"} (${runs} interleaved runs per arm)${report.error ? `; error: ${report.error}` : ""}`);
   console.log(`  Burrow JS per input p95: ${report.summary.burrowP95.join(" / ")} ms (budget <= 4)`);
   console.log(`  preview draw (idle slices) p95: ${report.summary.previewP95.map((v) => v ?? "none").join(" / ")} ms, max ${report.summary.previewMax.map((v) => v ?? "none").join(" / ")} ms${withPreview ? " (budget <= 4)" : ""}`);
   if (withPreview) console.log(`  preview slices by kind: ${report.results.filter((r) => r.arm === "on").map((r) => Object.entries(r.previewKinds || {}).map(([k, v]) => `${k} ${v}`).join(", ")).join(" / ")}`);
@@ -464,6 +476,7 @@ if (args.includes("--json")) {
   if (drill) {
     const on = report.results.filter((r) => r.arm === "on");
     console.log(`  drill: ${on.map((r) => r.keys).join(" / ")} keys per run, data fetches ${on.map((r) => r.drillFetches).join(" / ")} per run, preview open at the end: ${on.every((r) => r.previewAtEnd)}`);
+    if (table) console.log(`  table: chain pulls ${on.map((r) => r.tableChains).join(" / ")} per run (${on.map((r) => r.keys).join(" / ")} keys), table on screen after the last key (the typed " > " deleted again, so false): ${on.map((r) => r.tableAtEnd).join(" / ")}`);
   }
 }
 process.exitCode = process.exitCode || (verdict.pass ? 0 : 1);

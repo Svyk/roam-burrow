@@ -36,6 +36,7 @@ export const DEFAULTS = Object.freeze({
   helpNudge: true,
   refContext: true,
   refOutline: true,
+  previewTables: true,
   // Not a switch: set once the first-run line has been shown.
   helpNudgeSeen: false,
   aliasKeyword: "Aliases",
@@ -67,6 +68,7 @@ const SWITCHES = [
   ["helpNudge", "First-run tip", "The first time the picker opens, the hint line ends with “⌥/ all keys”, once. ✕ hides it; it never comes back."],
   ["refContext", "Where the block lives", "Under the highlighted referenced block in ((, a line with its page and parent (Page › … › Parent) and how many children Tab lists."],
   ["refOutline", "Up and down the outline", "On a highlighted referenced block, Shift+Tab lists its parent's children with the block highlighted (Shift+Tab again goes higher, Enter inserts the highlighted one), and Tab lists its children under the block's whole trail."],
+  ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["previewImages", "Images in the preview", "In the previews, the highlighted block's first image shows as a thumbnail (at most 240×160) under its line, +N when it has more. It loads after the row has been highlighted for 150 ms, only for that row; in an encrypted graph it is decrypted with Roam's file API and kept for the popup only (8 at most). Files over 5 MB and images that fail keep the image label with their alt text. Rows keep the label."],
   ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],

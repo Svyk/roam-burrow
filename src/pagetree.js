@@ -6,6 +6,8 @@
 // popup closes; a keystroke that stays on cached nodes reads no data.
 // The grandchildren carry their children's uids only, so a leaf is known to
 // be a leaf without another pull.
+import { CHAIN, tableChain, tableModel, TABLE_ROWS } from "./table.js";
+
 const TWO_LEVELS = `[:block/uid :node/title :block/string :block/heading :block/order
   {:block/children [:block/uid :block/string :block/heading :block/order
     {:block/children [:block/uid :block/string :block/heading :block/order {:block/children [:block/uid]}]}]}]`;
@@ -43,6 +45,9 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
   const paging = new Map();
   const byEid = new Map();
   const eids = new Map();
+  // Table models by table uid, and the first rows' chains by row ref.
+  const tables = new Map();
+  const chains = new Map();
 
   const node = (raw) => {
     const uid = raw[":block/uid"];
@@ -149,7 +154,9 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
   // children; before each read that is not cached it asks `expired()`, and
   // throws PAUSE when the slice is used up, so the caller can go on in a
   // later task with everything read so far kept.
+  const fullRead = (fn, kind = "pull") => { onFetch?.(kind); return fn(); };
   const full = {
+    table: (uid) => tableOf(fullRead, slotIdsOf(fullRead), uid),
     trail,
     window(uid, from, size) {
       const kids = children(uid);
@@ -158,33 +165,54 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
     indexOf(parentUid, uid) { return children(parentUid).findIndex((k) => k.uid === uid); },
   };
 
+  // A node's child ids in outline order, read through `read` (a guard that
+  // may throw PAUSE; the full reader's never does).
+  const byOrder = (list) => list.sort((a, b) => a[1] - b[1]).map(([eid]) => eid);
+  const slotIdsOf = (read) => (uid) => {
+    if (slots.has(uid)) return slots.get(uid);
+    let job = paging.get(uid);
+    if (!job) {
+      const raw = read(() => pull(SLOTS, [":block/uid", uid]));
+      const first = (raw?.[":block/children"] || []).map((k) => [k[":db/id"], k[":block/order"] ?? 0]);
+      if (first.length <= ORDER_BATCH) {
+        slots.set(uid, byOrder(first));
+        return slots.get(uid);
+      }
+      job = { eid: raw[":db/id"], ids: null, orders: [], at: 0 };
+      paging.set(uid, job);
+    }
+    if (!job.ids) job.ids = [...(read(() => q(KID_IDS, job.eid)) || [])];
+    while (job.at < job.ids.length) {
+      const batch = job.ids.slice(job.at, job.at + ORDER_BATCH);
+      const got = read(() => (pullMany ? pullMany(ORDER, batch) : batch.map((eid) => pull(ORDER, eid))));
+      for (const raw of got || []) if (raw?.[":db/id"] != null) job.orders.push([raw[":db/id"], raw[":block/order"] ?? 0]);
+      job.at += batch.length;
+    }
+    paging.delete(uid);
+    slots.set(uid, byOrder(job.orders));
+    return slots.get(uid);
+  };
+
+  // The table block `uid`: its row count and the chains of its first rows,
+  // one pull each through `read`. A row's chain is kept once read, so a
+  // slice that paused goes on from the row it stopped at.
+  const tableOf = (read, slotIds, uid) => {
+    if (tables.has(uid)) return tables.get(uid);
+    const known = nodes.get(uid)?.kids;
+    const refs = Array.isArray(known) ? known.map((k) => [":block/uid", k.uid]) : slotIds(uid);
+    const got = refs.slice(0, TABLE_ROWS).map((ref) => {
+      const key = Array.isArray(ref) ? ref[1] : ref;
+      if (!chains.has(key)) chains.set(key, tableChain(read(() => pull(CHAIN, ref), "chain")));
+      return chains.get(key);
+    });
+    const model = tableModel(uid, refs.length, got);
+    tables.set(uid, model);
+    return model;
+  };
+
   function bounded(expired = () => false) {
-    const read = (fn) => { if (expired()) throw PAUSE; onFetch?.("pull"); return fn(); };
-    const byOrder = (list) => list.sort((a, b) => a[1] - b[1]).map(([eid]) => eid);
-    const slotIds = (uid) => {
-      if (slots.has(uid)) return slots.get(uid);
-      let job = paging.get(uid);
-      if (!job) {
-        const raw = read(() => pull(SLOTS, [":block/uid", uid]));
-        const first = (raw?.[":block/children"] || []).map((k) => [k[":db/id"], k[":block/order"] ?? 0]);
-        if (first.length <= ORDER_BATCH) {
-          slots.set(uid, byOrder(first));
-          return slots.get(uid);
-        }
-        job = { eid: raw[":db/id"], ids: null, orders: [], at: 0 };
-        paging.set(uid, job);
-      }
-      if (!job.ids) job.ids = [...(read(() => q(KID_IDS, job.eid)) || [])];
-      while (job.at < job.ids.length) {
-        const batch = job.ids.slice(job.at, job.at + ORDER_BATCH);
-        const got = read(() => (pullMany ? pullMany(ORDER, batch) : batch.map((eid) => pull(ORDER, eid))));
-        for (const raw of got || []) if (raw?.[":db/id"] != null) job.orders.push([raw[":db/id"], raw[":block/order"] ?? 0]);
-        job.at += batch.length;
-      }
-      paging.delete(uid);
-      slots.set(uid, byOrder(job.orders));
-      return slots.get(uid);
-    };
+    const read = (fn, kind = "pull") => { if (expired()) throw PAUSE; onFetch?.(kind); return fn(); };
+    const slotIds = slotIdsOf(read);
     const brief = (eid) => {
       if (!byEid.has(eid)) {
         const raw = read(() => pull(BRIEF, eid));
@@ -200,6 +228,7 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
       return eids.get(uid);
     };
     return {
+      table: (uid) => tableOf(read, slotIds, uid),
       trail(uid) {
         if (!trails.has(uid) && expired()) throw PAUSE;
         return trail(uid);
@@ -228,7 +257,7 @@ export function createTreeSource({ pull, q, pullMany = null, onFetch }) {
     full,
     bounded,
     get: (uid) => nodes.get(uid) || null,
-    clear() { nodes.clear(); headingsByPage.clear(); trails.clear(); slots.clear(); paging.clear(); byEid.clear(); eids.clear(); },
+    clear() { nodes.clear(); headingsByPage.clear(); trails.clear(); slots.clear(); paging.clear(); byEid.clear(); eids.clear(); tables.clear(); chains.clear(); },
     get size() { return nodes.size; },
   };
 }

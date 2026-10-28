@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -126,6 +126,9 @@ const SCENARIOS = [
   { id: "70-thumb-many", query: "((zebra photo many", keys: ["preview-open", "wait-thumb:ok:6000", "wait:1500"] },
   { id: "71-thumb-broken", query: "((zebra photo broken", keys: ["preview-open", "wait-thumb:failed:6000", "wait:500"] },
   { id: "72-thumb-tab-drill", query: "((zebra photos", keys: ["preview-open", "Tab", "ArrowDown", "ArrowDown", "wait-thumb:ok:6000", "wait:500"] },
+  // BRW-20: the highlighted {{[[table]]}} block draws its first 6x5 cells in Burrow's drill preview.
+  { id: "73-table-preview", query: `[[${FIXTURE_PAGE} > tables section > `, keys: ["wait:600"], loose: true },
+  { id: "74-table-preview-big", query: `[[${FIXTURE_PAGE} > big table section > `, keys: ["wait:600"], loose: true },
 ];
 
 const c = await connect(title);
