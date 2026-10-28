@@ -179,16 +179,21 @@ const shot = () => c.evaluate(() => {
   };
 });
 
-// Wait for the first query of a run: cold (12 s); later ones 6 s.
+// Wait for the first query of a run: cold (12 s); later ones 6 s. svy: 20 s,
+// because Roam re-embeds it often (the gate's own edits too) and Burrow waits
+// out "Initial sync in progress" (src/semantic.js, up to 6 x 2 s).
 let firstQuery = true;
 async function waitBand(ms) {
-  const limit = ms ?? (firstQuery ? 12000 : 6000);
+  const limit = ms ?? (graph === "svy" ? 20000 : firstQuery ? 12000 : 6000);
   firstQuery = false;
   const t0 = Date.now();
   while (Date.now() - t0 < limit) {
     if ((await c.evaluate(() => document.querySelectorAll(".burrow-related:not([hidden]) .burrow-row").length)) > 0) return Date.now() - t0;
     await sleep(40);
   }
+  // Why: Burrow's last Related trace events.
+  const why = await c.evaluate(() => (window.__BURROW?.debug?.trace || []).filter((e) => e.ev === "related" || e.ev === "reset").slice(-8));
+  console.log(`  no band after ${limit} ms; trace: ${JSON.stringify(why)}`);
   return null;
 }
 
@@ -469,7 +474,7 @@ async function lateRun(arm, low) {
       await settleStrip(true);
       let before = null;
       let after = null;
-      for (let t0 = Date.now(); Date.now() - t0 < (firstQuery ? 12000 : 6000);) {
+      for (let t0 = Date.now(); Date.now() - t0 < (graph === "svy" ? 20000 : firstQuery ? 12000 : 6000);) {
         const s = await shot();
         if (s.band.length) { after = s; break; }
         before = s;
