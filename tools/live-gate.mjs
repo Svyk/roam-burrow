@@ -59,7 +59,7 @@ const TYPE_MS = 35;
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows", "semanticRelated"];
 const REF_COMMAND = "Burrow: block reference search";
 // The drill panel's ↓ limit for the image cases; BURROW_SCOPE_KEY_LIMIT=0 prints their samples.
 const SCOPE_KEY_LIMIT = Number(process.env.BURROW_SCOPE_KEY_LIMIT ?? 4);

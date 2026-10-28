@@ -18,8 +18,8 @@ import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo", related: "marvel movies in order" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF", related: "how to stay focused" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo", related: "marvel movies in order", footer: "ant man" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF", related: "how to stay focused", footer: "3. real-time pcr screen" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
 const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows", "semanticRelated"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -140,6 +140,10 @@ const SCENARIOS = [
   { id: "81-related", query: `((${config.related}`, keys: ["preview-closed", "waitband"], loose: true },
   { id: "82-related-active", query: `((${config.related}`, keys: ["preview-closed", "waitband", "alt+r", "ArrowDown"], loose: true },
   { id: "83-related-page", query: "[[how to stay focused", keys: ["preview-closed", "waitband"], loose: true },
+  // BRW-17: the Related footer at the bottom of the preview pane; waitfooter waits for its rows, up to 25 s.
+  { id: "84-footer-row-preview", query: `((${config.footer}`, keys: ["preview-open", "waitfooter"], loose: true },
+  { id: "85-footer-active", query: `((${config.footer}`, keys: ["preview-open", "waitfooter", "alt+r", "ArrowDown"], loose: true },
+  { id: "86-footer-drill-panel", query: `((${config.footer}`, keys: ["preview-open", "wait:600", "shift+Tab", "waitfooter"], loose: true },
 ];
 
 const c = await connect(title);
@@ -205,6 +209,16 @@ async function waitBand() {
   return false;
 }
 
+// The Related footer has rows on screen, or 25 s have passed.
+async function waitFooter() {
+  for (let t0 = Date.now(); Date.now() - t0 < 25000;) {
+    if (await c.evaluate(() => [...document.querySelectorAll(".burrow-preview-related .burrow-row")].some((n) => n.getClientRects().length))) { await sleep(250); return true; }
+    await sleep(60);
+  }
+  console.error("waitfooter: no Related footer after 25 s");
+  return false;
+}
+
 const ctrlO = async () => {
   const base = { key: "o", code: "KeyO", windowsVirtualKeyCode: 79, nativeVirtualKeyCode: 79, modifiers: 2 };
   await c.call("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
@@ -264,6 +278,7 @@ async function runKeys(keys) {
     else if (k === "alt+slash") await altSlash();
     else if (k === "alt+r") await altR();
     else if (k === "waitband") await waitBand();
+    else if (k === "waitfooter") await waitFooter();
     else if (k.startsWith("wait-thumb:")) {
       const [, want, max] = k.split(":");
       for (let t0 = Date.now(); Date.now() - t0 < Number(max);) {

@@ -27,7 +27,7 @@ import { clearSelection, cleanupFixture, deleteNewPages, guardReport, neutralCli
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "tabDrill", "paneLayout", "keyHints",
   "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey",
-  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewTables"];
+  "helpTips", "helpSheet", "helpNudge", "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewTables", "semanticRelated"];
 const REF_COMMAND = "Burrow: block reference search";
 const METADATA_PAGE = "roam/grid/metadata";
 const TYPE_MS = 35;
