@@ -97,6 +97,13 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
   outline.className = "burrow-outline";
   pane.append(trailNode, outline);
   lifecycle.node(pane, doc.body);
+  // The Related footer (src/strip.js builds its rows): the pane's last child,
+  // sticky at the bottom. It takes room inside the pane, never from the popup:
+  // docked, the pane's height is Roam's preview area; beside, it is pinned to
+  // what it was while the footer is attached.
+  let footerNode = null;
+  let pinned = false;
+  let footFrame = null;
   let shownKey = null;
   let pop = null;
   // The highlighted line's thumbnail box (src/thumbs.js): { key, box, image }.
@@ -261,6 +268,7 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
   function dock(r) {
     Object.assign(pane.style, { left: `${Math.round(r.left)}px`, top: `${Math.round(r.top)}px`,
       width: `${Math.round(r.width)}px`, height: `${Math.round(r.height)}px`, maxHeight: "" });
+    pinned = false;
     pane.classList.add("burrow-preview-docked");
   }
 
@@ -283,17 +291,59 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
         else top = below + height <= win.innerHeight ? below : above;
       }
     }
-    Object.assign(pane.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, width: `${WIDTH}px`, height: "", maxHeight: `${MAX_HEIGHT}px` });
+    Object.assign(pane.style, { left: `${Math.round(left)}px`, top: `${Math.round(top)}px`, width: `${WIDTH}px`, maxHeight: `${MAX_HEIGHT}px` });
+    if (!pinned) pane.style.height = "";
     pane.classList.remove("burrow-preview-docked");
   }
 
   function scrollToTarget() {
     const target = outline.querySelector(".burrow-target");
     if (!target) { if (pane.scrollTop) pane.scrollTop = 0; return; }
+    // The footer covers the pane's bottom: the line must end above it.
+    const covered = footerNode?.parentNode === pane ? footerNode.offsetHeight : 0;
     const top = target.offsetTop - trailNode.offsetHeight;
     const bottom = target.offsetTop + target.offsetHeight;
     if (top < pane.scrollTop) pane.scrollTop = Math.max(0, top - 4);
-    else if (bottom > pane.scrollTop + pane.clientHeight) pane.scrollTop = bottom - pane.clientHeight + 4;
+    else if (bottom > pane.scrollTop + pane.clientHeight - covered) pane.scrollTop = bottom - pane.clientHeight + covered + 4;
+  }
+
+  function cancelFootFrame() { if (footFrame != null) { win.cancelAnimationFrame(footFrame); footFrame = null; } }
+
+  // nodes: row elements (made and wired by src/strip.js), or null to take the
+  // footer away. Returns how many of them are drawn (the first ones). Beside the popover the pane's height is pinned first, so the
+  // footer takes room inside it; the line it may cover is scrolled clear in
+  // the next frame.
+  function setFooter(nodes) {
+    if (!nodes?.length) {
+      cancelFootFrame();
+      footerNode?.remove();
+      footerNode = null;
+      if (pinned) { pinned = false; pane.style.height = ""; }
+      return;
+    }
+    if (!footerNode) {
+      footerNode = doc.createElement("div");
+      footerNode.className = "burrow-preview-related";
+      footerNode.setAttribute("role", "listbox");
+    }
+    if (!pinned && !pane.classList.contains("burrow-preview-docked")) {
+      pane.style.height = `${pane.offsetHeight}px`;
+      pinned = true;
+    }
+    const label = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
+    footerNode.replaceChildren(label, ...nodes);
+    pane.append(footerNode);
+    // The footer is capped (60% of the pane) and clips: a row it cuts would
+    // still take ↓ and Enter, so rows that do not fit whole are not drawn.
+    let fit = nodes.length;
+    while (fit > 0 && footerNode.scrollHeight > footerNode.clientHeight + 0.5) footerNode.lastChild.remove(), fit -= 1;
+    if (!fit) { setFooter(null); return 0; }
+    cancelFootFrame();
+    footFrame = win.requestAnimationFrame(() => {
+      footFrame = null;
+      if (!pane.hidden && footerNode?.parentNode === pane) scrollToTarget();
+    });
+    return fit;
   }
 
   // The scroll to the highlighted line reads layout, so a docked draw leaves
@@ -301,6 +351,7 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
   let scrollFrame = null;
   const cancelScroll = () => { if (scrollFrame != null) { win.cancelAnimationFrame(scrollFrame); scrollFrame = null; } };
   lifecycle.add(cancelScroll);
+  lifecycle.add(cancelFootFrame);
 
   // Content written by fill() that show() has not placed and scrolled yet.
   let filled = false;
@@ -356,8 +407,12 @@ export function createPreview({ doc, win, lifecycle, rich = null, thumbs = null 
       rest = wrote < rest.length ? rest.slice(wrote) : null;
       restAt += wrote;
     },
+    setFooter,
+    get footerRows() { return footerNode?.parentNode === pane ? footerNode.querySelectorAll(".burrow-row").length : 0; },
+    get footer() { return footerNode?.parentNode === pane ? footerNode : null; },
     hide() {
       cancelScroll();
+      setFooter(null);
       rest = null;
       pane.hidden = true;
       shownKey = null;

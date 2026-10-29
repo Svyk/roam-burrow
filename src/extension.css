@@ -472,3 +472,11 @@
 .rm-autocomplete__results.burrow-related-open .rm-autocomplete__results-main { max-height: calc(300px + var(--burrow-related-h, 0px)); }
 /* While a Related row holds the selection, Roam's own highlight is muted. */
 .rm-autocomplete__results.burrow-related-owning .rm-autocomplete__results-scroll > div { background-color: transparent !important; }
+
+/* Related to the highlighted block: the last child of a preview pane, sticky
+   at its bottom. It takes room inside the pane (docked: Roam's preview area;
+   beside: the height pinned in src/preview.js), so nothing around it moves.
+   The pane ignores the pointer, the footer does not. */
+.burrow-preview-related { position: sticky; bottom: 0; z-index: 1; box-sizing: border-box; max-height: 60%; overflow: hidden; margin: 0 -8px -8px; padding: 0 8px 4px; border-top: 1px solid rgba(16, 22, 26, 0.12); background: var(--burrow-bg, #fff); color: var(--burrow-fg, #182026); pointer-events: auto; }
+.burrow-preview.burrow-dark .burrow-preview-related { border-top-color: rgba(255, 255, 255, 0.1); }
+.burrow-preview-related .burrow-row { position: static; }

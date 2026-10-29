@@ -27,6 +27,8 @@ const steps = [
   ["perf-gate.mjs", notes, "--runs", "3", "--drill"],
   ["perf-gate.mjs", "Svy", "--runs", "3", "--related", "--query", "marvel movies in order"],
   ["perf-gate.mjs", notes, "--runs", "3", "--related"],
+  ["footer-gate.mjs", "Svy"],
+  ["footer-gate.mjs", notes],
 ];
 let failed = 0;
 const t0 = Date.now();

@@ -27,7 +27,7 @@ test("keys of switches that are off are left out; the write keys appear once on"
   assert.ok(lines.some((l) => l.startsWith("Aliases: Alt+⌫")));
   assert.ok(lines.some((l) => l.startsWith("Pick: Alt+Shift+9")));
   assert.deepEqual(notes(on), []);
-  const off = helpGroups(reader({ tabDrill: false, drill: false, refOutline: false, aliasChips: false, drillPreview: false, rowPreview: false, semanticRows: false }), true);
+  const off = helpGroups(reader({ tabDrill: false, drill: false, refOutline: false, aliasChips: false, drillPreview: false, rowPreview: false, semanticRows: false, semanticRelated: false }), true);
   assert.deepEqual(off.map((g) => g.title), ["Pick", "Aliases", "Preview", "Filters"]);
   assert.ok(!flat(off).some((l) => l.includes("⌥↓") || l.includes("in a drill")));
   assert.match(flat(helpGroups(reader({ aliasLinkFormat: "[[Page]]" }), true)).join(" "), /\[\[alias ↵ inserts \[\[Page\]\]/);
