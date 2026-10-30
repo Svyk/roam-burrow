@@ -1,4 +1,4 @@
-/* Burrow v0.12.0 | MIT | generated; edit src/ */
+/* Burrow v0.13.0 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -686,6 +686,11 @@ function splitCode(string) {
     return " ";
   });
   return { prose, code: code.join("\n") };
+}
+function buildRefIndex(rows, aliasesByPage = /* @__PURE__ */ new Map()) {
+  const index = startRefIndex(rows);
+  for (const entry of index.entries) keyEntry(entry, index, aliasesByPage);
+  return index;
 }
 async function buildRefIndexSliced(rows, aliasesByPage, { sliceMs = 8, yieldTo: yieldTo2 }) {
   const index = startRefIndex(rows);
@@ -1522,6 +1527,7 @@ var DEFAULTS = Object.freeze({
   refPreselect: true,
   refProse: true,
   queryFilters: true,
+  filterAllBlocks: true,
   richRows: true,
   betterMatch: true,
   drill: true,
@@ -1569,6 +1575,7 @@ var SWITCHES = [
   ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
   ["refProse", "Prose before code in ((", "Burrow's (( rows match a block's own words: code blocks, inline code and the insides of {{embed}}, {{roam/render}} and other macros count only when what you type looks like code (it has ( ) . _ = or the like). A block of more than 64 words ranks after shorter blocks that match as well, and a match inside a [[page]] or #tag the block links comes first among equals. Off: code counts like any text and length does not count (0.6.1)."],
   ["queryFilters", "Query filters", `In (( and [[, "quoted words" must stand together, -word leaves out blocks with that word, in:here keeps blocks on this page, in:Page Title (to the next filter or the end; an alias works) keeps that page's blocks, ns:Systems/ keeps pages under Systems/, is:todo and is:done keep open or done tasks. Only a word with its colon, quotes or leading - is a filter; Roam's own list gets the text as typed. Off: every word is search text, as in 0.8.1.`],
+  ["filterAllBlocks", "Filters search every block", "With is:todo, is:done, in:here, in:Page or ns: in ((, Burrow also searches blocks nobody references yet: it asks Roam's own search for the words (or reads the named page's blocks) after a short pause and applies the filters, so its rows are no longer only referenced blocks. Referenced blocks still come first, and these rows never start selected. Inserts stay ((uid)). Nothing is read without one of these filters. Off: filtered rows come from referenced blocks only, as in 0.12.0."],
   ["richRows", "Rows drawn like Roam", "Burrow's (( rows, the drill panel and the previews draw a block as Roam does: a code block as its language and first line of code, inline code in a monospace face, [[links]], #tags and ((block refs)) as references, bold, italic, highlight and strike, embeds, queries, roam/render and SmartBlock buttons as small labels, images and files as labels. A long block shows the part around what you typed. Off: plain text, as in 0.6.1."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
   ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
@@ -2144,6 +2151,214 @@ function pageFilter(filters, { currentPage = null, resolve = null } = {}) {
       if (keys.some((key) => hasRun(key, word))) return false;
     }
     return true;
+  };
+}
+
+// src/allblocks.js
+var WIDE_DEBOUNCE_MS = 250;
+var SEARCH_LIMIT = 1e3;
+var CACHE_LIMIT = 20;
+var CACHE_TTL_MS = 60 * 1e3;
+var PAGE_PULL = "[:node/title {:block/_page [:block/uid :block/string]}]";
+var OWNER_PULL = "[:block/uid {:block/page [:node/title]}]";
+function wantsAllBlocks(filters) {
+  return Boolean(filters) && Boolean(filters.is.length || filters.here || filters.pages.length || filters.ns.length);
+}
+function sourceFor(filters, { currentPage = null, resolve = null } = {}) {
+  if (!wantsAllBlocks(filters)) return null;
+  const states = new Set(filters.is);
+  if (states.has(null) || states.size > 1) return null;
+  if (!filters.ns.length && (filters.here || filters.pages.length)) {
+    const titles = /* @__PURE__ */ new Map();
+    if (filters.here && currentPage != null) titles.set(String(currentPage).toLowerCase(), String(currentPage));
+    for (const value of filters.pages) {
+      const title = String(resolve?.(value)?.title ?? value);
+      titles.set(title.toLowerCase(), title);
+    }
+    if (!titles.size) return null;
+    const keys = [...titles.keys()].sort();
+    return { kind: "pages", titles: keys.map((key) => titles.get(key)), key: `pages\0${keys.join("")}` };
+  }
+  let text = String(filters.planText ?? "").trim();
+  if (!text) return null;
+  const [state] = states;
+  if (state) text = `${text} ${state === "done" ? "DONE" : "TODO"}`;
+  return { kind: "search", text, is: [...states], key: `search\0${text.toLowerCase()}` };
+}
+async function readSource(api, source) {
+  if (source.kind === "pages") return readPages(api, source.titles);
+  return readSearch(api, source);
+}
+async function readPages(api, titles) {
+  const pull = api.data?.async?.pull;
+  const lists = await Promise.all(titles.map(async (title) => {
+    const eid = [":node/title", title];
+    const page = pull ? await pull(PAGE_PULL, eid) : api.pull(PAGE_PULL, eid);
+    const rows = [];
+    for (const block of page?.[":block/_page"] || []) {
+      if (typeof block?.[":block/uid"] === "string") rows.push([block[":block/uid"], block[":block/string"] ?? "", title]);
+    }
+    return rows;
+  }));
+  return lists.flat();
+}
+async function readSearch(api, source) {
+  const hits = await api.data.async.search({ "search-str": source.text, "search-pages": false, "search-blocks": true, limit: SEARCH_LIMIT });
+  const kept = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const hit of Array.isArray(hits) ? hits : []) {
+    const uid = hit?.[":block/uid"];
+    const string = hit?.[":block/string"];
+    if (typeof uid !== "string" || seen.has(uid) || typeof string !== "string") continue;
+    if (source.is.length && !source.is.every((want) => want === taskState(string))) continue;
+    seen.add(uid);
+    kept.push([uid, string]);
+  }
+  if (!kept.length) return [];
+  const eids = kept.map(([uid]) => [":block/uid", uid]);
+  let owners;
+  if (api.data?.async?.pull_many) owners = await api.data.async.pull_many(OWNER_PULL, eids);
+  else owners = eids.map((eid) => api.pull(OWNER_PULL, eid));
+  const rows = [];
+  kept.forEach(([uid, string], i) => {
+    const title = owners?.[i]?.[":block/page"]?.[":node/title"];
+    if (title != null) rows.push([uid, string, title]);
+  });
+  return rows;
+}
+function createAllBlocks({ api, win = globalThis, perf = null, trace = () => {
+}, graph = () => "", now = () => Date.now(), onReply = () => {
+} }) {
+  const cache = /* @__PURE__ */ new Map();
+  let timer = null;
+  let latest = null;
+  let pending = null;
+  let inFlight = null;
+  let failed = false;
+  let generation = 0;
+  const info = { lastKey: null, lastMs: null };
+  const keyOf = (source) => `${graph()}\0${source.key}`;
+  function get(source) {
+    const key = keyOf(source);
+    const entry = cache.get(key);
+    if (!entry) return null;
+    cache.delete(key);
+    if (now() - entry.at > CACHE_TTL_MS) return null;
+    cache.set(key, entry);
+    return entry.rows;
+  }
+  function store(key, rows) {
+    cache.delete(key);
+    cache.set(key, { at: now(), rows });
+    while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+  }
+  function schedule(source, token) {
+    if (timer != null) win.clearTimeout(timer);
+    timer = null;
+    if (failed) return;
+    timer = win.setTimeout(() => {
+      timer = null;
+      ask({ source, token, key: keyOf(source), gen: generation });
+    }, WIDE_DEBOUNCE_MS);
+  }
+  function cancel() {
+    if (timer != null) win.clearTimeout(timer);
+    timer = null;
+  }
+  function ask(entry) {
+    if (failed) return;
+    latest = entry;
+    const rows = get(entry.source);
+    if (rows) {
+      pending = null;
+      trace({ ev: "wide", step: "cache", key: entry.source.key, n: rows.length });
+      onReply(entry.token, rows);
+      return;
+    }
+    if (inFlight) {
+      pending = inFlight.key === entry.key ? null : entry;
+      return;
+    }
+    void request(entry);
+  }
+  async function request(entry) {
+    inFlight = entry;
+    info.lastKey = entry.source.key;
+    trace({ ev: "wide", step: "request", kind: entry.source.kind, key: entry.source.key });
+    const t0 = now();
+    let rows = null;
+    let error = null;
+    try {
+      rows = await readSource(api, entry.source);
+    } catch (caught) {
+      error = caught;
+    }
+    inFlight = null;
+    const ms = now() - t0;
+    info.lastMs = ms;
+    if (error) {
+      trace({ ev: "wide", step: "fail", key: entry.source.key });
+      if (entry.gen !== generation) {
+        servePending();
+        return;
+      }
+      failed = true;
+      pending = null;
+      console.debug("[burrow] all-blocks read failed", error);
+      return;
+    }
+    perf?.push?.("wide.read", ms);
+    store(entry.key, rows);
+    trace({ ev: "wide", step: "reply", key: entry.source.key, n: rows.length, ms: Math.round(ms) });
+    if (pending && pending.gen === generation || entry.gen !== generation || !latest || latest.key !== entry.key) {
+      trace({ ev: "wide", step: "drop", key: entry.source.key, why: entry.gen !== generation ? "closed" : "superseded" });
+      servePending();
+      return;
+    }
+    onReply(latest.token, rows);
+  }
+  function servePending() {
+    if (!pending || pending.gen !== generation) {
+      pending = null;
+      return false;
+    }
+    const next = pending;
+    pending = null;
+    const rows = get(next.source);
+    if (rows) onReply(next.token, rows);
+    else void request(next);
+    return true;
+  }
+  function reset() {
+    cancel();
+    pending = null;
+    latest = null;
+    failed = false;
+    generation += 1;
+  }
+  return {
+    get,
+    schedule,
+    cancel,
+    reset,
+    clear() {
+      cache.clear();
+    },
+    get cacheSize() {
+      return cache.size;
+    },
+    get inFlight() {
+      return inFlight != null;
+    },
+    get failed() {
+      return failed;
+    },
+    get lastKey() {
+      return info.lastKey;
+    },
+    get lastMs() {
+      return info.lastMs;
+    }
   };
 }
 
@@ -3772,8 +3987,8 @@ var DEBOUNCE_MS = 400;
 var MIN_WORDS = 2;
 var MIN_CHARS = 8;
 var K = 10;
-var CACHE_LIMIT = 50;
-var CACHE_TTL_MS = 5 * 60 * 1e3;
+var CACHE_LIMIT2 = 50;
+var CACHE_TTL_MS2 = 5 * 60 * 1e3;
 var SYNC_RETRY_MS = 2e3;
 var SYNC_RETRIES = 6;
 var syncing = (error) => /sync in progress/i.test(String(error?.message || error));
@@ -3821,14 +4036,14 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
     const entry = cache.get(key);
     if (!entry) return null;
     cache.delete(key);
-    if (now() - entry.at > CACHE_TTL_MS) return null;
+    if (now() - entry.at > CACHE_TTL_MS2) return null;
     cache.set(key, entry);
     return entry.list;
   }
   function store(key, list) {
     cache.delete(key);
     cache.set(key, { at: now(), list });
-    while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+    while (cache.size > CACHE_LIMIT2) cache.delete(cache.keys().next().value);
   }
   function schedule(token) {
     if (timer != null) win.clearTimeout(timer);
@@ -4474,6 +4689,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     drill: null,
     pageTitle: null,
     filters: null,
+    wide: null,
     pop: null,
     composing: false,
     ignoreNextInput: false,
@@ -4589,6 +4805,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.drill = null;
     st.aliasOnly = null;
     st.filters = null;
+    st.wide = null;
     if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
       const m = ALIAS_PREFIX.exec(token.query);
       if (m) {
@@ -4616,6 +4833,50 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     return rows;
   }
   const frequent = (kind) => setting("frecency") ? frecency?.scores(kind) : null;
+  const wideMemo = { rows: null, refs: null, uid: null, index: null };
+  const wide = createAllBlocks({
+    api,
+    win,
+    perf,
+    trace,
+    graph: () => api.graph?.name ?? "",
+    onReply: (token) => onWideReply(token)
+  });
+  lifecycle.add(() => wide.cancel());
+  function wideRows(filters, plan, options, shownRows, refRow) {
+    if (shownRows.length >= ROW_LIMIT) return [];
+    const source = sourceFor(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
+    if (!source) return [];
+    const cached = wide.get(source);
+    st.wide = { source, cached: Boolean(cached) };
+    if (!cached) return [];
+    if (wideMemo.rows !== cached || wideMemo.refs !== indexes.refs || wideMemo.uid !== st.uid) {
+      const known = indexes.refs?.byUid;
+      const fresh = cached.filter(([uid]) => uid !== st.uid && !known?.has(uid));
+      wideMemo.rows = cached;
+      wideMemo.refs = indexes.refs;
+      wideMemo.uid = st.uid;
+      wideMemo.index = buildRefIndex(fresh.map(([uid, string, page]) => [uid, string, 0, page]), indexes.aliases?.byPage ?? /* @__PURE__ */ new Map());
+    }
+    const seen = new Set(shownRows.map((row) => row.uid));
+    return rankRefs(wideMemo.index, plan, options).filter((hit) => !seen.has(hit.uid)).slice(0, ROW_LIMIT - shownRows.length).map((hit) => refRow(hit, { wide: true, refs: 0 }));
+  }
+  function wideQuery() {
+    if (!st.wide || st.wide.cached) {
+      wide.cancel();
+      return;
+    }
+    wide.schedule(st.wide.source, st.token);
+  }
+  const wideCurrent = (token) => relatedCurrent(token) && st.phase !== "SCOPE" && !st.prompt;
+  function onWideReply(token) {
+    if (!setting("filterAllBlocks") || !wideCurrent(token)) {
+      trace({ ev: "wide", step: "drop", why: "text-changed" });
+      return;
+    }
+    st.rows = rank(token);
+    frame();
+  }
   function mainRows(token, recall, query = token.query) {
     const filters = setting("queryFilters") ? parseFilters(query) : null;
     st.filters = filters;
@@ -4626,7 +4887,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
       if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
-      return rankRefs(indexes.refs, plan, {
+      const options = {
         limit: ROW_LIMIT,
         recall,
         aliasExpand: setting("aliasExpand"),
@@ -4639,7 +4900,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
           resolve: (v) => indexes.titles?.resolve(v) ?? null,
           withCode: !setting("refProse") || looksLikeCode(searchText)
         })
-      }).map((hit) => ({
+      };
+      const refRow = (hit, extra) => ({
         kind: "ref",
         key: `ref:${hit.uid}`,
         uid: hit.uid,
@@ -4650,8 +4912,12 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         ...rowText(hit.string),
         insertion: `((${hit.uid}))`,
         // A query that matched inside code shows the code line it matched.
-        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string)
-      }));
+        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
+        ...extra
+      });
+      const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
+      if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
+      return rows.concat(wideRows(filters, plan, options, rows, refRow));
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY && st.aliasOnly == null) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
@@ -4932,7 +5198,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = !rows[0].recent && (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText));
+    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       st.phase = "ARMED";
       st.active = -1;
@@ -5962,6 +6228,27 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const label = target.closest?.(".burrow-related-label");
     return label ? { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] } : null;
   }
+  const wideDebug = {
+    get enabled() {
+      return Boolean(setting("filterAllBlocks"));
+    },
+    get inFlight() {
+      return wide.inFlight;
+    },
+    get lastKey() {
+      return wide.lastKey;
+    },
+    get cacheSize() {
+      return wide.cacheSize;
+    },
+    get lastMs() {
+      return wide.lastMs;
+    },
+    get failed() {
+      return wide.failed;
+    },
+    clear: () => wide.clear()
+  };
   const relatedDebug = {
     get enabled() {
       return Boolean(setting("semanticRows"));
@@ -6406,6 +6693,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     contextFor = null;
     cancelContext();
     semantic.reset();
+    wide.reset();
     foot.reset();
     dropFooter();
     cancelRelatedJob();
@@ -6417,6 +6705,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.active = -1;
     st.token = null;
     st.filters = null;
+    st.wide = null;
     st.released = null;
     st.drill = null;
     st.auto = false;
@@ -6471,6 +6760,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.token = token;
     st.rows = rank(token);
     relatedQuery(token);
+    wideQuery();
     st.chip = -1;
     if (!st.rows.length && st.phase === "OWNED") {
       st.phase = "ARMED";
@@ -7654,7 +7944,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
-  return { state: st, debug, reset, tree, forget, related: relatedDebug };
+  return { state: st, debug, reset, tree, forget, related: relatedDebug, wide: wideDebug };
 }
 function headParts(parts, max) {
   const out = [];
@@ -7680,7 +7970,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.12.0";
+var VERSION = "0.13.0";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated"];
 function safeLocalStorage() {
@@ -7806,7 +8096,7 @@ async function onload({ extensionAPI, extension }) {
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch, related: strip.related };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch, related: strip.related, wide: strip.wide };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;

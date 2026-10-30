@@ -2,13 +2,14 @@ import { aliasInsertion, aliasUses, groupAliasHits, matchAliases, roamAliasesWil
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
+import { createAllBlocks, sourceFor, wantsAllBlocks } from "./allblocks.js";
 import { parseFilters, pageFilter, refFilter } from "./filters.js";
 import { createHelpSheet, helpGroups, helpKeyAction } from "./help.js";
 import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints.js";
 import { createTreeSource, PAUSE } from "./pagetree.js";
 import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { createPickInfo, filterCandidates, mergeCandidates } from "./recents.js";
-import { rankRefs } from "./refindex.js";
+import { buildRefIndex, rankRefs } from "./refindex.js";
 import { createRichCache, renderParts, richParts, snippet } from "./rich.js";
 import { createSemantic, FOOTER_CHILDREN, FOOTER_DWELL_MS, FOOTER_K, FOOTER_POOL, FOOTER_ROWS, footerKeep, footerText } from "./semantic.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
@@ -108,7 +109,7 @@ const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaEleme
 // preview), Esc passes through. Deleting the `#` or `>` ends drill mode.
 export function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, saveSetting = null, doc = document, win = window }) {
   const st = {
-    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null,
+    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null, wide: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
     auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1, held: false, foot: -1,
   };
@@ -220,6 +221,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.drill = null;
     st.aliasOnly = null;
     st.filters = null;
+    st.wide = null;
     if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
       const m = ALIAS_PREFIX.exec(token.query);
       if (m) {
@@ -248,6 +250,59 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   const frequent = (kind) => (setting("frecency") ? frecency?.scores(kind) : null);
 
+  // ---- filters over every block (src/allblocks.js) ----
+
+  // Blocks Roam's search or a page read returned, kept after the referenced
+  // pool and the block being edited are left out; the index built from them is
+  // reused while those three stay the same.
+  const wideMemo = { rows: null, refs: null, uid: null, index: null };
+  const wide = createAllBlocks({
+    api, win, perf, trace, graph: () => api.graph?.name ?? "", onReply: (token) => onWideReply(token),
+  });
+  lifecycle.add(() => wide.cancel());
+
+  // Rows from beyond the referenced pool, appended after the referenced rows
+  // and never above them. Nothing is read here: a source that is not cached
+  // is left in st.wide for evaluate to schedule.
+  function wideRows(filters, plan, options, shownRows, refRow) {
+    if (shownRows.length >= ROW_LIMIT) return [];
+    const source = sourceFor(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
+    if (!source) return [];
+    const cached = wide.get(source);
+    st.wide = { source, cached: Boolean(cached) };
+    if (!cached) return [];
+    if (wideMemo.rows !== cached || wideMemo.refs !== indexes.refs || wideMemo.uid !== st.uid) {
+      const known = indexes.refs?.byUid;
+      const fresh = cached.filter(([uid]) => uid !== st.uid && !known?.has(uid));
+      wideMemo.rows = cached;
+      wideMemo.refs = indexes.refs;
+      wideMemo.uid = st.uid;
+      wideMemo.index = buildRefIndex(fresh.map(([uid, string, page]) => [uid, string, 0, page]), indexes.aliases?.byPage ?? new Map());
+    }
+    const seen = new Set(shownRows.map((row) => row.uid));
+    return rankRefs(wideMemo.index, plan, options)
+      .filter((hit) => !seen.has(hit.uid))
+      .slice(0, ROW_LIMIT - shownRows.length)
+      .map((hit) => refRow(hit, { wide: true, refs: 0 }));
+  }
+
+  // Per key (evaluate): restart the pause for a source that is not cached.
+  function wideQuery() {
+    if (!st.wide || st.wide.cached) { wide.cancel(); return; }
+    wide.schedule(st.wide.source, st.token);
+  }
+
+  // The popup shows the text the read was asked for, and nothing has moved since.
+  const wideCurrent = (token) => relatedCurrent(token) && st.phase !== "SCOPE" && !st.prompt;
+
+  // Rank again for the rows that arrived, without evaluate: it would move the
+  // highlight. Phase, active row and auto stay as they are.
+  function onWideReply(token) {
+    if (!setting("filterAllBlocks") || !wideCurrent(token)) { trace({ ev: "wide", step: "drop", why: "text-changed" }); return; }
+    st.rows = rank(token);
+    frame();
+  }
+
   // query: the text ranked on (after `alias:` in prefix mode, spec §20).
   function mainRows(token, recall, query = token.query) {
     const filters = setting("queryFilters") ? parseFilters(query) : null;
@@ -259,7 +314,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
       if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
-      return rankRefs(indexes.refs, plan, {
+      const options = {
         limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
         frequent: frequent("block"), currentPage: setting("pageBoost") ? st.pageTitle : null,
         prose: setting("refProse"), code: looksLikeCode(searchText),
@@ -267,13 +322,17 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
           currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null,
           withCode: !setting("refProse") || looksLikeCode(searchText),
         }),
-      })
-        .map((hit) => ({
-          kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
-          ...rowText(hit.string), insertion: `((${hit.uid}))`,
-          // A query that matched inside code shows the code line it matched.
-          rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
-        }));
+      };
+      const refRow = (hit, extra) => ({
+        kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
+        ...rowText(hit.string), insertion: `((${hit.uid}))`,
+        // A query that matched inside code shows the code line it matched.
+        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
+        ...extra,
+      });
+      const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
+      if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
+      return rows.concat(wideRows(filters, plan, options, rows, refRow));
     }
     if (!setting("aliasPages") || (compact < MIN_ALIAS_QUERY && st.aliasOnly == null)) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];
@@ -549,7 +608,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = !rows[0].recent && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2)
+    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2)
       || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText)));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       // Native rows arrived late, or the query moved on: give the selection back.
@@ -1677,6 +1736,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     return label ? { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] } : null;
   }
 
+  const wideDebug = {
+    get enabled() { return Boolean(setting("filterAllBlocks")); },
+    get inFlight() { return wide.inFlight; },
+    get lastKey() { return wide.lastKey; },
+    get cacheSize() { return wide.cacheSize; },
+    get lastMs() { return wide.lastMs; },
+    get failed() { return wide.failed; },
+    clear: () => wide.clear(),
+  };
+
   // The state the debug object and the gates read: read-mostly.
   const relatedDebug = {
     get enabled() { return Boolean(setting("semanticRows")); },
@@ -2108,6 +2177,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     contextFor = null;
     cancelContext();
     semantic.reset();
+    wide.reset();
     foot.reset();
     dropFooter();
     cancelRelatedJob();
@@ -2119,6 +2189,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.active = -1;
     st.token = null;
     st.filters = null;
+    st.wide = null;
     st.released = null;
     st.drill = null;
     st.auto = false;
@@ -2179,6 +2250,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.token = token;
     st.rows = rank(token);
     relatedQuery(token);
+    wideQuery();
     st.chip = -1;
     if (!st.rows.length && st.phase === "OWNED") { st.phase = "ARMED"; st.active = -1; st.auto = false; }
     if (st.phase === "OWNED") st.active = 0;
@@ -3305,7 +3377,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   lifecycle.event(scopePanel.node, "mousemove", guarded("mousemove", onScopeMouseMove));
   lifecycle.add(() => reset("unload"));
 
-  return { state: st, debug, reset, tree, forget, related: relatedDebug };
+  return { state: st, debug, reset, tree, forget, related: relatedDebug, wide: wideDebug };
 }
 
 // The first `max` characters of a row's parts: a Related row is one line, and
