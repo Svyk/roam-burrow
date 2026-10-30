@@ -69,8 +69,8 @@ test("every feature has its own switch in the settings panel", () => {
   assert.equal("pickMemory" in DEFAULTS, false);
 });
 
-test("0.13.0 defaults: writes and the hotkey are off, the help, block navigation, preview image, table, variant and related switches on, the tip not yet seen", () => {
-  assert.equal(VERSION, "0.13.0");
+test("0.13.1 defaults: writes and the hotkey are off, the help, block navigation, preview image, table, variant and related switches on, the tip not yet seen", () => {
+  assert.equal(VERSION, "0.13.1");
   assert.equal(DEFAULTS.refProse, true);
   assert.equal(DEFAULTS.richRows, true);
   assert.equal(DEFAULTS.recentRows, true);

@@ -17,7 +17,7 @@ const { createStrip } = await import("../src/strip.js");
 after(() => win.close());
 
 const POPOVER = '<div class="rm-autocomplete__results"><div class="rm-autocomplete__results-main"><div class="rm-autocomplete__results-scroll">'
-  + '<div title="ant man" style="background-color: rgb(225, 232, 237)"><div class="rm-autocomplete-result">ant man</div></div></div>'
+  + '<div title="ant man" style="background-color: rgb(225, 232, 237)"><div class="rm-autocomplete-result">ant man</div><div class="bp3-text-overflow-ellipsis">Create as block below</div></div></div>'
   + '<div class="rm-autocomplete-footer">Block search</div></div></div>';
 const frames = () => new Promise((resolve) => win.requestAnimationFrame(() => setTimeout(resolve, 0)));
 const settle = async () => { for (let i = 0; i < 4; i += 1) await frames(); };

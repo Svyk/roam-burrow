@@ -1,4 +1,4 @@
-/* Burrow v0.13.0 | MIT | generated; edit src/ */
+/* Burrow v0.13.1 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -1572,7 +1572,7 @@ var SWITCHES = [
   ["aliasUsage", "Order alias chips by use", "Chips under an alias row start with the alias you link most: each is counted by how many times [alias]([[Page]]) appears in your graph, most used first, ties in the alias block's order. A chip's tip adds ×N. Counted once at idle (about 75 ms for 24 alias pages in svy), never while typing. Off: the alias block's order."],
   ["aliasPrefix", "alias: prefix", "Type [[alias:lo to see only alias rows for lo (up to three), then Roam's list as usual. Enter inserts [alias]([[Page]]) in place of the whole [[alias:lo]]. Nothing else (recent rows, pages, drill-down) shows for that text. Off: [[alias:lo is an ordinary search."],
   ["refRanking", "Referenced blocks first in ((", "Shows up to three already-referenced blocks above Roam's results, originals before blocks that quote them."],
-  ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it. ↓ past it returns to Roam's rows."],
+  ["refPreselect", "Pre-select the referenced original", "The first referenced block starts selected, so Enter inserts it, unless another block has exactly the typed text. A pasted block uid finds that block. ↓ past it returns to Roam's rows."],
   ["refProse", "Prose before code in ((", "Burrow's (( rows match a block's own words: code blocks, inline code and the insides of {{embed}}, {{roam/render}} and other macros count only when what you type looks like code (it has ( ) . _ = or the like). A block of more than 64 words ranks after shorter blocks that match as well, and a match inside a [[page]] or #tag the block links comes first among equals. Off: code counts like any text and length does not count (0.6.1)."],
   ["queryFilters", "Query filters", `In (( and [[, "quoted words" must stand together, -word leaves out blocks with that word, in:here keeps blocks on this page, in:Page Title (to the next filter or the end; an alias works) keeps that page's blocks, ns:Systems/ keeps pages under Systems/, is:todo and is:done keep open or done tasks. Only a word with its colon, quotes or leading - is a filter; Roam's own list gets the text as typed. Off: every word is search text, as in 0.8.1.`],
   ["filterAllBlocks", "Filters search every block", "With is:todo, is:done, in:here, in:Page or ns: in ((, Burrow also searches blocks nobody references yet: it asks Roam's own search for the words (or reads the named page's blocks) after a short pause and applies the filters, so its rows are no longer only referenced blocks. A block whose words stand together or start as you typed comes before one with the words scattered; on equal footing referenced blocks come first. These rows never start selected. Inserts stay ((uid)). Nothing is read without one of these filters. Needs Query filters and Referenced blocks first in ((. Off: filtered rows come from referenced blocks only, as in 0.12.0."],
@@ -4677,6 +4677,9 @@ var MIN_ALIAS_QUERY = 2;
 var ALIAS_PREFIX = /^alias:\s*(.*)$/is;
 var RECENT_QUERY = 2;
 var PLACEHOLDERS = /* @__PURE__ */ new Set(["search for a page", "search for a block"]);
+var BLOCK_UID = /^[\w-]{9}$/;
+var UID_HIT_PULL = "[:block/string {:block/page [:node/title]}]";
+var isCreateRow = (row) => row.classList.contains("create-footnote") || Boolean(row.querySelector(".bp3-text-overflow-ellipsis")?.textContent.startsWith("Create as"));
 var NATIVE_PICK_FRAMES = 2;
 var POPUP_WAIT_FRAMES = 12;
 var PREVIEW_SLICE_MS = 3;
@@ -4902,11 +4905,28 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.filters = filters;
     const searchText = filters ? filters.text : query;
     const planText = filters ? filters.planText : query;
+    const refRow = (hit2, extra) => ({
+      kind: "ref",
+      key: `ref:${hit2.uid}`,
+      uid: hit2.uid,
+      refs: hit2.refs,
+      level: hit2.level,
+      page: hit2.page,
+      inCode: hit2.inCode,
+      source: hit2.string,
+      ...rowText(hit2.string),
+      insertion: `((${hit2.uid}))`,
+      // A query that matched inside code shows the code line it matched.
+      rich: hit2.inCode && setting("richRows") ? richParts(hit2.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit2.uid, hit2.string),
+      ...extra
+    });
+    const hit = token.kind === "((" && setting("refPreselect") ? uidHit(query) : null;
+    const withHit = (rows) => hit ? [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT) : rows;
     const plan = searchPlan(planText);
-    if (!plan) return [];
+    if (!plan) return withHit([]);
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
-      if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
+      if (!setting("refRanking") || compact < MIN_REF_QUERY) return withHit([]);
       const options = {
         limit: ROW_LIMIT,
         recall,
@@ -4921,21 +4941,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
           withCode: !setting("refProse") || looksLikeCode(searchText)
         })
       };
-      const refRow = (hit, extra) => ({
-        kind: "ref",
-        key: `ref:${hit.uid}`,
-        uid: hit.uid,
-        refs: hit.refs,
-        level: hit.level,
-        page: hit.page,
-        inCode: hit.inCode,
-        ...rowText(hit.string),
-        insertion: `((${hit.uid}))`,
-        // A query that matched inside code shows the code line it matched.
-        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
-        ...extra
-      });
-      const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
+      const rows = rankRefs(indexes.refs, plan, options).map((hit2) => refRow(hit2));
+      if (hit) return withHit(rows);
       if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
       return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
@@ -4950,28 +4957,40 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       skip: accepted ? (entry) => !accepted(entry) : void 0
     });
     if (setting("aliasInline")) {
-      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit) => ({
+      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit2) => ({
         kind: "alias",
-        key: `alias:${hit.uid}`,
-        uid: hit.uid,
-        alias: hit.alias,
-        title: hit.title,
-        aliases: hit.aliases,
-        refs: hit.refs,
-        level: hit.level,
-        insertion: aliasInsertion(hit, format)
+        key: `alias:${hit2.uid}`,
+        uid: hit2.uid,
+        alias: hit2.alias,
+        title: hit2.title,
+        aliases: hit2.aliases,
+        refs: hit2.refs,
+        level: hit2.level,
+        insertion: aliasInsertion(hit2, format)
       }));
     }
-    return hits.map((hit) => ({
+    return hits.map((hit2) => ({
       kind: "alias",
-      key: `alias:${hit.uid}:${hit.alias}`,
-      uid: hit.uid,
-      alias: hit.alias,
-      title: hit.title,
-      level: hit.level,
-      insertion: aliasInsertion(hit, format),
-      seenByRoamAliases: hit.seenByRoamAliases
+      key: `alias:${hit2.uid}:${hit2.alias}`,
+      uid: hit2.uid,
+      alias: hit2.alias,
+      title: hit2.title,
+      level: hit2.level,
+      insertion: aliasInsertion(hit2, format),
+      seenByRoamAliases: hit2.seenByRoamAliases
     }));
+  }
+  function uidHit(query) {
+    if (!BLOCK_UID.test(query) || query === st.uid) return null;
+    let block;
+    try {
+      block = api.pull(UID_HIT_PULL, [":block/uid", query]);
+    } catch {
+      return null;
+    }
+    const string = block?.[":block/string"];
+    if (!string) return null;
+    return { uid: query, string, refs: indexes.refs?.byUid.get(query)?.refs ?? 0, level: 3, page: block[":block/page"]?.[":node/title"] ?? null };
   }
   function drillRow(result) {
     const { page, target } = result;
@@ -5218,7 +5237,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText));
+    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && (rows[0].uidHit || !exactElsewhere(rows, searchText)) || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       st.phase = "ARMED";
       st.active = -1;
@@ -5249,6 +5268,17 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       if ((row.getAttribute("title") || "").trim().toLowerCase() === text) return true;
     }
     return indexes.titles?.resolve(query)?.title.toLowerCase() === text;
+  }
+  function exactElsewhere(rows, query) {
+    if (st.filters) return false;
+    const text = String(query).trim().toLowerCase();
+    const exact = (string) => (string ?? "").trim().toLowerCase() === text;
+    if (exact(rows[0].source)) return false;
+    if (rows.some((row) => exact(row.source))) return true;
+    for (const row of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
+      if (exact(row.getAttribute("title")) && !isCreateRow(row)) return true;
+    }
+    return false;
   }
   let model = null;
   let rowPreviewKey = null;
@@ -7990,7 +8020,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.13.0";
+var VERSION = "0.13.1";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated"];
 function safeLocalStorage() {

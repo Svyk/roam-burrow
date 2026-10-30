@@ -52,6 +52,10 @@ const ALIAS_PREFIX = /^alias:\s*(.*)$/is;
 const RECENT_QUERY = 2;
 // Roam's own placeholder rows: titles that are not pages.
 const PLACEHOLDERS = new Set(["search for a page", "search for a block"]);
+const BLOCK_UID = /^[\w-]{9}$/;
+const UID_HIT_PULL = "[:block/string {:block/page [:node/title]}]";
+const isCreateRow = (row) => row.classList.contains("create-footnote")
+  || Boolean(row.querySelector(".bp3-text-overflow-ellipsis")?.textContent.startsWith("Create as"));
 // Frames to wait for Roam to apply its own pick before reading it back.
 const NATIVE_PICK_FRAMES = 2;
 const POPUP_WAIT_FRAMES = 12;
@@ -314,11 +318,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.filters = filters;
     const searchText = filters ? filters.text : query;
     const planText = filters ? filters.planText : query;
+    const refRow = (hit, extra) => ({
+      kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode, source: hit.string,
+      ...rowText(hit.string), insertion: `((${hit.uid}))`,
+      // A query that matched inside code shows the code line it matched.
+      rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
+      ...extra,
+    });
+    // A uid comes first: `-AbCdEfGh` also reads as a -word filter, and it needs no ranking.
+    const hit = token.kind === "((" && setting("refPreselect") ? uidHit(query) : null;
+    const withHit = (rows) => (hit ? [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT) : rows);
     const plan = searchPlan(planText);
-    if (!plan) return [];
+    if (!plan) return withHit([]);
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
-      if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
+      if (!setting("refRanking") || compact < MIN_REF_QUERY) return withHit([]);
       const options = {
         limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
         frequent: frequent("block"), currentPage: setting("pageBoost") ? st.pageTitle : null,
@@ -328,14 +342,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
           withCode: !setting("refProse") || looksLikeCode(searchText),
         }),
       };
-      const refRow = (hit, extra) => ({
-        kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode,
-        ...rowText(hit.string), insertion: `((${hit.uid}))`,
-        // A query that matched inside code shows the code line it matched.
-        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
-        ...extra,
-      });
       const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
+      if (hit) return withHit(rows);
       if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
       return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
@@ -360,6 +368,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
         kind: "alias", key: `alias:${hit.uid}:${hit.alias}`, uid: hit.uid, alias: hit.alias, title: hit.title,
         level: hit.level, insertion: aliasInsertion(hit, format), seenByRoamAliases: hit.seenByRoamAliases,
       }));
+  }
+
+  // A pasted block uid. Roam lists that block but leaves Enter on "Create as
+  // block below", so Burrow's first row takes it (spec §27). One pull, and only
+  // for a query shaped like a uid.
+  function uidHit(query) {
+    if (!BLOCK_UID.test(query) || query === st.uid) return null;
+    let block;
+    try { block = api.pull(UID_HIT_PULL, [":block/uid", query]); } catch { return null; }
+    const string = block?.[":block/string"];
+    if (!string) return null;
+    return { uid: query, string, refs: indexes.refs?.byUid.get(query)?.refs ?? 0, level: 3, page: block[":block/page"]?.[":node/title"] ?? null };
   }
 
   function drillRow(result) {
@@ -613,7 +633,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2)
+    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && (rows[0].uidHit || !exactElsewhere(rows, searchText)))
       || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText)));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       // Native rows arrived late, or the query moved on: give the selection back.
@@ -650,6 +670,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       if ((row.getAttribute("title") || "").trim().toLowerCase() === text) return true;
     }
     return indexes.titles?.resolve(query)?.title.toLowerCase() === text;
+  }
+
+  // Another block has exactly the typed text, so Burrow's top row is not the
+  // hit and must not take Enter. Roam's two Create rows carry the typed text as
+  // their title and are not blocks. Filters narrow what a row may be: skipped.
+  function exactElsewhere(rows, query) {
+    if (st.filters) return false;
+    const text = String(query).trim().toLowerCase();
+    const exact = (string) => (string ?? "").trim().toLowerCase() === text;
+    if (exact(rows[0].source)) return false;
+    if (rows.some((row) => exact(row.source))) return true;
+    for (const row of st.pop?.querySelectorAll(NATIVE_ROWS) || []) {
+      if (exact(row.getAttribute("title")) && !isCreateRow(row)) return true;
+    }
+    return false;
   }
 
   let model = null;

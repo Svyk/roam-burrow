@@ -627,6 +627,22 @@ Where this section differs from earlier ones, it wins. Research: BRW-1 report (a
 
 **Cost.** A key costs a timer reset and a cache lookup. Measured in svy (2026-10-29): `async.search` 20–55 ms for `watch` (longest main-thread gap 13–34 ms); notes 145–160 ms (gaps up to 257 ms). One read per new word set, after the pause. `window.__BURROW.wide` is the debug object.
 
+## 27. `((` pre-select and exact hits (BRW-4, 2026-10-30)
+
+Where this section differs from earlier ones, it wins. Research: BRW-1 report (artifact 7zkt), ranked item 3, whose premise did not hold.
+
+**What Roam does** (Burrow gone, notes and svy, 2026-10-30). Rows 0 and 1 of `((` are "Create as footnote" and "Create as block below"; their `title` is the typed text, and row 1 keeps the highlight even once real rows arrive. Plain Enter or Tab creates a block with the typed text, for a full uid and for exact text too. ↓ reaches the first real block. A full 9-character uid (case-sensitive) lists that block first; a page uid, a shorter uid or another case lists nothing. Exact text is not sorted first: `quokka lantern exact and more` came before `quokka lantern exact`.
+
+So "step aside for Roam's first row" would make Enter create a junk block named after the uid, or a duplicate. Svy's decision: Burrow takes the hit.
+
+**Switch.** Part of `refPreselect`; off, neither rule applies.
+
+**Uid.** A query of `/^[\w-]{9}$/` that is not the block being edited (`-AbCdEfGh` also parses as a `-word` filter; the uid wins, and `refRanking` is not needed): one `api.pull` of `[:block/string {:block/page [:node/title]}]`. A non-empty block becomes row 0 (level 3, `uidHit`), other rows follow without it, 3 rows at most. It is pre-selected, so Enter inserts `((uid))`, also before Roam's list arrives. A page, a missing uid or an empty block adds no row.
+
+**Exact text.** No filter, row 0 is not a uid hit. If row 0's string equals the typed text (trimmed, any case) it stays pre-selected. Else if another Burrow row, or a Roam row that is not a Create row, has that text, nothing is pre-selected: Enter is Roam's. A list that arrives late gives the selection back (the existing path in `evaluate`). The Create check is `.create-footnote` or a `.bp3-text-overflow-ellipsis` line starting `Create as`; if Roam renames that line, Burrow stops pre-selecting, the safe side.
+
+Gate: `tools/preselect-gate.mjs <window> <svy|notes>`. Runs on this build (2026-10-30): svy 9/9, notes 7/9 in one run, its two failures being Roam's write limit in the `gone` arm, and those two cases 2/2 on their own. Nothing is written beyond the insert the user picked.
+
 ## Also noticed
 
 
