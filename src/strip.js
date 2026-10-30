@@ -408,7 +408,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     return { uid: query, string, refs: indexes.refs?.byUid.get(query)?.refs ?? 0, level: 3, page: block[":block/page"]?.[":node/title"] ?? null };
   }
 
-  // A page taken from a near title is always named on the row.
+  // A page taken from a near title is always named: by the line under the row
+  // with "where the block lives" on, else in the crumb.
   function drillRow(result, near = false) {
     const { page, target } = result;
     let crumb = page.title;
@@ -416,7 +417,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       const parents = tree.trail(target.uid);
       if (parents.length > 1) {
         const parent = readableText(parents[parents.length - 1].string);
-        crumb = near ? `${page.title} › ${parent}` : parent;
+        crumb = near && !setting("refContext") ? `${page.title} › ${parent}` : parent;
       }
     }
     return {

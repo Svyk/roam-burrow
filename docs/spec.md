@@ -695,7 +695,7 @@ Where this section differs from §5, it wins. Research: BRW-1 report, item 6.
 
 **Held.** The winner is kept for that title until the popup closes or the title text changes. Otherwise `#grok` drilling and `#grok z` falling back would hand Enter to Roam, which creates `Executor Lanes#grok z`; held, Enter inserts `[[Page]]`, as §5 commits.
 
-**The row.** Always names the page: the page as the row, or `Page › parent › block` with the row's usual crumb after it. Keys, preview, Tab, variants and commit are §5's.
+**The row.** Always names the page: the page as the row, the line under it with `refContext` on, else `Page › parent › block` in the row's crumb (with both, a long title pushed the block off the row). Keys, preview, Tab, variants and commit are §5's.
 
 **Cost.** Titles get search keys on the first near title after an index build, not at build. The scan runs once per title text (kept while the steps change), a few ms on 7,200 titles, and only when the text has `#` or `>`. Resolving steps is §5's reads on at most five pages, kept until the popup closes.
 

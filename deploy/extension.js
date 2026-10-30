@@ -5129,7 +5129,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       const parents = tree.trail(target.uid);
       if (parents.length > 1) {
         const parent = readableText(parents[parents.length - 1].string);
-        crumb = near ? `${page.title} › ${parent}` : parent;
+        crumb = near && !setting("refContext") ? `${page.title} › ${parent}` : parent;
       }
     }
     return {

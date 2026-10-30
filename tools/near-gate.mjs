@@ -147,7 +147,7 @@ const look = () => c.evaluate(() => {
     popup: Boolean(document.querySelector(".rm-autocomplete__results")),
     phase: b?.state.phase ?? "gone",
     drill: b?.state.drill?.page.title ?? null,
-    rowText: [...document.querySelectorAll(".burrow-strip:not([hidden]) .burrow-row")].map((n) => n.textContent).join(" | "),
+    named: document.querySelector(".burrow-strip:not([hidden])")?.textContent ?? "",
   };
 });
 
@@ -182,10 +182,10 @@ async function popup(words, keys, { ready, shot } = {}) {
 }
 
 const failed = (ok, detail) => (ok ? [] : [detail]);
-const show = (r) => JSON.stringify({ phase: r?.s?.phase, drill: r?.s?.drill, row: r?.s?.rowText, steps: r?.steps?.map((t) => [t.phase, t.drill, t.popup]), out: r?.out, error: r?.error });
+const show = (r) => JSON.stringify({ phase: r?.s?.phase, drill: r?.s?.drill, row: r?.s?.named, steps: r?.steps?.map((t) => [t.phase, t.drill, t.popup]), out: r?.out, error: r?.error });
 const drilled = (s) => s.phase === "gone" || Boolean(s.drill);
 
-const onRow = (r, title) => r?.s?.drill === title && r.s.rowText.includes(title);
+const onRow = (r, title) => r?.s?.drill === title && r.s.named.includes(title);
 const noDrill = (r) => r?.s?.drill === null && r?.s?.popup === true;
 const uidOf = () => c.evaluate(() => window.roamAlphaAPI.q('[:find ?u . :where [?b :block/string "Alpha section"] [?b :block/page ?p] [?p :node/title "Burrow/Near Zq Title"] [?b :block/uid ?u]]'));
 const dropNearPages = () => c.evaluate(async (titles) => {
