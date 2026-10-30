@@ -1,4 +1,4 @@
-/* Burrow v0.14.0 | MIT | generated; edit src/ */
+/* Burrow v0.15.0 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -1573,6 +1573,7 @@ var DEFAULTS = Object.freeze({
   previewTables: true,
   semanticRows: true,
   semanticRelated: true,
+  suggestRows: false,
   tagRows: true,
   // Not a switch: set once the first-run line has been shown.
   helpNudgeSeen: false,
@@ -1610,6 +1611,7 @@ var SWITCHES = [
   ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
   ["semanticRows", "Related rows (Roam semantic search)", "When Roam's semantic search is on for the graph (Settings > Graph), up to three Related rows from it show under Roam's results in (( and [[, after you pause typing a phrase of two or more words. Each lookup sends what you typed after the (( or [[ to the embedding provider set in Settings > Graph; in an encrypted graph the query text still goes to that provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. ⌥R (Alt+R) moves into the Related rows, ↑/↓ move inside them, Esc goes back to Roam's rows. Enter inserts a Related row only when it is highlighted, by those keys or by the mouse; otherwise it does what it did before."],
   ["semanticRelated", "Related to the highlighted block", "When Roam's semantic search is on for the graph (Settings > Graph) and a block or page row, a drill row or a drill panel row has been highlighted for half a second with a preview showing, up to four blocks related to it by meaning show at the bottom of that preview, inside its space: the preview does not grow. ⌥R (Alt+R) moves into them, ↑/↓ move inside them, Esc goes back to the highlighted row. Enter or Tab or a click inserts ((uid)); ⇧↵ ⌥↵ ⌘⇧↵ and ⇧+click work as on Burrow's rows. Each lookup sends the highlighted block's text (for a page, its title and first ten blocks, up to 600 characters) to the embedding provider set in Settings > Graph; in an encrypted graph that text still goes to the provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. Independent of Related rows."],
+  ["suggestRows", "Suggested links", "With an empty [[, up to three pages Roam's link suggestions find for the block you are editing show under a quiet Suggested label, after a short pause: ⌥R moves into them, Enter inserts the page. Each lookup gives the block's text to Roam's AI link suggestions, which can send it to Roam's AI provider, in encrypted graphs too. Kept per graph, off by default."],
   ["tagRows", "Burrow rows in #", "In Roam's # tag popup, Burrow's page rows above its list: alias rows with forgiving matching, frequent pages first, and with up to two characters typed the recent pages. #ns:Systems/ lists pages under Systems/, and #ns:Systems/la the ones whose title goes on with la. A row inserts #[[Page]]: a tag cannot carry an alias label. Nothing starts selected, so Enter still leaves what you typed; ↑ moves onto the rows. No drill-down, embeds or Related rows here. Off: the popup is Roam's alone."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["previewImages", "Images in the preview", "In the previews, the highlighted block's first image shows as a thumbnail (at most 240×160) under its line, +N when it has more. It loads after the row has been highlighted for 150 ms, only for that row; in an encrypted graph it is decrypted with Roam's file API and kept for the popup only (8 at most). Files over 5 MB and images that fail keep the image label with their alt text. Rows keep the label."],
@@ -2421,6 +2423,7 @@ function hintsKey(items) {
 }
 function pickerHints(s, mac = IS_MAC) {
   if (s.related === "active") {
+    if (s.suggested) return [["↵", "insert", "Insert the highlighted suggested page (from Roam's link suggestions)"], ["↑↓", "move", "Move between the suggested pages"], ["esc", "back", "Back to Roam's rows"]];
     return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
   }
   if (s.footer === "active") {
@@ -2429,7 +2432,8 @@ function pickerHints(s, mac = IS_MAC) {
   const items = baseHints(s, mac);
   if ((s.related === "available" || s.footer === "available") && !s.prompt && !s.chips && !s.held) {
     const tip = s.footer === "available" ? "Move into the blocks related to the highlighted one (Roam's semantic search)" : "Move into the Related rows from Roam's semantic search";
-    items.push([keyLabel("altR", mac), "related", tip]);
+    if (s.suggested && s.footer !== "available") items.push([keyLabel("altR", mac), "suggested", "Move into the pages Roam's link suggestions found for this block"]);
+    else items.push([keyLabel("altR", mac), "related", tip]);
   }
   return items;
 }
@@ -2561,11 +2565,12 @@ function helpGroups(setting, mac = IS_MAC) {
   if (on("refOutline")) drill.items.push(["⇧⇥", "on a block row: up to its parent, the block highlighted"]);
   if (on("drill")) drill.items.push(["# >", "[[Page#heading > child"]);
   if (drill.items.length) groups.push(drill);
-  if (on("semanticRows") || on("semanticRelated")) {
+  if (on("semanticRows") || on("semanticRelated") || on("suggestRows")) {
     const related = { title: "Related", items: [], notes: [] };
     if (on("semanticRows")) {
       related.items.push([k("altR"), "move into the Related rows"], ["↑ ↓", "move inside them"], ["↵", "insert the highlighted one"], ["esc", "back to Roam's rows"]);
     }
+    if (on("suggestRows")) related.items.push([k("altR"), "with an empty [[: the pages Roam suggests for this block"]);
     if (on("semanticRelated")) {
       related.items.push([k("altR"), "the blocks related to the highlighted one, under its preview"]);
       const variants = [on("insertVariants") ? `${k("shiftEnter")} ${k("altEnter")}` : "", on("openInSidebar") ? k("sidebarEnter") : ""].filter(Boolean).join(" ");
@@ -4046,9 +4051,27 @@ function candidates(hits, kind) {
   }
   return out;
 }
+var SUGGEST_TEXT = 2e3;
+var SUGGEST_MIN = 3;
+function suggestText(value, token) {
+  const text = (String(value ?? "").slice(0, token.start) + String(value ?? "").slice(token.end)).trim().slice(0, SUGGEST_TEXT);
+  return text.length >= SUGGEST_MIN ? text : null;
+}
+function suggestTitles(reply) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  if (!Array.isArray(reply?.suggestions)) return out;
+  for (const hit of reply.suggestions) {
+    const title = hit?.title;
+    if (typeof title !== "string" || !title || seen.has(title.toLowerCase())) continue;
+    seen.add(title.toLowerCase());
+    out.push(title);
+  }
+  return out;
+}
 function createSemantic({ api, win = globalThis, perf = null, trace = () => {
 }, graph = () => "", now = () => Date.now(), onReply = () => {
-}, k = K, keyOf = null, perfName = "related.request" }) {
+}, k = K, keyOf = null, perfName = "related.request", fetch = null, canAsk = null, eligible = eligibleQuery, what = "related rows: semantic search" }) {
   const cache = /* @__PURE__ */ new Map();
   let timer = null;
   let retryTimer = null;
@@ -4060,6 +4083,7 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
   let generation = 0;
   const info = { lastQuery: null, lastMs: null };
   function available() {
+    if (canAsk) return canAsk();
     try {
       return Boolean(api?.data?.semanticSearchEnabled?.()) && typeof api.data.async?.semanticSearch === "function";
     } catch {
@@ -4083,7 +4107,7 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
   function schedule(token) {
     if (timer != null) win.clearTimeout(timer);
     timer = null;
-    if (failed || !eligibleQuery(token.query)) return;
+    if (failed || !eligible(token.query)) return;
     timer = win.setTimeout(() => {
       timer = null;
       ask(token);
@@ -4122,8 +4146,8 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
     let list = null;
     let error = null;
     try {
-      const hits = await api.data.async.semanticSearch({ "search-str": query, k, "search-blocks": true, "search-pages": token.kind === "[[" });
-      list = candidates(hits, token.kind);
+      if (fetch) list = await fetch(token);
+      else list = candidates(await api.data.async.semanticSearch({ "search-str": query, k, "search-blocks": true, "search-pages": token.kind === "[[" }), token.kind);
     } catch (caught) {
       error = caught;
     }
@@ -4152,7 +4176,7 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
       pending = null;
       if (!logged) {
         logged = true;
-        console.debug("[burrow] related rows: semantic search failed", String(error?.message || error));
+        console.debug(`[burrow] ${what} failed`, String(error?.message || error));
       }
       return;
     }
@@ -4187,7 +4211,7 @@ function createSemantic({ api, win = globalThis, perf = null, trace = () => {
   }
   return {
     available,
-    eligible: (token) => Boolean(token) && eligibleQuery(token.query),
+    eligible: (token) => Boolean(token) && eligible(token.query),
     schedule,
     cancel,
     reset,
@@ -4819,7 +4843,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   const hashed = (token) => token?.kind === "#" || token?.kind === "[[" && st.ta?.value[token.start - 1] === "#";
   const tagged = (token) => hashed(token) && setting("tagRows");
-  const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated");
+  const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated") || setting("suggestRows");
   const kidsKnown = /* @__PURE__ */ new Map();
   function hasKids(uid) {
     if (!uid) return false;
@@ -5861,6 +5885,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
+      suggested: related.visible && bandSuggested(),
       footer: footerRows().length ? st.foot >= 0 ? "active" : "available" : null,
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn(), tag },
       held: Boolean(st.held)
@@ -6055,6 +6080,20 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   lifecycle.add(() => band.remove());
   const bandLabel = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
   const related = { key: null, rows: [], job: null, visible: false, painted: null };
+  const suggest = createSemantic({
+    api,
+    win,
+    perf,
+    trace: (event) => trace({ ...event, ev: "suggest" }),
+    graph: () => api.graph?.name ?? "",
+    perfName: "suggest.request",
+    keyOf: (token) => `${api.graph?.name ?? ""}\0suggest\0${token.query}`,
+    what: "suggested links",
+    canAsk: () => typeof api.data?.ai?.suggestLinks === "function",
+    eligible: (text) => Boolean(text),
+    fetch: async (token) => suggestTitles(await api.data.ai.suggestLinks({ text: token.query })),
+    onReply: (token, titles) => onSuggestReply(token.source, titles)
+  });
   const semantic = createSemantic({
     api,
     win,
@@ -6065,15 +6104,29 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   const relatedKey = (token) => `${token.start}\0${token.kind}\0${token.query}`;
   function relatedQuery(token) {
-    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows") || tagged(token)) {
+    if (st.drill || st.filters || st.aliasOnly != null || tagged(token)) {
       semantic.cancel();
+      suggest.cancel();
       dropRelated();
       return;
     }
     const key = relatedKey(token);
+    if (suggestWanted(token)) {
+      semantic.cancel();
+      if (related.key !== null && related.key !== key) dropRelated();
+      if (related.key !== key) suggest.schedule({ query: suggestText(st.ta.value, token), source: token });
+      return;
+    }
+    suggest.cancel();
+    if (!setting("semanticRows")) {
+      semantic.cancel();
+      dropRelated();
+      return;
+    }
     if (related.key !== null && related.key !== key) dropRelated();
     if (related.key !== key) semantic.schedule(token);
   }
+  const suggestWanted = (token) => setting("suggestRows") && token.kind === "[[" && !token.query.trim() && !hashed(token);
   function dropRelated() {
     if (related.key === null && !related.job && !related.rows.length) return;
     cancelRelatedJob();
@@ -6098,6 +6151,17 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       trace({ ev: "related", step: "drop", query: token.query.trim(), why: "text-changed" });
       return;
     }
+    startBandJob(token, list);
+  }
+  function onSuggestReply(token, titles) {
+    if (!setting("suggestRows") || !relatedCurrent(token)) {
+      trace({ ev: "suggest", step: "drop", why: "text-changed" });
+      return;
+    }
+    const page = st.pageTitle?.toLowerCase();
+    startBandJob(token, titles.filter((title) => title.toLowerCase() !== page).map((title) => ({ kind: "page", title, suggested: true })));
+  }
+  function startBandJob(token, list) {
     const key = relatedKey(token);
     if (related.key === key && (related.rows.length || related.job)) return;
     cancelRelatedJob();
@@ -6122,9 +6186,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       const hit = job.queue.shift();
       if (skip.has(hit.uid)) continue;
       const row = relatedRow(hit);
-      if (row) {
+      if (row && !skip.has(row.uid)) {
         job.done.push(row);
-        skip.add(hit.uid);
+        skip.add(row.uid);
       }
     }
     perf.push("related.pull", performance.now() - t0);
@@ -6134,7 +6198,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function relatedRow(hit) {
     let pulled;
     try {
-      pulled = api.pull(RELATED_PULL, [":block/uid", hit.uid]);
+      pulled = api.pull(RELATED_PULL, hit.suggested ? [":node/title", hit.title] : [":block/uid", hit.uid]);
     } catch {
       return null;
     }
@@ -6143,7 +6207,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const string = pulled[":block/string"];
     if (hit.kind === "page") {
       if (typeof title !== "string" || !title) return null;
-      return { kind: "related", page: true, key: `related:${hit.uid}`, uid: hit.uid, insertion: `[[${title}]]`, text: title, parts: null, rich: null };
+      const uid = pulled[":block/uid"];
+      return { kind: "related", page: true, key: `related:${uid}`, uid, insertion: `[[${title}]]`, text: title, parts: null, rich: null, suggested: Boolean(hit.suggested) };
     }
     if (typeof string !== "string" || !string.trim() || title != null) return null;
     return { kind: "related", page: false, key: `related:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`, ...rowText(string), rich: richFor(hit.uid, string), source: string };
@@ -6181,8 +6246,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     trace({ ev: "related", step: "draw", n: related.rows.length });
   }
   function bandWanted() {
-    return related.rows.length > 0 && setting("semanticRows") && Boolean(st.pop?.isConnected) && !st.prompt && st.phase !== "SCOPE" && st.phase !== "IDLE" && Boolean(st.token) && !st.drill;
+    return related.rows.length > 0 && setting(bandSuggested() ? "suggestRows" : "semanticRows") && Boolean(st.pop?.isConnected) && !st.prompt && st.phase !== "SCOPE" && st.phase !== "IDLE" && Boolean(st.token) && !st.drill;
   }
+  const bandSuggested = () => Boolean(related.rows[0]?.suggested);
   const bandHeight = (n) => RELATED_LABEL + n * ROW_HEIGHT + RELATED_FRAME;
   function syncBand() {
     if (!bandWanted()) {
@@ -6193,6 +6259,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const count = related.rows.length;
     if (related.painted !== related.rows) {
       related.painted = related.rows;
+      bandLabel.textContent = bandSuggested() ? "Suggested" : "Related";
       band.replaceChildren(bandLabel, ...related.rows.map((row, i) => relatedRowNode(row, i)));
       band.style.height = `${bandHeight(count)}px`;
     }
@@ -6311,15 +6378,17 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function relatedTip(target) {
     const node = target.closest?.(".burrow-row");
     const row = node ? bandRows()[Number(node.dataset.index)] : null;
+    const suggested = bandSuggested();
     if (row) {
       return { el: node, title: row.text, lines: [
         ["↵", `or click: insert ${row.insertion}`],
-        [keyLabel("altR"), "move into the Related rows"],
-        ["", "from Roam's semantic search"]
+        [keyLabel("altR"), suggested ? "move into the suggested pages" : "move into the Related rows"],
+        ["", suggested ? "from Roam's link suggestions" : "from Roam's semantic search"]
       ] };
     }
     const label = target.closest?.(".burrow-related-label");
-    return label ? { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] } : null;
+    if (!label) return null;
+    return suggested ? { el: label, title: "Suggested", lines: [["", "Roam's link suggestions, for the block you are editing"]] } : { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] };
   }
   const wideDebug = {
     get enabled() {
@@ -6364,7 +6433,27 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     get rows() {
       return related.rows.map((row) => ({ uid: row.uid, kind: row.page ? "page" : "block", insertion: row.insertion }));
     },
-    clear: () => semantic.clear(),
+    clear: () => {
+      semantic.clear();
+      suggest.clear();
+    },
+    suggest: {
+      get enabled() {
+        return Boolean(setting("suggestRows"));
+      },
+      get available() {
+        return suggest.available();
+      },
+      get inFlight() {
+        return suggest.inFlight;
+      },
+      get lastText() {
+        return suggest.lastQuery;
+      },
+      get rows() {
+        return bandSuggested() ? related.rows.map((row) => ({ uid: row.uid, insertion: row.insertion })) : [];
+      }
+    },
     footer: {
       get enabled() {
         return Boolean(setting("semanticRelated"));
@@ -6787,6 +6876,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     contextFor = null;
     cancelContext();
     semantic.reset();
+    suggest.reset();
     wide.reset();
     foot.reset();
     dropFooter();
@@ -8071,9 +8161,9 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.14.0";
+var VERSION = "0.15.0";
 var activeLifecycle = null;
-var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated"];
+var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated", "suggestRows"];
 function safeLocalStorage() {
   try {
     return globalThis.localStorage ?? null;

@@ -64,13 +64,13 @@ test("a second load disposes the previous runtime before registering again", asy
 
 test("every feature has its own switch in the settings panel", () => {
   const ids = createSettingsPanel().settings.filter((s) => s.action.type === "switch").map((s) => s.id);
-  assert.deepEqual(ids.sort(), ["aliasChips", "aliasCreate", "aliasDelete", "aliasExpand", "aliasInline", "aliasPages", "aliasPrefix", "aliasPreselect", "aliasUsage", "betterMatch", "drill", "drillCap", "drillEmpty", "drillOrdinals", "drillPreview", "filterAllBlocks", "frecency", "helpNudge", "helpSheet", "helpTips", "insertVariants", "keyHints", "openInSidebar", "pageBoost", "paneLayout", "perfHud", "previewImages", "previewTables", "queryFilters", "recentRows", "refContext", "refOutline", "refPreselect", "refProse", "refRanking", "refSearch", "refSearchHotkey", "richRows", "rowPreview", "semanticRelated", "semanticRows", "tabDrill", "tagRows"].sort());
+  assert.deepEqual(ids.sort(), ["aliasChips", "aliasCreate", "aliasDelete", "aliasExpand", "aliasInline", "aliasPages", "aliasPrefix", "aliasPreselect", "aliasUsage", "betterMatch", "drill", "drillCap", "drillEmpty", "drillOrdinals", "drillPreview", "filterAllBlocks", "frecency", "helpNudge", "helpSheet", "helpTips", "insertVariants", "keyHints", "openInSidebar", "pageBoost", "paneLayout", "perfHud", "previewImages", "previewTables", "queryFilters", "recentRows", "refContext", "refOutline", "refPreselect", "refProse", "refRanking", "refSearch", "refSearchHotkey", "richRows", "rowPreview", "semanticRelated", "semanticRows", "suggestRows", "tabDrill", "tagRows"].sort());
   assert.equal(DEFAULTS.refPreselect, true);
   assert.equal("pickMemory" in DEFAULTS, false);
 });
 
-test("0.14.0 defaults: writes and the hotkey are off, the help, block navigation, preview image, table, variant and related switches on, the tip not yet seen", () => {
-  assert.equal(VERSION, "0.14.0");
+test("0.15.0 defaults: writes and the hotkey are off, the help, block navigation, preview image, table, variant and related switches on, the tip not yet seen", () => {
+  assert.equal(VERSION, "0.15.0");
   assert.equal(DEFAULTS.refProse, true);
   assert.equal(DEFAULTS.richRows, true);
   assert.equal(DEFAULTS.recentRows, true);

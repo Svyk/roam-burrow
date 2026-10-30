@@ -184,6 +184,7 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `richRows` | switch | on | BRW-10: rows, drill panel and previews drawn like Roam (§17) |
 | `insertVariants` | switch | on | BRW-15: ⇧↵ embed, ⌥↵ labelled link on Burrow's rows (§23) |
 | `openInSidebar` | switch | on | BRW-15: ⌘⇧↵ or ⇧+click opens the row in the right sidebar (§23) |
+| `suggestRows` | switch | off | BRW-6: up to three Suggested pages for the block, with an empty `[[`, per graph; the block's text can reach Roam's AI provider (§29) |
 | `semanticRows` | switch | on | BRW-13: up to three Related rows from Roam's semantic search, per graph; the query goes to the embedding provider (§24) |
 | `tagRows` | switch | on | BRW-5: Burrow's page rows in Roam's `#` popup, inserting `#[[Page]]` (§28) |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
@@ -659,6 +660,24 @@ Measured live in notes with Burrow gone, on `Burrow/Fixtures`:
 - **`ns:`**: a space ends a bare tag, so `ns:` can never be followed by words. With `ns:` and no words, in `#` or `#[[`, the value is the start of a title: `#ns:Systems/` lists pages under Systems/, `#ns:Systems/la` narrows it. These are page rows, so a page with no alias counts, ordered by frecency, then references. `startingWith` sorts all titles once per index, on first use. `#[[ns:Systems/ lo` keeps the `[[` meaning.
 - **Left out**: `[[alias:`, drill, Tab drill, ⌥A, ⇧↵ and ⌥↵, Related rows and the Related footer. ⌘⇧↵ stays: it writes nothing.
 - A native pick counts for frecency as in `[[`; `#word` with the word as typed counts as no pick.
+
+## 29. Suggested links (BRW-6, 2026-10-30)
+
+Where this section differs from earlier ones, it wins. Research: BRW-1 report, item 5.
+
+**API, measured in notes 2026-10-30.** `await roamAlphaAPI.data.ai.suggestLinks({text})` → `{suggestions: [{title, matchedText, matchType: "exact"|"stem", linkedReferences, hasContent, lastReferenced}], queriedAt}`, or no suggestions; no `text` throws `Input error: 'text' is required and must be a string`. It matches the words of `text` against page titles: `Deep Work` from "deep work", `Note` from "Notes". Pages already written as `[[Deep Work]]` or `#Deep Work` in `text` are left out by Roam. It is not ranked by meaning: an unrelated sentence gets nothing.
+
+**Privacy.** The brief says the block's text goes to Roam's AI provider, so the switch's description says it can, encrypted graphs included. What was seen: replies in 0–3 ms, no new resource entry during eight calls, so these calls did not wait on a network. Roam does not document this and it can change, so the description stays on the careful side. Switch off: no call at all.
+
+**Switch.** `suggestRows` ("Suggested links"), off in every graph, kept per graph as Roam keeps every extension setting.
+
+**When.** The token is `[[` with nothing typed (`query.trim()` empty), not `#[[`, and at least three characters are left in the block without the token, cut at 2000: the matcher runs on the main thread (50 KB took 960 ms). Then after the 400 ms pause, one request through `createSemantic` (§24) with its own `fetch`: the same pause, one in flight, 50-entry cache per graph and text, and no more requests until the popup reopens after a throw, with one `console.debug("[burrow] suggested links failed …")`. A missing `suggestLinks` is the same as off.
+
+**Rows.** Titles in Roam's order, the same title in another case once (notes has `Notes` and `notes`), without the page being edited. Each is pulled by title in the idle slices of §24; a title that is no page is dropped, and so are Burrow's strip rows (Recent rows show on an empty `[[`). Three are kept. A row inserts `[[Title]]`; the whole token is replaced through `commit()` and every other byte stays. No write beyond it.
+
+**The band.** The band, its room, its flip, phase RELATED and every key rule are §24's: only the label (`Suggested`), the hint (`⌥R suggested`) and the tips differ. Related asks for two words or more and Suggested for none, so one band is never both. Nothing starts selected, so plain Enter, Tab and Esc stay Roam's until ⌥R or the pointer moves in.
+
+**Gates.** `tools/suggest-gate.mjs <window> <svy|notes>`, arms on / off / gone: the band and Enter equal to off and gone; ⌥R Enter and ⌥R ↓ Tab insert with the other bytes unchanged; text after the caret stays; Esc back then Esc closed; typing drops the band and asks nothing; `#[[` and an empty block ask nothing; switch off asks nothing; ⌥R free with no band.
 
 ## Also noticed
 

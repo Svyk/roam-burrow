@@ -1,4 +1,5 @@
 // Related rows: Roam's own semantic search, asked once after a typing pause.
+// Suggested links (empty [[) use the same request side with their own fetch.
 // This file is the request side only (eligibility, debounce, cache, one
 // request in flight); src/strip.js reads the replies and draws the band.
 // Nothing here touches the DOM, and a key costs one clearTimeout and one
@@ -42,9 +43,37 @@ export function candidates(hits, kind) {
   return out;
 }
 
+// Suggested links: at most this much of the block is asked about. Roam's
+// matcher runs on the main thread (50 KB took 960 ms in notes, 2026-10-30).
+export const SUGGEST_TEXT = 2000;
+export const SUGGEST_MIN = 3;
+
+// The block as the empty [[ leaves it: its text without the token, or null
+// when too little is left to ask about.
+export function suggestText(value, token) {
+  const text = (String(value ?? "").slice(0, token.start) + String(value ?? "").slice(token.end)).trim().slice(0, SUGGEST_TEXT);
+  return text.length >= SUGGEST_MIN ? text : null;
+}
+
+// Roam's reply { suggestions: [{ title, matchType, ... }] } -> titles in its
+// order, no title twice without case (notes has Notes and notes).
+export function suggestTitles(reply) {
+  const out = [];
+  const seen = new Set();
+  if (!Array.isArray(reply?.suggestions)) return out;
+  for (const hit of reply.suggestions) {
+    const title = hit?.title;
+    if (typeof title !== "string" || !title || seen.has(title.toLowerCase())) continue;
+    seen.add(title.toLowerCase());
+    out.push(title);
+  }
+  return out;
+}
+
 // `k` and `keyOf` let a second instance (the preview footer) ask for more hits
-// and keep its cache per subject; `perfName` keeps its samples apart.
-export function createSemantic({ api, win = globalThis, perf = null, trace = () => {}, graph = () => "", now = () => Date.now(), onReply = () => {}, k = K, keyOf = null, perfName = "related.request" }) {
+// and keep its cache per subject; `perfName` keeps its samples apart. `fetch`,
+// `canAsk` and `eligible` replace the search itself (Suggested links).
+export function createSemantic({ api, win = globalThis, perf = null, trace = () => {}, graph = () => "", now = () => Date.now(), onReply = () => {}, k = K, keyOf = null, perfName = "related.request", fetch = null, canAsk = null, eligible = eligibleQuery, what = "related rows: semantic search" }) {
   const cache = new Map();
   let timer = null;
   let retryTimer = null;
@@ -61,6 +90,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
 
   // Roam says no (or throws) when semantic search is off for the graph.
   function available() {
+    if (canAsk) return canAsk();
     try { return Boolean(api?.data?.semanticSearchEnabled?.()) && typeof api.data.async?.semanticSearch === "function"; } catch { return false; }
   }
 
@@ -85,7 +115,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
   function schedule(token) {
     if (timer != null) win.clearTimeout(timer);
     timer = null;
-    if (failed || !eligibleQuery(token.query)) return;
+    if (failed || !eligible(token.query)) return;
     timer = win.setTimeout(() => { timer = null; ask(token); }, DEBOUNCE_MS);
   }
 
@@ -121,8 +151,8 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
     let list = null;
     let error = null;
     try {
-      const hits = await api.data.async.semanticSearch({ "search-str": query, k, "search-blocks": true, "search-pages": token.kind === "[[" });
-      list = candidates(hits, token.kind);
+      if (fetch) list = await fetch(token);
+      else list = candidates(await api.data.async.semanticSearch({ "search-str": query, k, "search-blocks": true, "search-pages": token.kind === "[[" }), token.kind);
     } catch (caught) {
       error = caught;
     }
@@ -150,7 +180,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
       pending = null;
       if (!logged) {
         logged = true;
-        console.debug("[burrow] related rows: semantic search failed", String(error?.message || error));
+        console.debug(`[burrow] ${what} failed`, String(error?.message || error));
       }
       return;
     }
@@ -188,7 +218,7 @@ export function createSemantic({ api, win = globalThis, perf = null, trace = () 
   }
 
   return {
-    available, eligible: (token) => Boolean(token) && eligibleQuery(token.query),
+    available, eligible: (token) => Boolean(token) && eligible(token.query),
     schedule, cancel, reset, ask,
     clear() { cache.clear(); },
     get cacheSize() { return cache.size; },
