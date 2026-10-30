@@ -6,11 +6,11 @@ import { createRefSearch } from "./refsearch.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.14.0";
+export const VERSION = "0.15.0";
 
 let activeLifecycle = null;
 
-const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated"];
+const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated", "suggestRows"];
 
 function safeLocalStorage() {
   try { return globalThis.localStorage ?? null; } catch { return null; }

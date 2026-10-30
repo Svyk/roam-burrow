@@ -11,7 +11,7 @@ import { createPreview, DRILL_CLASS, previewModel } from "./preview.js";
 import { createPickInfo, filterCandidates, mergeCandidates } from "./recents.js";
 import { buildRefIndex, rankRefs } from "./refindex.js";
 import { createRichCache, renderParts, richParts, snippet } from "./rich.js";
-import { createSemantic, FOOTER_CHILDREN, FOOTER_DWELL_MS, FOOTER_K, FOOTER_POOL, FOOTER_ROWS, footerKeep, footerText } from "./semantic.js";
+import { createSemantic, suggestText, suggestTitles, FOOTER_CHILDREN, FOOTER_DWELL_MS, FOOTER_K, FOOTER_POOL, FOOTER_ROWS, footerKeep, footerText } from "./semantic.js";
 import { CAP, capRows, firstReal, scopeRows } from "./scope.js";
 import { createScopePanel } from "./scopeview.js";
 import { looksLikeCode, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
@@ -191,7 +191,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const tagged = (token) => hashed(token) && setting("tagRows");
 
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
-    || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated");
+    || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated") || setting("suggestRows");
 
   // Has this page or block children? The page tree knows when it has read
   // the node; otherwise one bounded pull, kept until the popup closes.
@@ -1311,6 +1311,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       rowsAbove: !row && shown.length > 0 && !strip.hidden && nativeActiveIsFirst(),
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
+      suggested: related.visible && bandSuggested(),
       footer: footerRows().length ? (st.foot >= 0 ? "active" : "available") : null,
       on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn(), tag },
       held: Boolean(st.held),
@@ -1515,6 +1516,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   lifecycle.add(() => band.remove());
   const bandLabel = Object.assign(doc.createElement("div"), { className: "burrow-related-label", textContent: "Related" });
   const related = { key: null, rows: [], job: null, visible: false, painted: null };
+  // Suggested links share the band, its keys and its pulls: they ask only with
+  // an empty [[, where Related (two words or more) never does. The token here
+  // is { query: the block's text, source: the [[ token }.
+  const suggest = createSemantic({
+    api, win, perf, trace: (event) => trace({ ...event, ev: "suggest" }), graph: () => api.graph?.name ?? "", perfName: "suggest.request",
+    keyOf: (token) => `${api.graph?.name ?? ""}\u0000suggest\u0000${token.query}`, what: "suggested links",
+    canAsk: () => setting("suggestRows") && typeof api.data?.ai?.suggestLinks === "function", eligible: (text) => Boolean(text),
+    fetch: async (token) => suggestTitles(await api.data.ai.suggestLinks({ text: token.query })),
+    onReply: (token, titles) => onSuggestReply(token.source, titles),
+  });
   const semantic = createSemantic({
     api, win, perf, trace, graph: () => api.graph?.name ?? "", onReply: (token, list) => onRelatedReply(token, list),
   });
@@ -1525,15 +1536,30 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function relatedQuery(token) {
     // A drill, query filters (in:, is:, -word, "phrase") and the alias: prefix
     // ask for literal matches: the band would ignore them, so it stays out.
-    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows") || tagged(token)) {
+    if (st.drill || st.filters || st.aliasOnly != null || tagged(token)) {
       semantic.cancel();
+      suggest.cancel();
       dropRelated();
       return;
     }
     const key = relatedKey(token);
+    if (suggestWanted(token)) {
+      semantic.cancel();
+      if (related.key !== null && related.key !== key) dropRelated();
+      if (related.key !== key) suggest.schedule({ query: suggestText(st.ta.value, token), source: token });
+      return;
+    }
+    suggest.cancel();
+    if (!setting("semanticRows")) {
+      semantic.cancel();
+      dropRelated();
+      return;
+    }
     if (related.key !== null && related.key !== key) dropRelated();
     if (related.key !== key) semantic.schedule(token);
   }
+
+  const suggestWanted = (token) => setting("suggestRows") && token.kind === "[[" && !token.query.trim() && !hashed(token);
 
   function dropRelated() {
     if (related.key === null && !related.job && !related.rows.length) return;
@@ -1561,6 +1587,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   function onRelatedReply(token, list) {
     if (!setting("semanticRows") || !relatedCurrent(token)) { trace({ ev: "related", step: "drop", query: token.query.trim(), why: "text-changed" }); return; }
+    startBandJob(token, list);
+  }
+
+  // The page being edited is no suggestion. A reply is cached per text, so
+  // this is decided here and not in the fetch.
+  function onSuggestReply(token, titles) {
+    if (!setting("suggestRows") || !relatedCurrent(token)) { trace({ ev: "suggest", step: "drop", why: "text-changed" }); return; }
+    const page = st.pageTitle?.toLowerCase();
+    startBandJob(token, titles.filter((title) => title.toLowerCase() !== page).map((title) => ({ kind: "page", title, suggested: true })));
+  }
+
+  function startBandJob(token, list) {
     const key = relatedKey(token);
     if (related.key === key && (related.rows.length || related.job)) return;
     cancelRelatedJob();
@@ -1588,7 +1626,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       const hit = job.queue.shift();
       if (skip.has(hit.uid)) continue;
       const row = relatedRow(hit);
-      if (row) { job.done.push(row); skip.add(hit.uid); }
+      if (row && !skip.has(row.uid)) { job.done.push(row); skip.add(row.uid); }
     }
     perf.push("related.pull", performance.now() - t0);
     const more = job.queue.length && job.done.length < RELATED_POOL;
@@ -1599,13 +1637,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // strip's own block rows are. A hit that is gone, or empty, is no row.
   function relatedRow(hit) {
     let pulled;
-    try { pulled = api.pull(RELATED_PULL, [":block/uid", hit.uid]); } catch { return null; }
+    try { pulled = api.pull(RELATED_PULL, hit.suggested ? [":node/title", hit.title] : [":block/uid", hit.uid]); } catch { return null; }
     if (!pulled) return null;
     const title = pulled[":node/title"];
     const string = pulled[":block/string"];
     if (hit.kind === "page") {
       if (typeof title !== "string" || !title) return null;
-      return { kind: "related", page: true, key: `related:${hit.uid}`, uid: hit.uid, insertion: `[[${title}]]`, text: title, parts: null, rich: null };
+      const uid = pulled[":block/uid"];
+      return { kind: "related", page: true, key: `related:${uid}`, uid, insertion: `[[${title}]]`, text: title, parts: null, rich: null, suggested: Boolean(hit.suggested) };
     }
     if (typeof string !== "string" || !string.trim() || title != null) return null;
     return { kind: "related", page: false, key: `related:${hit.uid}`, uid: hit.uid, insertion: `((${hit.uid}))`, ...rowText(string), rich: richFor(hit.uid, string), source: string };
@@ -1646,9 +1685,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   }
 
   function bandWanted() {
-    return related.rows.length > 0 && setting("semanticRows") && Boolean(st.pop?.isConnected) && !st.prompt
+    return related.rows.length > 0 && setting(bandSuggested() ? "suggestRows" : "semanticRows") && Boolean(st.pop?.isConnected) && !st.prompt
       && st.phase !== "SCOPE" && st.phase !== "IDLE" && Boolean(st.token) && !st.drill;
   }
+
+  const bandSuggested = () => Boolean(related.rows[0]?.suggested);
 
   const bandHeight = (n) => RELATED_LABEL + n * ROW_HEIGHT + RELATED_FRAME;
 
@@ -1660,6 +1701,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const count = related.rows.length;
     if (related.painted !== related.rows) {
       related.painted = related.rows;
+      bandLabel.textContent = bandSuggested() ? "Suggested" : "Related";
       band.replaceChildren(bandLabel, ...related.rows.map((row, i) => relatedRowNode(row, i)));
       band.style.height = `${bandHeight(count)}px`;
     }
@@ -1788,15 +1830,18 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function relatedTip(target) {
     const node = target.closest?.(".burrow-row");
     const row = node ? bandRows()[Number(node.dataset.index)] : null;
+    const suggested = bandSuggested();
     if (row) {
       return { el: node, title: row.text, lines: [
         ["↵", `or click: insert ${row.insertion}`],
-        [keyLabel("altR"), "move into the Related rows"],
-        ["", "from Roam's semantic search"],
+        [keyLabel("altR"), suggested ? "move into the suggested pages" : "move into the Related rows"],
+        ["", suggested ? "from Roam's link suggestions" : "from Roam's semantic search"],
       ] };
     }
     const label = target.closest?.(".burrow-related-label");
-    return label ? { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] } : null;
+    if (!label) return null;
+    return suggested ? { el: label, title: "Suggested", lines: [["", "Roam's link suggestions, for the block you are editing"]] }
+      : { el: label, title: "Related", lines: [["", "Roam's semantic search, for what you typed after a pause"]] };
   }
 
   const wideDebug = {
@@ -1818,7 +1863,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     get cacheSize() { return semantic.cacheSize; },
     get lastMs() { return semantic.lastMs; },
     get rows() { return related.rows.map((row) => ({ uid: row.uid, kind: row.page ? "page" : "block", insertion: row.insertion })); },
-    clear: () => semantic.clear(),
+    clear: () => { semantic.clear(); suggest.clear(); },
+    suggest: {
+      get enabled() { return Boolean(setting("suggestRows")); },
+      get available() { return suggest.available(); },
+      get inFlight() { return suggest.inFlight; },
+      get lastText() { return suggest.lastQuery; },
+      get rows() { return bandSuggested() ? related.rows.map((row) => ({ uid: row.uid, insertion: row.insertion })) : []; },
+    },
     footer: {
       get enabled() { return Boolean(setting("semanticRelated")); },
       get available() { return foot.available(); },
@@ -2241,6 +2293,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     contextFor = null;
     cancelContext();
     semantic.reset();
+    suggest.reset();
     wide.reset();
     foot.reset();
     dropFooter();

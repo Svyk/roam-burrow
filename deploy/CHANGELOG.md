@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-30
+
+### Added
+
+- **Suggested links** (`suggestRows`, off in every graph, kept per graph). With an empty `[[`, `roamAlphaAPI.data.ai.suggestLinks` is asked about the block being edited after a 400 ms pause, and up to three pages show under a quiet `Suggested` label, placed and keyed like the Related rows: ⌥R moves in, ↑/↓ move, Enter or Tab inserts `[[Page]]`, Esc goes back. Nothing starts selected, so Enter stays Roam's. Pages already linked in the block (Roam leaves those out), the page being edited and Burrow's own rows are not repeated. The switch's description says the block's text can reach Roam's AI provider, in encrypted graphs too.
+
 ## [0.14.0] - 2026-10-30
 
 ### Added

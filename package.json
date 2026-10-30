@@ -1,6 +1,6 @@
 {
   "name": "roam-burrow",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "description": "Roam Depot extension: alias search and referenced-first block search on top of Roam's native [[ and (( autocomplete",
   "type": "module",

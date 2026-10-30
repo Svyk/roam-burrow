@@ -40,6 +40,7 @@ export function hintsKey(items) {
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
 //   s.rowsAbove: Burrow rows are shown and ↑ from Roam's first row enters them (s.recentAbove: all of them recent rows);
 //   s.related: "available" (the Related band has rows) | "active" (one of them holds the selection) | null;
+//   s.suggested: those rows are Suggested links;
 //   s.footer: the same for the Related footer under the preview: "available" | "active" | null;
 //   s.on: { tabDrill, drill, aliasDelete, pageOnly (alias link format [[Page]]), refOutline,
 //     insertVariants, openInSidebar }; s.held: ⇧, ⌥ or ⌘ held on a Burrow row (the line
@@ -47,6 +48,7 @@ export function hintsKey(items) {
 // The drill key names what Tab lists: a page's blocks or a block's children.
 export function pickerHints(s, mac = IS_MAC) {
   if (s.related === "active") {
+    if (s.suggested) return [["↵", "insert", "Insert the highlighted suggested page (from Roam's link suggestions)"], ["↑↓", "move", "Move between the suggested pages"], ["esc", "back", "Back to Roam's rows"]];
     return [["↵", "insert", "Insert the highlighted Related row (from Roam's semantic search)"], ["↑↓", "move", "Move between the Related rows"], ["esc", "back", "Back to Roam's rows"]];
   }
   if (s.footer === "active") {
@@ -57,7 +59,8 @@ export function pickerHints(s, mac = IS_MAC) {
   // One ⌥R item whether the footer, the band or both are there (the footer comes first).
   if ((s.related === "available" || s.footer === "available") && !s.prompt && !s.chips && !s.held) {
     const tip = s.footer === "available" ? "Move into the blocks related to the highlighted one (Roam's semantic search)" : "Move into the Related rows from Roam's semantic search";
-    items.push([keyLabel("altR", mac), "related", tip]);
+    if (s.suggested && s.footer !== "available") items.push([keyLabel("altR", mac), "suggested", "Move into the pages Roam's link suggestions found for this block"]);
+    else items.push([keyLabel("altR", mac), "related", tip]);
   }
   return items;
 }
