@@ -40,7 +40,7 @@ Task roam-burrow/1 (BRW-1), research only. Written 2026-10-17. Committed in BRW-
 
 Roam's results stay as they are. Burrow adds a short ranked strip above them (§4).
 
-**Candidate pool = referenced blocks only.** In notes that is 3,767 blocks: `[?r :block/refs ?b] [?b :block/string]`. Without the `:block/string` clause the count is 7,269, because it also counts referenced pages, which `((` does not want. The query takes 61–200 ms. Burrow builds the set once at idle and refreshes it lazily when a popup opens if it is older than 60 s. Native search already covers unreferenced blocks. Restricting Burrow to the referenced set keeps every keystroke a JS loop over about 4k strings, with no datalog.
+**Candidate pool = referenced blocks only** (for a query without filters; a filtered query also reads unreferenced blocks, §26). In notes that is 3,767 blocks: `[?r :block/refs ?b] [?b :block/string]`. Without the `:block/string` clause the count is 7,269, because it also counts referenced pages, which `((` does not want. The query takes 61–200 ms. Burrow builds the set once at idle and refreshes it lazily when a popup opens if it is older than 60 s. Native search already covers unreferenced blocks. Restricting Burrow to the referenced set keeps every keystroke a JS loop over about 4k strings, with no datalog.
 
 **Order inside the strip:**
 1. Match tier from the Thymer scorer: strict before close (typo).
@@ -606,6 +606,26 @@ Where this section differs from earlier ones, it wins. Research: BRW-12 report t
 - svy: `((ant man` → subject `3XSu0IJ8f`, footer rows off its page;
 - both: pane, popover and strip rects equal before and after the footer (row preview docked, drill panel beside; the gate holds semanticSearch replies back 2.5 s there so it sees the pane first), every selectable footer row inside the footer's and the pane's boxes, ⌥R and ↓×6 then Enter inserts the last drawn row; switch off removes it and asks nothing; ⌥R / ↓ / Esc / Enter; ⇧↵ and ⌥↵; click; hidden-row Enter (within 50 ms of typing and with the footer shown, both insert Burrow's row); byte-for-byte after Esc in all four arms and Enter in on / off / nosem; no console output.
 Runs on this build: notes 10/10, svy 9/9; related-gate (§24) 9/9 in both graphs.
+
+## 26. Filters search every block (BRW-2, 2026-10-29)
+
+Where this section differs from earlier ones, it wins. Research: BRW-1 report (artifact 7zkt), ranked item 1.
+
+**Why §3 changes for filtered queries.** §3 kept `((` rows on referenced blocks because "native search already covers unreferenced blocks". That holds for plain words, not once a filter is typed: Roam's list searches the literal text `is:todo`, so a filtered query missed most blocks in both lists. svy has 5,330 referenced blocks of 106,923, and `((watch is:todo` saw 97 of its 978 TODOs. So for a filtered `((` query only, Burrow reads past the referenced pool. Without a filter nothing changes: no read, same rows.
+
+**Switch.** `filterAllBlocks` ("Filters search every block"), on. Needs `queryFilters` and `refRanking`. Off: filtered rows are referenced blocks only, as in 0.12.0.
+
+**When.** The query holds `is:todo`/`is:done`, `in:here`, `in:Title` or `ns:` (`"phrase"` and `-word` alone do not count: they only narrow words Roam already searches), and has search words (`MIN_REF_QUERY`, as today). `[[` is unchanged.
+
+**Read** (`src/allblocks.js`, never on a key):
+- Every page filter is `in:here` / `in:Title` (no `ns:`): the blocks of those pages, one pull each, `[:node/title {:block/_page [:block/uid :block/string]}]`. Titles resolve as `pageScope` does.
+- Otherwise (`ns:`, or `is:` alone): `roamAlphaAPI.data.async.search` for the search words (the phrases' words too), blocks only, `limit` 1000 (Roam's cap). With one task state, ` TODO` or ` DONE` joins the words: Roam's search matches the macro text, so the 1,000 cap is spent on tasks (`watch` alone: 979 hits, 88 of the 89 TODOs with `watch`; `watch TODO`: 531 hits, the same 88). Hits that fail `is:` go before the page pull (`pull_many` of `{:block/page [:node/title]}`).
+- Left out: referenced blocks (§3 ranks those) and the block being edited.
+- After a 250 ms pause; one read in flight, a newer one waits; kept per graph and source (the words, or the page titles) for 60 s, 20 at most; so more filters on the same words, or Backspace, read nothing. A failed read: one `console.debug`, no rows, no reads until the popup closes.
+
+**Rows.** The read becomes a small index (`buildRefIndex`, refs 0) ranked by `rankRefs` with the same plan and the same `refFilter`. The two lists merge by match band (`rankOf`: a contiguous or prefix match, level 2+, before scattered words and recall); in a band referenced rows come first and each list keeps its order; 3 rows at most (`mergeRows`). So an unreferenced `{{[[TODO]]}} watch …` takes the slot of a referenced block that only has the words scattered, never of one that matches as well. The read runs whenever the filter is there, also when referenced rows fill the strip (they usually do: `((watch is:todo` has more than 3 referenced TODOs). These rows are never pre-selected (`wanted` is false for such a row), so a reply never takes Enter: the user moves to one with ↑/↓ or the pointer. A reply redraws only when the popup still shows the token it was asked for, and it keeps the phase and the highlight: it does not run `evaluate` (which puts an owned highlight back on row 0), and with a Burrow row highlighted the rows up to it stay as they are; only the rows below it can change. A pre-selected row is a band-2 referenced original, which no unreferenced row outranks. Inserts stay `((uid))`; nothing is written.
+
+**Cost.** A key costs a timer reset and a cache lookup. Measured in svy (2026-10-29): `async.search` 20–55 ms for `watch` (longest main-thread gap 13–34 ms); notes 145–160 ms (gaps up to 257 ms). One read per new word set, after the pause. `window.__BURROW.wide` is the debug object.
 
 ## Also noticed
 

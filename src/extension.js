@@ -6,7 +6,7 @@ import { createRefSearch } from "./refsearch.js";
 import { createSettingsPanel, createSettingsReader, initializeSettings } from "./settings.js";
 import { createStrip } from "./strip.js";
 
-export const VERSION = "0.12.0";
+export const VERSION = "0.13.0";
 
 let activeLifecycle = null;
 
@@ -124,7 +124,7 @@ export async function onload({ extensionAPI, extension }) {
       installPerfHud({ lifecycle, perf, setting });
       indexes.schedule();
       globalThis.window.__BURROW_PERF = perf;
-      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch, related: strip.related };
+      globalThis.window.__BURROW = { version: VERSION, state: strip.state, debug: strip.debug, indexes, tree: strip.tree, frecency, forgetPicks, refSearch, related: strip.related, wide: strip.wide };
       lifecycle.add(() => {
         delete globalThis.window.__BURROW_PERF;
         delete globalThis.window.__BURROW;
