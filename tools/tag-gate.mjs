@@ -168,14 +168,16 @@ async function popup(text, keys, { ready, shot } = {}) {
   await sleep(300);
   s = await look();
   const steps = [];
-  for (const k of keys) {
+  const snap = async () => {
+    if (!shot || !shotsDir) return;
+    const rect = await c.evaluate(() => { const r = document.querySelector(".rm-autocomplete__results")?.getBoundingClientRect(); return r ? { x: Math.max(0, r.left - 60), y: Math.max(0, r.top - 50), width: r.width + 120, height: r.height + 90 } : null; });
+    if (rect) { await mkdir(shotsDir, { recursive: true }); await writeFile(join(shotsDir, `${graph}-${theme ?? "default"}-${shot}.png`), await c.screenshot(rect)); }
+  };
+  for (const [i, k] of keys.entries()) {
+    if (i === keys.length - 1) await snap();
     if (Array.isArray(k)) await c.key(k[0], k[1]); else await c.key(k);
     await sleep(140);
     steps.push(await look());
-  }
-  if (shot && shotsDir) {
-    const rect = await c.evaluate(() => { const r = document.querySelector(".rm-autocomplete__results")?.getBoundingClientRect(); return r ? { x: Math.max(0, r.left - 60), y: Math.max(0, r.top - 50), width: r.width + 120, height: r.height + 90 } : null; });
-    if (rect) { await mkdir(shotsDir, { recursive: true }); await writeFile(join(shotsDir, `${graph}-${theme ?? "default"}-${shot}.png`), await c.screenshot(rect)); }
   }
   const value = await c.evaluate(() => document.activeElement?.value ?? null);
   await sleep(150);
