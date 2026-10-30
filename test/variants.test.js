@@ -86,7 +86,7 @@ test("holding a modifier turns the hint line into the variants; the key list nam
 });
 
 const POPOVER = '<div class="rm-autocomplete__results"><div class="rm-autocomplete__results-main"><div class="rm-autocomplete__results-scroll">'
-  + '<div title="ant man" style="background-color: rgb(225, 232, 237)"><div class="rm-autocomplete-result">ant man</div></div></div>'
+  + '<div title="ant man" style="background-color: rgb(225, 232, 237)"><div class="rm-autocomplete-result">ant man</div><div class="bp3-text-overflow-ellipsis">Create as block below</div></div></div>'
   + '<div class="rm-autocomplete-footer">Block search</div></div></div>';
 const VALUE = "seed ((ant man)) tail";
 const CARET = 14;

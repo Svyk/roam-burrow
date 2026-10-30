@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-30
+
+### Changed
+
+- **`((` pre-select and exact hits** (part of `refPreselect`, no new switch). Roam's plain Enter in `((` always picks "Create as block below", even for a pasted uid or a block with exactly the typed text (measured in notes and svy), so stepping aside would create a junk or duplicate block. A full 9-character block uid now makes that block Burrow's first row, pre-selected, so Enter inserts `((uid))`; a page uid, the block being edited and a uid that does not exist add no row. With exact text, Burrow's top row stays pre-selected if it is that block; if another block in Burrow's rows or Roam's list has exactly the text, nothing is pre-selected and Enter is Roam's. Nothing new is written. With `refPreselect` off, neither applies. Spec §27.
+
 ## [0.13.0] - 2026-10-29
 
 ### Added
