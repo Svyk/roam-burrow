@@ -24,7 +24,9 @@ import { cleanupFixture, FIXTURE_PAGE, guardReport, onAbort, placeNormal, primeF
 
 const CONFIGS = {
   notes: { real: "((pcr is:todo" },
-  svy: { real: "((watch is:todo" },
+  // `((watch is:todo` alone ranks 3 referenced TODOs first (refs break ties);
+  // `watch logan` reaches the unreferenced `{{[[TODO]]}} Watch [[Logan]]`.
+  svy: { real: "((watch logan is:todo", expect: "OWz0k3v1r" },
 };
 const SEED = "seed αβ 🙂 ";
 const TYPE_MS = 35;
@@ -570,6 +572,7 @@ function realVerdict({ on }) {
   const detail = `${on.facts.length} row(s), ${unref.length} unreferenced, ${on.calls} search call(s)${on.settled ? "" : ", reply not settled"}`;
   if (bad.length) failures.push(`not open TODOs: ${JSON.stringify(bad)}`);
   if (graph === "svy" && !unref.length) failures.push(`no unreferenced row: ${detail}`);
+  if (config.expect && !on.facts.some((f) => f.uid === config.expect)) failures.push(`${config.expect} is not a row: ${detail}`);
   return { failures, detail };
 }
 
