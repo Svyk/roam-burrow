@@ -1,4 +1,4 @@
-import { searchKey } from "./search.js";
+import { matchFromKey, searchKey, searchPlan } from "./search.js";
 
 // Page titles for drill (spec §5): exact resolution of the text before a `#`
 // or `>`, and the "some title starts with what is typed" check that keeps
@@ -31,10 +31,15 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
   }
   let aliasLower = new Map();
   let aliasCompact = new Map();
+  let aliasEntries = [];
+  let nearKeys = null;
+  let nearMemo = null;
   // Aliases can be swapped in alone when an alias block changes.
   const setAliases = (next) => {
     aliasLower = new Map();
     aliasCompact = new Map();
+    aliasEntries = next?.entries || [];
+    nearMemo = null;
     for (const entry of next?.entries || []) {
       const page = { title: entry.title, uid: entry.uid };
       add(aliasLower, entry.alias.toLowerCase(), page);
@@ -75,6 +80,32 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
       const pages = [];
       for (let i = lo; i < allSorted.length && allSorted[i].startsWith(lower); i += 1) pages.push(...byLower.get(allSorted[i]));
       return pages;
+    },
+    // The pages a near title could mean (spec §30): the best level of strict
+    // matches on titles and aliases, words typed in order first. Typos and
+    // abbreviations never count: this picks a page without being asked.
+    near(text) {
+      const typed = String(text ?? "").trim();
+      if (nearMemo?.typed === typed) return nearMemo.pages;
+      const plan = searchPlan(typed);
+      const bands = [new Map(), new Map(), new Map(), new Map()];
+      if (plan) {
+        nearKeys ||= [...byRaw.values()].map((page) => ({ page, key: searchKey(page.title) }));
+        const count = (page, key) => {
+          const { score, level } = matchFromKey(key, plan, { strict: true });
+          if (score >= 0 && level >= 1) bands[level].set(page.uid, page);
+        };
+        for (const { page, key } of nearKeys) count(page, key);
+        for (const entry of aliasEntries) if (entry.key) count({ title: entry.title, uid: entry.uid }, entry.key);
+      }
+      const best = bands.findLast((band) => band.size);
+      nearMemo = { typed, pages: best ? [...best.values()] : [] };
+      return nearMemo.pages;
+    },
+    // A title or alias that holds the whole typed text with its # or > in it
+    // (`Programming C#` for `C#`): what is typed is that name, not a drill.
+    namesText(lower) {
+      return sorted.some((title) => title.includes(lower)) || aliasEntries.some((entry) => entry.alias.toLowerCase().includes(lower));
     },
     hasPrefix(lower) {
       let lo = 0;

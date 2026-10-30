@@ -1,4 +1,4 @@
-/* Burrow v0.15.0 | MIT | generated; edit src/ */
+/* Burrow v0.16.0 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -1031,9 +1031,14 @@ function buildTitleIndex(rows, aliases, withContent = null) {
   }
   let aliasLower = /* @__PURE__ */ new Map();
   let aliasCompact = /* @__PURE__ */ new Map();
+  let aliasEntries = [];
+  let nearKeys = null;
+  let nearMemo = null;
   const setAliases = (next) => {
     aliasLower = /* @__PURE__ */ new Map();
     aliasCompact = /* @__PURE__ */ new Map();
+    aliasEntries = next?.entries || [];
+    nearMemo = null;
     for (const entry of next?.entries || []) {
       const page = { title: entry.title, uid: entry.uid };
       add(aliasLower, entry.alias.toLowerCase(), page);
@@ -1073,6 +1078,32 @@ function buildTitleIndex(rows, aliases, withContent = null) {
       const pages = [];
       for (let i = lo; i < allSorted.length && allSorted[i].startsWith(lower); i += 1) pages.push(...byLower.get(allSorted[i]));
       return pages;
+    },
+    // The pages a near title could mean (spec §30): the best level of strict
+    // matches on titles and aliases, words typed in order first. Typos and
+    // abbreviations never count: this picks a page without being asked.
+    near(text) {
+      const typed = String(text ?? "").trim();
+      if (nearMemo?.typed === typed) return nearMemo.pages;
+      const plan = searchPlan(typed);
+      const bands = [/* @__PURE__ */ new Map(), /* @__PURE__ */ new Map(), /* @__PURE__ */ new Map(), /* @__PURE__ */ new Map()];
+      if (plan) {
+        nearKeys || (nearKeys = [...byRaw.values()].map((page) => ({ page, key: searchKey(page.title) })));
+        const count = (page, key) => {
+          const { score, level } = matchFromKey(key, plan, { strict: true });
+          if (score >= 0 && level >= 1) bands[level].set(page.uid, page);
+        };
+        for (const { page, key } of nearKeys) count(page, key);
+        for (const entry of aliasEntries) if (entry.key) count({ title: entry.title, uid: entry.uid }, entry.key);
+      }
+      const best = bands.findLast((band) => band.size);
+      nearMemo = { typed, pages: best ? [...best.values()] : [] };
+      return nearMemo.pages;
+    },
+    // A title or alias that holds the whole typed text with its # or > in it
+    // (`Programming C#` for `C#`): what is typed is that name, not a drill.
+    namesText(lower) {
+      return sorted.some((title) => title.includes(lower)) || aliasEntries.some((entry) => entry.alias.toLowerCase().includes(lower));
     },
     hasPrefix(lower) {
       let lo = 0;
@@ -1548,6 +1579,7 @@ var DEFAULTS = Object.freeze({
   betterMatch: true,
   drill: true,
   drillPreview: true,
+  drillNearTitle: true,
   tabDrill: true,
   paneLayout: true,
   keyHints: true,
@@ -1597,6 +1629,7 @@ var SWITCHES = [
   ["richRows", "Rows drawn like Roam", "Burrow's (( rows, the drill panel and the previews draw a block as Roam does: a code block as its language and first line of code, inline code in a monospace face, [[links]], #tags and ((block refs)) as references, bold, italic, highlight and strike, embeds, queries, roam/render and SmartBlock buttons as small labels, images and files as labels. A long block shows the part around what you typed. Off: plain text, as in 0.6.1."],
   ["betterMatch", "Forgiving matching", "Abbreviations, initialisms and small typos for Burrow's rows. Off: separator-insensitive word matches only."],
   ["drill", "Drill-down in [[", "Type [[Page#heading > child to reach a block inside a page; Enter inserts its ((uid)). Only when the text before # or > is an exact page title or alias."],
+  ["drillNearTitle", "Drill from a near title", "[[Executor Lanes#grok drills when one page clearly wins the match on the text before # or >: it is the only match, or the only one of a few where the heading or child you typed exists. The row names the page. Titles that really hold # or > stay Roam's, and a drill never creates a page."],
   ["drillPreview", "Drill-down preview", "Shows the page outline around the block a drill-down resolves to, or around the highlighted block after Tab, highlighted. Drill-down still works without it."],
   ["tabDrill", "Tab drills in", "Tab on the highlighted page lists the blocks on that page, and on a referenced block with children lists the children of that block, in place under a breadcrumb. Type to filter, ↑/↓ to move, Enter inserts the block's ((uid)), Tab goes one level deeper, Shift+Tab or Backspace on an empty filter goes back, Esc returns to the results. With nothing to drill into, Tab does what Roam does."],
   ["paneLayout", "Keep panes apart", "Roam's preview, roam-aliases' column and the result list each get their own space in the picker; nothing is drawn over anything else."],
@@ -1867,116 +1900,6 @@ function createPromptComposer({ prompt, textarea, setValue, render }) {
   return { start, update, end, restore, key, input, insert, stray };
 }
 
-// src/ordinal.js
-var ROMAN = /^(?=[ivx])x{0,3}(ix|iv|v?i{0,3})$/;
-function ordinalQuery(query) {
-  let q = String(query ?? "").trim().toLowerCase();
-  if (q.startsWith("(")) q = q.slice(1);
-  if (q.endsWith(")") || q.endsWith(".")) q = q.slice(0, -1);
-  if (/^\d{1,3}$/.test(q) || /^[a-z]$/.test(q) || ROMAN.test(q)) return q;
-  return null;
-}
-function startsWithOrdinal(text, token) {
-  if (!token) return false;
-  const t = String(text ?? "").trimStart().toLowerCase();
-  const tok = String(token).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (new RegExp(`^\\(${tok}\\)(\\s|$)`).test(t)) return true;
-  if (new RegExp(`^${tok}[.):](\\s|$)`).test(t)) return true;
-  return /^\d+$/.test(token) && new RegExp(`^${tok}(\\s|$)`).test(t);
-}
-
-// src/drill.js
-function parseSteps(rest) {
-  if (!rest || rest[0] !== "#" && rest[0] !== ">") return null;
-  let heading = null;
-  let tail = rest;
-  if (rest[0] === "#") {
-    const gt = rest.indexOf(">");
-    heading = (gt < 0 ? rest.slice(1) : rest.slice(1, gt)).trim();
-    tail = gt < 0 ? "" : rest.slice(gt);
-  }
-  const steps = tail ? tail.slice(1).split(">").map((q) => q.trim()) : [];
-  return { heading, steps };
-}
-function parseDrill(query, titles) {
-  const text = String(query ?? "");
-  if (!/[#>]/.test(text) || !titles) return null;
-  const lower = text.trim().toLowerCase();
-  if (titles.hasPrefix(lower)) return null;
-  for (let at = text.length - 1; at > 0; at--) {
-    if (text[at] !== "#" && text[at] !== ">") continue;
-    const title = text.slice(0, at).trim();
-    if (!title) continue;
-    const page = titles.resolve(title);
-    if (!page) continue;
-    const parsed = parseSteps(text.slice(at));
-    if (!parsed) continue;
-    return { page, typedTitle: title, ...parsed };
-  }
-  return null;
-}
-function bestMatch(candidates2, query, { strict = false, first, ordinals = false, hideEmpty = false } = {}) {
-  const plain = (node) => stripRoamMarkup(node.string ?? "").trim();
-  let list = candidates2;
-  if (hideEmpty) {
-    list = candidates2.filter((node) => plain(node) || node.kids?.length);
-    if (!String(query ?? "").trim()) list = [list.find((node) => plain(node)) ?? list[0]].filter(Boolean);
-  }
-  if (!list.length) return null;
-  const token = ordinals ? ordinalQuery(query) : null;
-  if (token) {
-    const ords = list.filter((node) => startsWithOrdinal(plain(node), token));
-    if (ords.length) return ords.length > 1 && first ? first(ords) : ords[0];
-  }
-  const plan = query ? searchPlan(query) : null;
-  let ties = list;
-  if (plan) {
-    let bestScore = -1;
-    ties = [];
-    for (const node of list) {
-      const match = matchFromKey(nodeKey(node), plan, { strict });
-      if (match.score < 0) continue;
-      if (match.score > bestScore) {
-        bestScore = match.score;
-        ties = [node];
-      } else if (match.score === bestScore) ties.push(node);
-    }
-  }
-  if (!ties.length) return null;
-  return ties.length > 1 && first ? first(ties) : ties[0];
-}
-function nodeKey(node) {
-  if (!node.key) node.key = searchKey(stripRoamMarkup(node.string ?? node.title ?? ""));
-  return node.key;
-}
-function resolveDrill(parsed, source, { strict = false, ordinals = false, hideEmpty = false } = {}) {
-  const { page } = parsed;
-  let target = null;
-  let failedAt = null;
-  if (parsed.heading != null) {
-    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first, ordinals, hideEmpty });
-    if (hit) target = hit;
-    else failedAt = 0;
-  }
-  if (failedAt == null) {
-    for (let i = 0; i < parsed.steps.length; i++) {
-      const kids = source.children(target ? target.uid : page.uid) || [];
-      const hit = bestMatch(kids, parsed.steps[i], { strict, ordinals, hideEmpty });
-      if (!hit) {
-        failedAt = i + (parsed.heading != null ? 1 : 0);
-        break;
-      }
-      target = hit;
-    }
-  }
-  return {
-    page,
-    target,
-    failedAt,
-    insertion: target ? `((${target.uid}))` : `[[${page.title}]]`
-  };
-}
-
 // src/tasks.js
 var TASK_SOURCE = String.raw`\{\{\s*(?:\[\[)?(TODO|DONE)(?:\]\])?(?::[^{}]*)?\s*\}\}`;
 var TASK = new RegExp(TASK_SOURCE, "g");
@@ -2171,6 +2094,138 @@ function pageFilter(filters, { currentPage = null, resolve = null } = {}) {
       if (keys.some((key) => hasRun(key, word))) return false;
     }
     return true;
+  };
+}
+
+// src/ordinal.js
+var ROMAN = /^(?=[ivx])x{0,3}(ix|iv|v?i{0,3})$/;
+function ordinalQuery(query) {
+  let q = String(query ?? "").trim().toLowerCase();
+  if (q.startsWith("(")) q = q.slice(1);
+  if (q.endsWith(")") || q.endsWith(".")) q = q.slice(0, -1);
+  if (/^\d{1,3}$/.test(q) || /^[a-z]$/.test(q) || ROMAN.test(q)) return q;
+  return null;
+}
+function startsWithOrdinal(text, token) {
+  if (!token) return false;
+  const t = String(text ?? "").trimStart().toLowerCase();
+  const tok = String(token).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`^\\(${tok}\\)(\\s|$)`).test(t)) return true;
+  if (new RegExp(`^${tok}[.):](\\s|$)`).test(t)) return true;
+  return /^\d+$/.test(token) && new RegExp(`^${tok}(\\s|$)`).test(t);
+}
+
+// src/drill.js
+function parseSteps(rest) {
+  if (!rest || rest[0] !== "#" && rest[0] !== ">") return null;
+  let heading = null;
+  let tail = rest;
+  if (rest[0] === "#") {
+    const gt = rest.indexOf(">");
+    heading = (gt < 0 ? rest.slice(1) : rest.slice(1, gt)).trim();
+    tail = gt < 0 ? "" : rest.slice(gt);
+  }
+  const steps = tail ? tail.slice(1).split(">").map((q) => q.trim()) : [];
+  return { heading, steps };
+}
+function parseDrill(query, titles) {
+  const text = String(query ?? "");
+  if (!/[#>]/.test(text) || !titles) return null;
+  const lower = text.trim().toLowerCase();
+  if (titles.hasPrefix(lower)) return null;
+  for (let at = text.length - 1; at > 0; at--) {
+    if (text[at] !== "#" && text[at] !== ">") continue;
+    const title = text.slice(0, at).trim();
+    if (!title) continue;
+    const page = titles.resolve(title);
+    if (!page) continue;
+    const parsed = parseSteps(text.slice(at));
+    if (!parsed) continue;
+    return { page, typedTitle: title, ...parsed };
+  }
+  return null;
+}
+var NEAR_PAGES = 5;
+var NEAR_MIN = 3;
+function parseNearDrill(query, titles, { steps, held = null } = {}) {
+  const text = String(query ?? "");
+  if (!titles?.near) return null;
+  const at = text.search(/[#>]/);
+  if (at <= 0) return null;
+  const title = text.slice(0, at).trim();
+  const lower = text.trim().toLowerCase();
+  if (searchKey(title).compact.length < NEAR_MIN || /\s#\d/.test(text) || parseFilters(text)) return null;
+  if (titles.resolve(text) || titles.namesText(lower)) return null;
+  const parsed = parseSteps(text.slice(at));
+  if (!parsed) return null;
+  const found = (page) => ({ page, typedTitle: title, near: true, ...parsed });
+  if (held?.typedTitle === title) return found(held.page);
+  const pages = titles.near(title);
+  if (pages.length === 1) return found(pages[0]);
+  if (!pages.length || pages.length > NEAR_PAGES) return null;
+  if (!(parsed.heading ?? parsed.steps[0])) return null;
+  const reached = pages.filter((page) => steps?.({ page, ...parsed }));
+  return reached.length === 1 ? found(reached[0]) : null;
+}
+function bestMatch(candidates2, query, { strict = false, first, ordinals = false, hideEmpty = false } = {}) {
+  const plain = (node) => stripRoamMarkup(node.string ?? "").trim();
+  let list = candidates2;
+  if (hideEmpty) {
+    list = candidates2.filter((node) => plain(node) || node.kids?.length);
+    if (!String(query ?? "").trim()) list = [list.find((node) => plain(node)) ?? list[0]].filter(Boolean);
+  }
+  if (!list.length) return null;
+  const token = ordinals ? ordinalQuery(query) : null;
+  if (token) {
+    const ords = list.filter((node) => startsWithOrdinal(plain(node), token));
+    if (ords.length) return ords.length > 1 && first ? first(ords) : ords[0];
+  }
+  const plan = query ? searchPlan(query) : null;
+  let ties = list;
+  if (plan) {
+    let bestScore = -1;
+    ties = [];
+    for (const node of list) {
+      const match = matchFromKey(nodeKey(node), plan, { strict });
+      if (match.score < 0) continue;
+      if (match.score > bestScore) {
+        bestScore = match.score;
+        ties = [node];
+      } else if (match.score === bestScore) ties.push(node);
+    }
+  }
+  if (!ties.length) return null;
+  return ties.length > 1 && first ? first(ties) : ties[0];
+}
+function nodeKey(node) {
+  if (!node.key) node.key = searchKey(stripRoamMarkup(node.string ?? node.title ?? ""));
+  return node.key;
+}
+function resolveDrill(parsed, source, { strict = false, ordinals = false, hideEmpty = false } = {}) {
+  const { page } = parsed;
+  let target = null;
+  let failedAt = null;
+  if (parsed.heading != null) {
+    const hit = bestMatch(source.headings(page.uid), parsed.heading, { strict, first: source.first, ordinals, hideEmpty });
+    if (hit) target = hit;
+    else failedAt = 0;
+  }
+  if (failedAt == null) {
+    for (let i = 0; i < parsed.steps.length; i++) {
+      const kids = source.children(target ? target.uid : page.uid) || [];
+      const hit = bestMatch(kids, parsed.steps[i], { strict, ordinals, hideEmpty });
+      if (!hit) {
+        failedAt = i + (parsed.heading != null ? 1 : 0);
+        break;
+      }
+      target = hit;
+    }
+  }
+  return {
+    page,
+    target,
+    failedAt,
+    insertion: target ? `((${target.uid}))` : `[[${page.title}]]`
   };
 }
 
@@ -4760,6 +4815,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     rows: [],
     active: -1,
     drill: null,
+    nearHeld: null,
     pageTitle: null,
     filters: null,
     wide: null,
@@ -4894,11 +4950,19 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     const recall = setting("betterMatch");
     if (token.kind === "[[" && setting("drill") && !hashed(token)) {
-      const parsed = parseDrill(token.query, indexes.titles);
+      const walk = { ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") };
+      const parsed = parseDrill(token.query, indexes.titles) || (setting("drillNearTitle") ? parseNearDrill(token.query, indexes.titles, {
+        held: st.nearHeld,
+        steps: (expr) => {
+          const hit = resolveDrill(expr, tree, { ...walk, strict: true });
+          return hit.target && hit.failedAt == null;
+        }
+      }) : null);
+      st.nearHeld = parsed?.near ? parsed : null;
       if (parsed) {
-        const result = resolveDrill(parsed, tree, { strict: !recall, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") });
-        st.drill = { ...result, key: `${result.page.uid}:${result.target?.uid ?? ""}` };
-        return [drillRow(result)];
+        const result = resolveDrill(parsed, tree, { ...walk, strict: !recall });
+        st.drill = { ...result, near: Boolean(parsed.near), key: `${result.page.uid}:${result.target?.uid ?? ""}` };
+        return [drillRow(result, parsed.near)];
       }
     }
     const rows = mainRows(token, recall);
@@ -5058,12 +5122,15 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (!string) return null;
     return { uid: query, string, refs: indexes.refs?.byUid.get(query)?.refs ?? 0, level: 3, page: block[":block/page"]?.[":node/title"] ?? null };
   }
-  function drillRow(result) {
+  function drillRow(result, near = false) {
     const { page, target } = result;
     let crumb = page.title;
     if (target) {
       const parents = tree.trail(target.uid);
-      if (parents.length > 1) crumb = readableText(parents[parents.length - 1].string);
+      if (parents.length > 1) {
+        const parent = readableText(parents[parents.length - 1].string);
+        crumb = near && !setting("refContext") ? `${page.title} › ${parent}` : parent;
+      }
     }
     return {
       kind: "drill",
@@ -6892,6 +6959,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.wide = null;
     st.released = null;
     st.drill = null;
+    st.nearHeld = null;
     st.auto = false;
     st.chip = -1;
     st.scope = null;
@@ -8161,7 +8229,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.15.0";
+var VERSION = "0.16.0";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated", "suggestRows"];
 function safeLocalStorage() {

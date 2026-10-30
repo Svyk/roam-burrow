@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { buildAliasIndex } from "../src/aliases.js";
-import { bestMatch, parseDrill, parseSteps, resolveDrill } from "../src/drill.js";
+import { bestMatch, parseDrill, parseNearDrill, parseSteps, resolveDrill } from "../src/drill.js";
 import { createTreeSource } from "../src/pagetree.js";
 import { previewModel } from "../src/preview.js";
 import { buildTitleIndex } from "../src/titles.js";
@@ -227,4 +227,63 @@ test("bestMatch: hideEmpty skips empty leaves and blank queries prefer real text
   const tree = { P: [{ uid: "e", string: "" }, { uid: "t", string: "real" }] };
   const source = { headings: () => [], children: (uid) => tree[uid] || [] };
   assert.equal(resolveDrill(parsed, source, { hideEmpty: true }).target.uid, "t");
+});
+
+const NEAR = buildTitleIndex([
+  ["Concepts/Executor Lanes", "cEL"],
+  ["Systems/Executor Lanes and LaunchAgents", "sEL"],
+  ["Burrow Design Notes", "bdn"],
+  ["Programming C#", "pcs"],
+  ["Bug Tracker", "bug"],
+  ["Watch One", "w1"], ["Watch Two", "w2"], ["Watch Three", "w3"], ["Watch Four", "w4"], ["Watch Five", "w5"], ["Watch Six", "w6"],
+  ["alpha beta gamma", "abg"],
+], buildAliasIndex([["Aliases:: lanes handbook", "Burrow Design Notes", "bdn"], ["Aliases:: F# guide", "Bug Tracker", "bug"]], "Aliases"));
+
+test("parseNearDrill: one match wins alone, the row's page is the resolved one", () => {
+  const d = parseNearDrill("Design Notes#scope > x", NEAR);
+  assert.equal(d.page.title, "Burrow Design Notes");
+  assert.equal(d.near, true);
+  assert.equal(d.heading, "scope");
+  assert.deepEqual(d.steps, ["x"]);
+  assert.equal(parseNearDrill("Design Notes>", NEAR).page.uid, "bdn", "> needs no heading");
+  assert.equal(parseNearDrill("handbook#x", NEAR).page.uid, "bdn", "an alias counts");
+  assert.equal(parseNearDrill("beta alpha#x", NEAR).page.uid, "abg", "words out of order, when nothing better matches");
+});
+
+test("parseNearDrill: of several, only the page the steps resolve on wins", () => {
+  const onSystems = ({ page }) => page.uid === "sEL";
+  assert.equal(parseNearDrill("Executor Lanes#grok", NEAR, { steps: onSystems }).page.uid, "sEL");
+  assert.equal(parseNearDrill("Executor Lanes > grok", NEAR, { steps: onSystems }).page.uid, "sEL");
+  assert.equal(parseNearDrill("Executor Lanes#", NEAR, { steps: onSystems }), null, "no step yet, no winner");
+  assert.equal(parseNearDrill("Executor Lanes#g", NEAR, { steps: () => true }), null, "both resolve");
+  assert.equal(parseNearDrill("Executor Lanes#zz", NEAR, { steps: () => false }), null, "neither resolves");
+  assert.equal(parseNearDrill("Watch#x", NEAR, { steps: ({ page }) => page.uid === "w1" }), null, "too many pages to call");
+});
+
+test("parseNearDrill: a held page stays while the steps change, for that title only", () => {
+  const held = { typedTitle: "Executor Lanes", page: { title: "Systems/Executor Lanes and LaunchAgents", uid: "sEL" } };
+  assert.equal(parseNearDrill("Executor Lanes#grok zz", NEAR, { steps: () => false, held }).page.uid, "sEL");
+  assert.equal(parseNearDrill("Executor Lane#grok", NEAR, { steps: () => false, held }), null);
+});
+
+test("parseNearDrill leaves names, filters, typos and short text to Roam", () => {
+  assert.equal(parseNearDrill("C#", NEAR), null, "title holds the text");
+  assert.equal(parseNearDrill("Programming C#", NEAR), null);
+  assert.equal(parseNearDrill("F# gu", NEAR), null, "alias holds the text");
+  assert.equal(parseNearDrill("Bug #12", NEAR), null, "a number after # is a name");
+  assert.equal(parseNearDrill("Bug#12", NEAR).page.uid, "bug", "without the space it is a heading");
+  assert.equal(parseNearDrill("Design -Notes#x", NEAR), null, "a filter");
+  assert.equal(parseNearDrill("Dsign Notes#x", NEAR), null, "typos never pick a page");
+  assert.equal(parseNearDrill("Bu#x", NEAR), null, "too short");
+  assert.equal(parseNearDrill("#x", NEAR), null);
+  assert.equal(parseNearDrill("Nothing Like It#x", NEAR), null);
+  assert.equal(parseNearDrill("Design Notes", NEAR), null, "no separator");
+});
+
+test("titles.near ranks by level and sees alias changes", () => {
+  assert.deepEqual(NEAR.near("Executor Lanes").map((p) => p.uid), ["cEL", "sEL"]);
+  const index = buildTitleIndex([["Page One", "p1"]], null);
+  assert.deepEqual(index.near("rulebook"), []);
+  index.setAliases(buildAliasIndex([["Aliases:: the rulebook", "Page One", "p1"]], "Aliases"));
+  assert.deepEqual(index.near("rulebook").map((p) => p.uid), ["p1"]);
 });

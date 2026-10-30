@@ -119,7 +119,7 @@ Every handler first checks `e.isComposing`, `state.composing`, that the event ta
 - `> never` matches one of its 6 direct children: `((-EeRGLF5U))` "Never Grok for: document writing …".
 - The preview shows the trail `Systems/Executor Lanes and LaunchAgents › Grok lane …` with that child highlighted. Enter inserts `((-EeRGLF5U))`.
 
-**Counter-example:** `[[Executor Lanes#grok lane` does **not** enter drill mode. `Executor Lanes` is not an exact title: the pages are `Concepts/Executor Lanes` and `Systems/Executor Lanes and LaunchAgents`, and neither has an alias. The text stays native. A namespaced page needs its full title or an `Aliases::` entry to start a drill.
+**Counter-example (until §30):** `[[Executor Lanes#grok lane` does **not** enter drill mode. `Executor Lanes` is not an exact title: the pages are `Concepts/Executor Lanes` and `Systems/Executor Lanes and LaunchAgents`, and neither has an alias. The text stays native. A namespaced page needs its full title or an `Aliases::` entry to start a drill.
 
 ## 6. Per-keystroke cost budget
 
@@ -678,6 +678,28 @@ Where this section differs from earlier ones, it wins. Research: BRW-1 report, i
 **The band.** The band, its room, its flip, phase RELATED and every key rule are §24's: only the label (`Suggested`), the hint (`⌥R suggested`) and the tips differ. Related asks for two words or more and Suggested for none, so one band is never both. Nothing starts selected, so plain Enter, Tab and Esc stay Roam's until ⌥R or the pointer moves in.
 
 **Gates.** `tools/suggest-gate.mjs <window> <svy|notes>`, arms on / off / gone: the band and Enter equal to off and gone; ⌥R Enter and ⌥R ↓ Tab insert with the other bytes unchanged; text after the caret stays; Esc back then Esc closed; typing drops the band and asks nothing; `#[[` and an empty block ask nothing; switch off asks nothing; ⌥R free with no band.
+
+## 30. Drill from a near title (BRW-7, 2026-10-30)
+
+Where this section differs from §5, it wins. Research: BRW-1 report, item 6.
+
+**Switch.** `drillNearTitle` ("Drill from a near title"), on. It needs `drill`. Off, §5 is unchanged.
+
+**When.** Only after §5's exact parse found nothing. The title is the text before the first `#` or `>`, so nothing past it can be read as part of a title.
+
+**Candidates.** The scorer's strict matches on page titles and aliases, without its recall tier: typos, abbreviations and initialisms never pick a page, even with `betterMatch` on. Prefix-only words (level 0) do not count. Only the best level counts: level 2 (prefix or word-boundary substring) over level 1 (the words, not together).
+
+**Clearly wins.** One candidate wins alone. Of two to five (`NEAR_PAGES`), the one page the whole expression resolves on with strict matching wins, and nothing wins before a step has text. More than five, or more than one resolving, stays Roam's. Scores are not compared: in notes `Concepts/Executor Lanes` scores 832 and `Systems/Executor Lanes and LaunchAgents` 818, and that gap is only the length penalty. `[[Executor Lanes#grok` works because only the second page has a heading with grok in it (the first has `Body`).
+
+**Stays Roam's.** A title or alias that holds the whole typed text (`C#`, `a > b`, from the middle too: `Programming C#` for `C#`; empty `X#h` pages do not count, as in §5). Text that resolves whole. `Name #12` (space, `#`, digit): a name being typed, where a heading is unlikely. Text with a query filter. A title under three characters.
+
+**Held.** The winner is kept for that title until the popup closes or the title text changes. Otherwise `#grok` drilling and `#grok z` falling back would hand Enter to Roam, which creates `Executor Lanes#grok z`; held, Enter inserts `[[Page]]`, as §5 commits.
+
+**The row.** Always names the page: the page as the row, the line under it with `refContext` on, else `Page › parent › block` in the row's crumb (with both, a long title pushed the block off the row). Keys, preview, Tab, variants and commit are §5's.
+
+**Cost.** Titles get search keys on the first near title after an index build, not at build. The scan runs once per title text (kept while the steps change), a few ms on 7,200 titles, and only when the text has `#` or `>`. Resolving steps is §5's reads on at most five pages, kept until the popup closes.
+
+**Gates.** `tools/near-gate.mjs <window> <svy|notes>`, arms on / off / gone.
 
 ## Also noticed
 
