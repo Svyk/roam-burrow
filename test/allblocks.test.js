@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CACHE_LIMIT, CACHE_TTL_MS, SEARCH_LIMIT, WIDE_DEBOUNCE_MS, createAllBlocks, sourceFor, wantsAllBlocks } from "../src/allblocks.js";
+import { CACHE_LIMIT, CACHE_TTL_MS, SEARCH_LIMIT, WIDE_DEBOUNCE_MS, createAllBlocks, mergeRows, sourceFor, wantsAllBlocks } from "../src/allblocks.js";
 import { parseFilters } from "../src/filters.js";
 
 const src = (query, opts = {}) => sourceFor(parseFilters(query), opts);
@@ -253,4 +253,45 @@ test("reset cancels the pause, and a reply that outlives its popup is cached, ne
   assert.equal(h.replies.length, 0);
   assert.notEqual(h.all.get(search("two")), null);
   assert.ok(h.traces.some((e) => e.step === "drop" && e.why === "closed"));
+});
+
+const row = (uid, level) => ({ uid, level });
+
+test("mergeRows: a band-2 wide row displaces a band-1 referenced row, never a band-2 one", () => {
+  const refs = [row("a", 2), row("b", 2), row("c", 1)];
+  assert.deepEqual(mergeRows(refs, [row("w", 2)], 3).map((r) => r.uid), ["a", "b", "w"]);
+  assert.deepEqual(mergeRows([row("a", 2), row("b", 2), row("c", 2)], [row("w", 2)], 3).map((r) => r.uid), ["a", "b", "c"]);
+  assert.deepEqual(mergeRows(refs, [row("w", 1)], 3).map((r) => r.uid), ["a", "b", "c"], "ties go to referenced rows");
+  assert.deepEqual(mergeRows([row("a", 2)], [row("w", 1), row("x", 0)], 3).map((r) => r.uid), ["a", "w", "x"]);
+  assert.deepEqual(mergeRows([row("a", 3)], [row("w", 2)], 3).map((r) => r.uid), ["a", "w"], "levels 2 and 3 are one band");
+});
+
+test("mergeRows: pinned referenced rows stay first, and no uid twice", () => {
+  const out = mergeRows([row("a", 1), row("b", 1)], [row("w", 2), row("a", 2)], 3, 1);
+  assert.deepEqual(out.map((r) => r.uid), ["a", "w", "b"]);
+});
+
+test("cancel drops the pending read", async () => {
+  const h = harness();
+  h.all.schedule(search("one"), h.token("one"));
+  h.tick(WIDE_DEBOUNCE_MS);
+  h.all.schedule(search("two"), h.token("two"));
+  h.tick(WIDE_DEBOUNCE_MS);
+  h.all.cancel();
+  h.searches[0].resolve([]);
+  await h.flush();
+  assert.equal(h.searches.length, 1);
+});
+
+test("a same-key read from a closed popup does not swallow the reopened one", async () => {
+  const h = harness();
+  h.all.schedule(search("one"), h.token("one"));
+  h.tick(WIDE_DEBOUNCE_MS);
+  h.all.reset();
+  h.all.schedule(search("one"), h.token("one"));
+  h.tick(WIDE_DEBOUNCE_MS);
+  h.searches[0].resolve([]);
+  await h.flush();
+  assert.equal(h.replies.length, 1, "the new popup is drawn from the cache");
+  assert.equal(h.searches.length, 1);
 });

@@ -2164,6 +2164,20 @@ var OWNER_PULL = "[:block/uid {:block/page [:node/title]}]";
 function wantsAllBlocks(filters) {
   return Boolean(filters) && Boolean(filters.is.length || filters.here || filters.pages.length || filters.ns.length);
 }
+function mergeRows(refRows, wideRows, limit, pinned = 0) {
+  const out = refRows.slice(0, pinned);
+  const seen = new Set(out.map((row) => row.uid));
+  const band = (row) => Math.min(row.level ?? 0, 2);
+  const a = refRows.slice(pinned).filter((row) => !seen.has(row.uid));
+  const b = wideRows.filter((row) => !seen.has(row.uid) && !a.some((r) => r.uid === row.uid));
+  let i = 0;
+  let j = 0;
+  while (out.length < limit && (i < a.length || j < b.length)) {
+    if (j >= b.length || i < a.length && band(a[i]) >= band(b[j])) out.push(a[i++]);
+    else out.push(b[j++]);
+  }
+  return out;
+}
 function sourceFor(filters, { currentPage = null, resolve = null } = {}) {
   if (!wantsAllBlocks(filters)) return null;
   const states = new Set(filters.is);
@@ -2264,6 +2278,7 @@ function createAllBlocks({ api, win = globalThis, perf = null, trace = () => {
   function cancel() {
     if (timer != null) win.clearTimeout(timer);
     timer = null;
+    pending = null;
   }
   function ask(entry) {
     if (failed) return;
@@ -2276,7 +2291,7 @@ function createAllBlocks({ api, win = globalThis, perf = null, trace = () => {
       return;
     }
     if (inFlight) {
-      pending = inFlight.key === entry.key ? null : entry;
+      pending = inFlight.key === entry.key && inFlight.gen === entry.gen ? null : entry;
       return;
     }
     void request(entry);
@@ -4844,7 +4859,6 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   lifecycle.add(() => wide.cancel());
   function wideRows(filters, plan, options, shownRows, refRow) {
-    if (shownRows.length >= ROW_LIMIT) return [];
     const source = sourceFor(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
     if (!source) return [];
     const cached = wide.get(source);
@@ -4859,7 +4873,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       wideMemo.index = buildRefIndex(fresh.map(([uid, string, page]) => [uid, string, 0, page]), indexes.aliases?.byPage ?? /* @__PURE__ */ new Map());
     }
     const seen = new Set(shownRows.map((row) => row.uid));
-    return rankRefs(wideMemo.index, plan, options).filter((hit) => !seen.has(hit.uid)).slice(0, ROW_LIMIT - shownRows.length).map((hit) => refRow(hit, { wide: true, refs: 0 }));
+    return rankRefs(wideMemo.index, plan, options).filter((hit) => !seen.has(hit.uid)).map((hit) => refRow(hit, { wide: true, refs: 0 }));
   }
   function wideQuery() {
     if (!st.wide || st.wide.cached) {
@@ -4874,7 +4888,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       trace({ ev: "wide", step: "drop", why: "text-changed" });
       return;
     }
-    st.rows = rank(token);
+    const pinned = st.phase === "OWNED" || st.phase === "RELATED" || st.foot >= 0 ? Math.max(0, st.active + 1) : 0;
+    const before = st.rows.slice(0, pinned);
+    const next = rank(token);
+    if (pinned) {
+      const kept = new Set(before.map((row) => row.uid));
+      st.rows = before.concat(next.filter((row) => !kept.has(row.uid))).slice(0, ROW_LIMIT);
+    } else st.rows = next;
     frame();
   }
   function mainRows(token, recall, query = token.query) {
@@ -4917,7 +4937,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       });
       const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
       if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
-      return rows.concat(wideRows(filters, plan, options, rows, refRow));
+      return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY && st.aliasOnly == null) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];

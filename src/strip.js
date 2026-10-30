@@ -2,7 +2,7 @@ import { aliasInsertion, aliasUses, groupAliasHits, matchAliases, roamAliasesWil
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
 import { parseDrill, resolveDrill } from "./drill.js";
-import { createAllBlocks, sourceFor, wantsAllBlocks } from "./allblocks.js";
+import { createAllBlocks, mergeRows, sourceFor, wantsAllBlocks } from "./allblocks.js";
 import { parseFilters, pageFilter, refFilter } from "./filters.js";
 import { createHelpSheet, helpGroups, helpKeyAction } from "./help.js";
 import { hintsKey, isHelpKey, keyLabel, pickerHints, renderHints } from "./hints.js";
@@ -261,11 +261,10 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   });
   lifecycle.add(() => wide.cancel());
 
-  // Rows from beyond the referenced pool, appended after the referenced rows
-  // and never above them. Nothing is read here: a source that is not cached
+  // Rows from beyond the referenced pool, merged with the referenced rows by
+  // match band (src/allblocks.js mergeRows). Nothing is read here: a source that is not cached
   // is left in st.wide for evaluate to schedule.
   function wideRows(filters, plan, options, shownRows, refRow) {
-    if (shownRows.length >= ROW_LIMIT) return [];
     const source = sourceFor(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
     if (!source) return [];
     const cached = wide.get(source);
@@ -282,7 +281,6 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const seen = new Set(shownRows.map((row) => row.uid));
     return rankRefs(wideMemo.index, plan, options)
       .filter((hit) => !seen.has(hit.uid))
-      .slice(0, ROW_LIMIT - shownRows.length)
       .map((hit) => refRow(hit, { wide: true, refs: 0 }));
   }
 
@@ -299,7 +297,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // highlight. Phase, active row and auto stay as they are.
   function onWideReply(token) {
     if (!setting("filterAllBlocks") || !wideCurrent(token)) { trace({ ev: "wide", step: "drop", why: "text-changed" }); return; }
-    st.rows = rank(token);
+    // Rows up to the highlight stay as they are: the reply never moves it.
+    const pinned = st.phase === "OWNED" || st.phase === "RELATED" || st.foot >= 0 ? Math.max(0, st.active + 1) : 0;
+    const before = st.rows.slice(0, pinned);
+    const next = rank(token);
+    if (pinned) {
+      const kept = new Set(before.map((row) => row.uid));
+      st.rows = before.concat(next.filter((row) => !kept.has(row.uid))).slice(0, ROW_LIMIT);
+    } else st.rows = next;
     frame();
   }
 
@@ -332,7 +337,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       });
       const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
       if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
-      return rows.concat(wideRows(filters, plan, options, rows, refRow));
+      return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
     if (!setting("aliasPages") || (compact < MIN_ALIAS_QUERY && st.aliasOnly == null)) return [];
     if (st.ta?.value[token.start - 1] === "#") return [];

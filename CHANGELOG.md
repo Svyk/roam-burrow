@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-29
+
+### Added
+
+- **Filters search every block** (`filterAllBlocks`, on). A `((` query with `is:todo`, `is:done`, `in:here`, `in:Page` or `ns:` is no longer limited to referenced blocks: after a 250 ms pause Burrow asks Roam's own search (`data.async.search`, blocks only, at most 1,000 hits, with ` TODO` or ` DONE` added for one `is:` state) or, when every page filter is `in:`, pulls the named pages' blocks, then applies the filters and ranks the hits like referenced blocks. Before, `((watch is:todo` in svy saw 97 of 978 TODOs. The two lists merge by match band: an unreferenced block whose words stand together beats a referenced one with scattered words, and on equal bands referenced rows come first (3 rows at most). These rows are never pre-selected, and a reply redraws without moving the highlight (the rows up to a highlighted Burrow row stay as they were), so Enter stays where it was until the user moves to one. Inserts stay `((uid))`; nothing is written. Without one of these filters nothing is read (`"phrase"` and `-word` alone do not count). Reads are kept per graph and source for 60 s (20 at most), one in flight; a failed read stops further reads until the popup closes. `window.__BURROW.wide` is the debug object. Spec §26 (it reverses §3's referenced-only pool for filtered queries only).
+
 ## [0.12.0] - 2026-10-28
 
 ### Added

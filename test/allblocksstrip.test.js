@@ -127,12 +127,37 @@ test("with no qualifying filter no search is made", async () => {
   }
 });
 
-test("a full set of referenced rows asks for nothing", () => withWide({
-  query: "((watch is:todo",
-  entries: ["a", "b", "c"].map((id) => [id, TODO(`watch film ${id}`), 2, "Films"]),
+test("a full set of referenced rows still reads; a band-2 wide row takes a band-1 slot, never a band-2 one", async () => {
+  // r1, r2: the words together (band 2). r3: scattered words (band 1).
+  const entries = [
+    ["r1", TODO("watch film now"), 2, "Films"],
+    ["r2", TODO("watch film too"), 2, "Films"],
+    ["r3", TODO("film to watch"), 2, "Films"],
+  ];
+  await withWide({ query: "((watch film is:todo", entries, reply: ["w1"] }, async (h) => {
+    assert.ok(await until(() => h.searches.length === 1), "a read although three rows are full");
+    assert.deepEqual(h.uids().length, 3);
+    h.release();
+    DB.w1.string = TODO("watch film again");
+    assert.ok(await until(() => h.uids().includes("w1")));
+    assert.equal(h.uids().includes("r3"), false, "the band-1 referenced row made room");
+    assert.equal(h.uids().includes("r1") && h.uids().includes("r2"), true, "band-2 referenced rows stay");
+    DB.w1.string = TODO("watch the old film");
+  });
+});
+
+test("a reply with the second row highlighted leaves rows 0..1 as they were", () => withWide({
+  query: "((watch film is:todo",
+  entries: [["r1", TODO("watch film now"), 2, "Films"], ["r2", TODO("watch film too"), 2, "Films"]],
+  reply: ["w1"],
 }, async (h) => {
-  await sleep(60);
-  await settle();
-  assert.equal(h.searches.length, 0);
-  assert.equal(h.uids().length, 3);
+  assert.equal(h.uids().length, 2);
+  h.strip.state.active = 1;
+  const before = h.uids();
+  DB.w1.string = TODO("watch film exactly");
+  h.release();
+  assert.ok(await until(() => h.uids().length === 3));
+  assert.deepEqual(h.uids().slice(0, 2), before);
+  assert.equal(h.strip.state.active, 1);
+  DB.w1.string = TODO("watch the old film");
 }));

@@ -21,6 +21,25 @@ export function wantsAllBlocks(filters) {
   return Boolean(filters) && Boolean(filters.is.length || filters.here || filters.pages.length || filters.ns.length);
 }
 
+// Referenced rows and wide rows in one list, best match band first
+// (min(level, 2), as refindex ranks); within a band referenced rows come
+// first, and each list keeps its own order. The first `pinned` referenced rows
+// stay where they are.
+export function mergeRows(refRows, wideRows, limit, pinned = 0) {
+  const out = refRows.slice(0, pinned);
+  const seen = new Set(out.map((row) => row.uid));
+  const band = (row) => Math.min(row.level ?? 0, 2);
+  const a = refRows.slice(pinned).filter((row) => !seen.has(row.uid));
+  const b = wideRows.filter((row) => !seen.has(row.uid) && !a.some((r) => r.uid === row.uid));
+  let i = 0;
+  let j = 0;
+  while (out.length < limit && (i < a.length || j < b.length)) {
+    if (j >= b.length || (i < a.length && band(a[i]) >= band(b[j]))) out.push(a[i++]);
+    else out.push(b[j++]);
+  }
+  return out;
+}
+
 // Where the blocks come from, or null when there is nothing to ask:
 //   pages: every page filter is in:here / in:Title -> read those pages' blocks;
 //   search: otherwise (any ns:, or is: alone) -> Roam's search for the words.
@@ -136,6 +155,7 @@ export function createAllBlocks({ api, win = globalThis, perf = null, trace = ()
   function cancel() {
     if (timer != null) win.clearTimeout(timer);
     timer = null;
+    pending = null;
   }
 
   function ask(entry) {
@@ -149,8 +169,8 @@ export function createAllBlocks({ api, win = globalThis, perf = null, trace = ()
       return;
     }
     if (inFlight) {
-      // The same read is already on its way: its reply serves this key too.
-      pending = inFlight.key === entry.key ? null : entry;
+      // The same read is already on its way (for this popup): its reply serves this key too.
+      pending = inFlight.key === entry.key && inFlight.gen === entry.gen ? null : entry;
       return;
     }
     void request(entry);
