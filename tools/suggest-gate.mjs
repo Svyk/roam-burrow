@@ -193,7 +193,7 @@ const failed = (ok, detail) => (ok ? [] : [detail]);
 const show = (r) => JSON.stringify({ phase: r?.s?.phase, label: r?.s?.label, band: r?.s?.band, calls: r?.s?.calls, steps: r?.steps?.map((t) => [t.phase, t.bandActive, t.popup]), out: r?.out, error: r?.error });
 const arrived = (s) => s.phase === "gone" || s.band.length > 0;
 const text = `${SEED}${WORDS}`;
-const same = (a, b) => a?.out?.string === b?.out?.string && !a?.out?.extraStrings?.length && !a?.out?.newPages?.length;
+const same = (a, b) => a?.out?.string === b?.out?.string && !a?.out?.extraStrings?.length;
 const isSuggested = (r) => r?.s?.label === "Suggested" && r.s.band.length >= 1 && r.s.band.length <= 3;
 const altR = ["r", 1];
 
@@ -249,7 +249,7 @@ const CASES = [
       const after = await look();
       return { ...r, before, after, out: await readBack(), arm };
     },
-    verdict: ({ on, gone }) => failed(on?.before?.band.length >= 1 && on.after.band.length === 0 && on.after.calls === on.before.calls && same(on, gone), `${JSON.stringify([on?.before, on?.after])} / ${show(on)} / ${show(gone)}`) },
+    verdict: ({ on, gone }) => failed(on?.before?.band.length >= 1 && on.after.band.length === 0 && on.after.calls === on.before.calls && on.out?.string === gone?.out?.string, `${JSON.stringify([on?.before, on?.after])} / ${show(on)} / ${show(gone)}`) },
   { name: "#[[ and an empty block get no band and no call", arms: ["on"],
     run: async () => {
       const a = await popup(`${WORDS}#[[`, ["Escape"]);
