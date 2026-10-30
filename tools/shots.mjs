@@ -18,8 +18,8 @@ import { CHIP_ALIASES, FIXTURE_PAGE, cleanupFixture, deleteNewPages, guardReport
 
 const GRAPHS = {
   // block: Svy's 0.5.0 test query (2026-10-22), on a page of TODO/DONE blocks in svy.
-  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo", related: "marvel movies in order", footer: "ant man" },
-  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF", related: "how to stay focused", footer: "3. real-time pcr screen" },
+  svy: { alias: "[[lorina", listed: "[[lorinator", ref: "ant man", block: "agents of s", black: "black pan", filtered: "watch is:todo", wide: "watch logan is:todo", related: "marvel movies in order", footer: "ant man" },
+  notes: { alias: "[[mike kh", listed: "[[mike khi", ref: "real time pcr", block: "real time pcr", filtered: "pcr in:PhD/Cronobacter & Spore Control in PIF", wide: "pcr is:todo", related: "how to stay focused", footer: "3. real-time pcr screen" },
 };
 // 0.5.0 help switches and 0.6.0 block navigation; the first-run line is marked seen except in its own shot.
 const HELP = ["helpTips", "helpSheet", "helpNudge", "refContext", "refOutline"];
@@ -28,7 +28,7 @@ const TYPE_MS = 35;
 const REF_COMMAND = "Burrow: block reference search";
 const FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "pageBoost",
   "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints",
-  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows", "semanticRelated"];
+  "rowPreview", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", ...HELP, "refProse", "richRows", "recentRows", "frecency", "queryFilters", "previewImages", "previewTables", "insertVariants", "openInSidebar", "semanticRows", "semanticRelated", "filterAllBlocks"];
 
 const [title, graph, ...flags] = process.argv.slice(2);
 const config = GRAPHS[graph];
@@ -144,6 +144,8 @@ const SCENARIOS = [
   { id: "84-footer-row-preview", query: `((${config.footer}`, keys: ["preview-open", "waitfooter"], loose: true },
   { id: "85-footer-active", query: `((${config.footer}`, keys: ["preview-open", "waitfooter", "alt+r", "ArrowDown"], loose: true },
   { id: "86-footer-drill-panel", query: `((${config.footer}`, keys: ["preview-open", "wait:600", "shift+Tab", "waitfooter"], loose: true },
+  // 0.13.0: filters search every block. The unreferenced rows arrive after the pause, nothing selected.
+  { id: "87-wide-rows", query: `((${config.wide}`, keys: ["preview-closed", "wait:2500"] },
 ];
 
 const c = await connect(title);
