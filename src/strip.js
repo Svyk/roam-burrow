@@ -318,11 +318,21 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.filters = filters;
     const searchText = filters ? filters.text : query;
     const planText = filters ? filters.planText : query;
+    const refRow = (hit, extra) => ({
+      kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode, source: hit.string,
+      ...rowText(hit.string), insertion: `((${hit.uid}))`,
+      // A query that matched inside code shows the code line it matched.
+      rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
+      ...extra,
+    });
+    // A uid comes first: `-AbCdEfGh` also reads as a -word filter, and it needs no ranking.
+    const hit = token.kind === "((" && setting("refPreselect") ? uidHit(query) : null;
+    const withHit = (rows) => (hit ? [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT) : rows);
     const plan = searchPlan(planText);
-    if (!plan) return [];
+    if (!plan) return withHit([]);
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
-      if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
+      if (!setting("refRanking") || compact < MIN_REF_QUERY) return withHit([]);
       const options = {
         limit: ROW_LIMIT, recall, aliasExpand: setting("aliasExpand"),
         frequent: frequent("block"), currentPage: setting("pageBoost") ? st.pageTitle : null,
@@ -332,16 +342,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
           withCode: !setting("refProse") || looksLikeCode(searchText),
         }),
       };
-      const refRow = (hit, extra) => ({
-        kind: "ref", key: `ref:${hit.uid}`, uid: hit.uid, refs: hit.refs, level: hit.level, page: hit.page, inCode: hit.inCode, source: hit.string,
-        ...rowText(hit.string), insertion: `((${hit.uid}))`,
-        // A query that matched inside code shows the code line it matched.
-        rich: hit.inCode && setting("richRows") ? richParts(hit.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit.uid, hit.string),
-        ...extra,
-      });
       const rows = rankRefs(indexes.refs, plan, options).map((hit) => refRow(hit));
-      const hit = !filters && setting("refPreselect") ? uidHit(query) : null;
-      if (hit) return [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT);
+      if (hit) return withHit(rows);
       if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
       return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }

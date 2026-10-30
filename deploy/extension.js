@@ -4905,11 +4905,28 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.filters = filters;
     const searchText = filters ? filters.text : query;
     const planText = filters ? filters.planText : query;
+    const refRow = (hit2, extra) => ({
+      kind: "ref",
+      key: `ref:${hit2.uid}`,
+      uid: hit2.uid,
+      refs: hit2.refs,
+      level: hit2.level,
+      page: hit2.page,
+      inCode: hit2.inCode,
+      source: hit2.string,
+      ...rowText(hit2.string),
+      insertion: `((${hit2.uid}))`,
+      // A query that matched inside code shows the code line it matched.
+      rich: hit2.inCode && setting("richRows") ? richParts(hit2.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit2.uid, hit2.string),
+      ...extra
+    });
+    const hit = token.kind === "((" && setting("refPreselect") ? uidHit(query) : null;
+    const withHit = (rows) => hit ? [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT) : rows;
     const plan = searchPlan(planText);
-    if (!plan) return [];
+    if (!plan) return withHit([]);
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
     if (token.kind === "((") {
-      if (!setting("refRanking") || compact < MIN_REF_QUERY) return [];
+      if (!setting("refRanking") || compact < MIN_REF_QUERY) return withHit([]);
       const options = {
         limit: ROW_LIMIT,
         recall,
@@ -4924,24 +4941,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
           withCode: !setting("refProse") || looksLikeCode(searchText)
         })
       };
-      const refRow = (hit2, extra) => ({
-        kind: "ref",
-        key: `ref:${hit2.uid}`,
-        uid: hit2.uid,
-        refs: hit2.refs,
-        level: hit2.level,
-        page: hit2.page,
-        inCode: hit2.inCode,
-        source: hit2.string,
-        ...rowText(hit2.string),
-        insertion: `((${hit2.uid}))`,
-        // A query that matched inside code shows the code line it matched.
-        rich: hit2.inCode && setting("richRows") ? richParts(hit2.string, { resolve: resolveRef, needle: highlightPattern(planText) }) : richFor(hit2.uid, hit2.string),
-        ...extra
-      });
       const rows = rankRefs(indexes.refs, plan, options).map((hit2) => refRow(hit2));
-      const hit = !filters && setting("refPreselect") ? uidHit(query) : null;
-      if (hit) return [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT);
+      if (hit) return withHit(rows);
       if (!setting("filterAllBlocks") || !wantsAllBlocks(filters)) return rows;
       return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
@@ -4956,27 +4957,27 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       skip: accepted ? (entry) => !accepted(entry) : void 0
     });
     if (setting("aliasInline")) {
-      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit) => ({
+      return groupAliasHits(hits, indexes.aliases, { byUse: setting("aliasUsage") }).map((hit2) => ({
         kind: "alias",
-        key: `alias:${hit.uid}`,
-        uid: hit.uid,
-        alias: hit.alias,
-        title: hit.title,
-        aliases: hit.aliases,
-        refs: hit.refs,
-        level: hit.level,
-        insertion: aliasInsertion(hit, format)
+        key: `alias:${hit2.uid}`,
+        uid: hit2.uid,
+        alias: hit2.alias,
+        title: hit2.title,
+        aliases: hit2.aliases,
+        refs: hit2.refs,
+        level: hit2.level,
+        insertion: aliasInsertion(hit2, format)
       }));
     }
-    return hits.map((hit) => ({
+    return hits.map((hit2) => ({
       kind: "alias",
-      key: `alias:${hit.uid}:${hit.alias}`,
-      uid: hit.uid,
-      alias: hit.alias,
-      title: hit.title,
-      level: hit.level,
-      insertion: aliasInsertion(hit, format),
-      seenByRoamAliases: hit.seenByRoamAliases
+      key: `alias:${hit2.uid}:${hit2.alias}`,
+      uid: hit2.uid,
+      alias: hit2.alias,
+      title: hit2.title,
+      level: hit2.level,
+      insertion: aliasInsertion(hit2, format),
+      seenByRoamAliases: hit2.seenByRoamAliases
     }));
   }
   function uidHit(query) {

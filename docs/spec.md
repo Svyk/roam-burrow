@@ -637,11 +637,11 @@ So "step aside for Roam's first row" would make Enter create a junk block named 
 
 **Switch.** Part of `refPreselect`; off, neither rule applies.
 
-**Uid.** A query of `/^[\w-]{9}$/`, with no filter, that is not the block being edited: one `api.pull` of `[:block/string {:block/page [:node/title]}]`. A non-empty block becomes row 0 (level 3, `uidHit`), other rows follow without it, 3 rows at most. It is pre-selected, so Enter inserts `((uid))`, also before Roam's list arrives. A page, a missing uid or an empty block adds no row.
+**Uid.** A query of `/^[\w-]{9}$/` that is not the block being edited (`-AbCdEfGh` also parses as a `-word` filter; the uid wins, and `refRanking` is not needed): one `api.pull` of `[:block/string {:block/page [:node/title]}]`. A non-empty block becomes row 0 (level 3, `uidHit`), other rows follow without it, 3 rows at most. It is pre-selected, so Enter inserts `((uid))`, also before Roam's list arrives. A page, a missing uid or an empty block adds no row.
 
 **Exact text.** No filter, row 0 is not a uid hit. If row 0's string equals the typed text (trimmed, any case) it stays pre-selected. Else if another Burrow row, or a Roam row that is not a Create row, has that text, nothing is pre-selected: Enter is Roam's. A list that arrives late gives the selection back (the existing path in `evaluate`). The Create check is `.create-footnote` or a `.bp3-text-overflow-ellipsis` line starting `Create as`; if Roam renames that line, Burrow stops pre-selecting, the safe side.
 
-Gate: `tools/preselect-gate.mjs <window> <svy|notes>`. Nothing is written beyond the insert the user picked.
+Gate: `tools/preselect-gate.mjs <window> <svy|notes>`. Runs on this build (2026-10-30): svy 9/9, notes 7/9 in one run, its two failures being Roam's write limit in the `gone` arm, and those two cases 2/2 on their own. Nothing is written beyond the insert the user picked.
 
 ## Also noticed
 

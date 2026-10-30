@@ -53,7 +53,7 @@ const UIDS = BLOCKS.map(([uid]) => uid);
 
 const prime = async () => {
   let primed = await primeFixture(c, SEED);
-  for (let i = 0; i < 5 && !primed.ok; i += 1) { await sleep(1000); primed = await primeFixture(c, SEED); }
+  for (let i = 0; i < 3 && !primed.ok; i += 1) { await sleep(1000); primed = await primeFixture(c, SEED); }
   await c.evaluate(() => { const g = window.__burrowFixture; g.titleSet = new Set(window.roamAlphaAPI.q("[:find [?t ...] :where [?p :node/title ?t]]")); });
   return primed;
 };
@@ -168,7 +168,8 @@ const look = () => c.evaluate(() => {
 
 // One popup: type, wait for `ready`, look, press the keys, read back.
 async function popup(query, keys, { ready, fast } = {}) {
-  if (!(await prime()).ok) return { error: "focus failed" };
+  const primed = await prime();
+  if (!primed.ok) return { error: `focus failed: ${JSON.stringify(primed)} ${JSON.stringify(await c.evaluate(() => ({ active: document.activeElement?.tagName, id: document.activeElement?.id, hasFocus: document.hasFocus(), visible: document.visibilityState, selected: document.querySelectorAll(".block-highlight-blue").length, input: Boolean(document.getElementById(window.__burrowFixture.inputId)) })))}` };
   await c.type("((", TYPE_MS);
   await c.type(query, TYPE_MS);
   let s = null;
@@ -271,6 +272,9 @@ try {
       g.keepAll.push(uid);
     }
   }, BLOCKS);
+  // A pointer resting over the new rows can open a hover popover (svy) that takes the focus from the block.
+  await c.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 400, y: 2 });
+  await c.evaluate(() => { if (document.activeElement?.tagName === "A") document.activeElement.blur(); });
   await sleep(2500);
   for (const arm of ARMS) {
     const here = wanted.filter((k) => k.arms.includes(arm));

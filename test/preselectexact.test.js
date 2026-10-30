@@ -37,6 +37,7 @@ const ENTRIES = [
 const BLOCKS = {
   plainUid1: { ":block/string": "An unreferenced block", ":block/page": { ":node/title": "Notes" } },
   refUid001: { ":block/string": "quokka lantern", ":block/page": { ":node/title": "Zoo" } },
+  "-AbCdEfGh": { ":block/string": "A uid that starts with a dash" },
   emptyUid1: { ":block/string": "" },
   fixtureU1: { ":block/string": "The block being edited" },
   pageUid01: { ":node/title": "A page" },
@@ -137,4 +138,15 @@ test("Roam's exact row arriving late gives the selection back", () => with_({ qu
 test("exact text in a lower Burrow row: nothing is selected, also before Roam's list arrives", () => with_({ query: "ibis ledger" }, async (h) => {
   assert.deepEqual(h.state.rows.map((row) => row.uid), ["refUid005", "refUid004"]);
   assert.equal(h.state.phase, "ARMED");
+}));
+
+test("a uid that reads as a -word filter still finds its block", () => with_({ query: "-AbCdEfGh" }, async (h) => {
+  assert.equal(h.state.active, 0);
+  h.enter();
+  assert.equal(h.ta.value, "((-AbCdEfGh))");
+}));
+
+test("a uid needs no referenced-first ranking", () => with_({ query: "plainUid1", settings: { refRanking: false } }, async (h) => {
+  assert.equal(h.state.rows[0].uid, "plainUid1");
+  assert.equal(h.state.phase, "OWNED");
 }));
