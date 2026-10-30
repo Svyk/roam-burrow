@@ -36,6 +36,8 @@ export function helpGroups(setting, mac = IS_MAC) {
   const aliases = { title: "Aliases", items: [], notes: [] };
   if (on("aliasPages")) aliases.items.push(["[[alias", setting("aliasLinkFormat") === "[[Page]]" ? "↵ inserts [[Page]]" : "↵ inserts [alias]([[Page]])"]);
   if (on("aliasPages") && on("aliasPrefix")) aliases.items.push(["[[alias:lo", "only alias rows for lo"]);
+  if (on("tagRows") && (on("aliasPages") || on("recentRows"))) aliases.items.push(["#alias", "↑ to the rows; ↵ inserts #[[Page]]"]);
+  if (on("tagRows") && on("queryFilters")) aliases.items.push(["#ns:Systems/", "pages under Systems/"]);
   if (on("aliasPages") && on("aliasChips")) aliases.items.push([k("altDown"), "the page's other aliases, ←→"]);
   if (on("aliasCreate")) aliases.items.push([k("altA"), "add an alias to the page"]);
   if (on("aliasDelete") && on("aliasChips")) aliases.items.push([k("altBackspace"), "delete the selected alias"]);

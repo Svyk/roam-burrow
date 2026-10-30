@@ -1,4 +1,4 @@
-/* Burrow v0.13.1 | MIT | generated; edit src/ */
+/* Burrow v0.14.0 | MIT | generated; edit src/ */
 
 // src/frecency.js
 var HALF_LIFE = 14 * 24 * 3600 * 1e3;
@@ -1042,6 +1042,7 @@ function buildTitleIndex(rows, aliases, withContent = null) {
   };
   setAliases(aliases);
   const sorted = [...byLower.keys()].filter((t) => /[#>]/.test(t)).sort();
+  let allSorted = null;
   const one = (list) => list?.length === 1 ? list[0] : null;
   return {
     size: byRaw.size,
@@ -1057,6 +1058,21 @@ function buildTitleIndex(rows, aliases, withContent = null) {
       const lower = raw.toLowerCase();
       const compact = searchKey(raw).compact;
       return one(byLower.get(lower)) || one(compact && byCompact.get(compact)) || one(aliasLower.get(lower)) || one(compact && aliasCompact.get(compact)) || null;
+    },
+    // Every page whose title starts with `prefix`, without case (`#ns:`).
+    startingWith(prefix) {
+      const lower = String(prefix ?? "").toLowerCase();
+      allSorted || (allSorted = [...byLower.keys()].sort());
+      let lo = 0;
+      let hi = allSorted.length;
+      while (lo < hi) {
+        const mid = lo + hi >> 1;
+        if (allSorted[mid] < lower) lo = mid + 1;
+        else hi = mid;
+      }
+      const pages = [];
+      for (let i = lo; i < allSorted.length && allSorted[i].startsWith(lower); i += 1) pages.push(...byLower.get(allSorted[i]));
+      return pages;
     },
     hasPrefix(lower) {
       let lo = 0;
@@ -1557,6 +1573,7 @@ var DEFAULTS = Object.freeze({
   previewTables: true,
   semanticRows: true,
   semanticRelated: true,
+  tagRows: true,
   // Not a switch: set once the first-run line has been shown.
   helpNudgeSeen: false,
   aliasKeyword: "Aliases",
@@ -1593,6 +1610,7 @@ var SWITCHES = [
   ["previewTables", "Tables in the preview", "When the highlighted block in a preview (the drill-down preview, a Burrow row with Roam's preview open, or the list after Tab) is a {{[[table]]}} or {{table}} block, its first 6 rows and 5 columns show under it as a small read-only grid, each cell cut at about 40 characters and drawn like Roam (with Rows drawn like Roam on), with +R rows, +C cols when the table is bigger. One small read per shown row, kept until the popup closes. {{[[roam/grid]]}} large grids keep their label. Off: the table's rows show as an outline, as in 0.9.0."],
   ["semanticRows", "Related rows (Roam semantic search)", "When Roam's semantic search is on for the graph (Settings > Graph), up to three Related rows from it show under Roam's results in (( and [[, after you pause typing a phrase of two or more words. Each lookup sends what you typed after the (( or [[ to the embedding provider set in Settings > Graph; in an encrypted graph the query text still goes to that provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. ⌥R (Alt+R) moves into the Related rows, ↑/↓ move inside them, Esc goes back to Roam's rows. Enter inserts a Related row only when it is highlighted, by those keys or by the mouse; otherwise it does what it did before."],
   ["semanticRelated", "Related to the highlighted block", "When Roam's semantic search is on for the graph (Settings > Graph) and a block or page row, a drill row or a drill panel row has been highlighted for half a second with a preview showing, up to four blocks related to it by meaning show at the bottom of that preview, inside its space: the preview does not grow. ⌥R (Alt+R) moves into them, ↑/↓ move inside them, Esc goes back to the highlighted row. Enter or Tab or a click inserts ((uid)); ⇧↵ ⌥↵ ⌘⇧↵ and ⇧+click work as on Burrow's rows. Each lookup sends the highlighted block's text (for a page, its title and first ten blocks, up to 600 characters) to the embedding provider set in Settings > Graph; in an encrypted graph that text still goes to the provider. Roam keeps extension settings per graph, so this switch is kept per graph: turn it off in any graph where that is not wanted. Independent of Related rows."],
+  ["tagRows", "Burrow rows in #", "In Roam's # tag popup, Burrow's page rows above its list: alias rows with forgiving matching, frequent pages first, and with up to two characters typed the recent pages. #ns:Systems/ lists pages under Systems/, and #ns:Systems/la the ones whose title goes on with la. A row inserts #[[Page]]: a tag cannot carry an alias label. Nothing starts selected, so Enter still leaves what you typed; ↑ moves onto the rows. No drill-down, embeds or Related rows here. Off: the popup is Roam's alone."],
   ["rowPreview", "Preview follows Burrow's rows", "With Roam's preview open (Ctrl-O), a selected Burrow row shows its own page or block there: an alias row its page, a referenced block its place in the outline."],
   ["previewImages", "Images in the preview", "In the previews, the highlighted block's first image shows as a thumbnail (at most 240×160) under its line, +N when it has more. It loads after the row has been highlighted for 150 ms, only for that row; in an encrypted graph it is decrypted with Roam's file API and kept for the popup only (8 at most). Files over 5 MB and images that fail keep the image label with their alt text. Rows keep the label."],
   ["aliasCreate", "Create aliases from the picker (writes to your graph)", "⌥A (Alt+A) on a highlighted page in [[ opens an alias field. Enter adds the alias to that page's alias block (creating the block if there is none) and inserts the aliased link; Esc cancels. Changes only that one block. Off by default."],
@@ -2440,14 +2458,14 @@ function baseHints(s, mac) {
     return items;
   }
   if (row?.kind === "alias") {
-    items.push(["↵", "pick alias", on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
+    items.push(["↵", on.tag ? "insert" : "pick alias", on.tag ? "Insert #[[Page]]: a tag cannot carry an alias label" : on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
     if (row.chips) items.push([k("altDown"), "more aliases", "Move into the page's other aliases: ←→ choose, ↵ inserts the page shown as that alias"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (row.aliasNew) items.push(addAlias);
     return items;
   }
   if (row?.kind === "page") {
-    items.push(["↵", "insert", "Insert [[Page]]"]);
+    items.push(["↵", "insert", on.tag ? "Insert #[[Page]]" : "Insert [[Page]]"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (row.aliasNew) items.push(addAlias);
     return items;
@@ -2521,6 +2539,8 @@ function helpGroups(setting, mac = IS_MAC) {
   const aliases = { title: "Aliases", items: [], notes: [] };
   if (on("aliasPages")) aliases.items.push(["[[alias", setting("aliasLinkFormat") === "[[Page]]" ? "↵ inserts [[Page]]" : "↵ inserts [alias]([[Page]])"]);
   if (on("aliasPages") && on("aliasPrefix")) aliases.items.push(["[[alias:lo", "only alias rows for lo"]);
+  if (on("tagRows") && (on("aliasPages") || on("recentRows"))) aliases.items.push(["#alias", "↑ to the rows; ↵ inserts #[[Page]]"]);
+  if (on("tagRows") && on("queryFilters")) aliases.items.push(["#ns:Systems/", "pages under Systems/"]);
   if (on("aliasPages") && on("aliasChips")) aliases.items.push([k("altDown"), "the page's other aliases, ←→"]);
   if (on("aliasCreate")) aliases.items.push([k("altA"), "add an alias to the page"]);
   if (on("aliasDelete") && on("aliasChips")) aliases.items.push([k("altBackspace"), "delete the selected alias"]);
@@ -4583,21 +4603,32 @@ function createTips({ doc, win, lifecycle, enabled, avoid = () => null, around =
 }
 
 // src/token.js
-function findToken(value, caret) {
+function findToken(value, caret, { tags = false } = {}) {
   if (typeof value !== "string" || !Number.isInteger(caret) || caret < 2) return null;
   const before = value.slice(0, caret);
   const page = before.lastIndexOf("[[");
   const block = before.lastIndexOf("((");
   const start = Math.max(page, block);
-  if (start < 0) return null;
+  const tag = () => tags ? tagToken(value, caret) : null;
+  if (start < 0) return tag();
   const kind = start === page ? "[[" : "((";
   const close = kind === "[[" ? "]]" : "))";
   const query = before.slice(start + 2);
-  if (query.includes(close) || query.includes("\n")) return null;
+  if (query.includes(close) || query.includes("\n")) return tag();
   if (kind === "[[" && query.includes("[[")) return null;
   const end = value.startsWith(close, caret) ? caret + close.length : caret;
   if (end === caret && insideClosed(value, caret, kind === "[[" ? "[[" : "((", close)) return null;
   return { kind, start, end, caret, query, closed: end !== caret };
+}
+var TAG_END = /[\s,()[\]";!?#]/;
+function tagToken(value, caret) {
+  const before = value.slice(0, caret);
+  const start = before.lastIndexOf("#");
+  if (start < 0 || start === caret - 1) return null;
+  const query = before.slice(start + 1);
+  if (TAG_END.test(query)) return null;
+  if (caret < value.length && !TAG_END.test(value[caret])) return null;
+  return { kind: "#", start, end: caret, caret, query, closed: false };
 }
 function insideClosed(value, caret, open, close) {
   const rest = value.slice(caret);
@@ -4786,6 +4817,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       perf.counters[counter] = (perf.counters[counter] || 0) + 1;
     }
   });
+  const hashed = (token) => token?.kind === "#" || token?.kind === "[[" && st.ta?.value[token.start - 1] === "#";
+  const tagged = (token) => hashed(token) && setting("tagRows");
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill") || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated");
   const kidsKnown = /* @__PURE__ */ new Map();
   function hasKids(uid) {
@@ -4824,7 +4857,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     st.aliasOnly = null;
     st.filters = null;
     st.wide = null;
-    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
+    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && !hashed(token)) {
       const m = ALIAS_PREFIX.exec(token.query);
       if (m) {
         st.aliasOnly = m[1];
@@ -4836,7 +4869,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       richCache.clear();
     }
     const recall = setting("betterMatch");
-    if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
+    if (token.kind === "[[" && setting("drill") && !hashed(token)) {
       const parsed = parseDrill(token.query, indexes.titles);
       if (parsed) {
         const result = resolveDrill(parsed, tree, { strict: !recall, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") });
@@ -4845,10 +4878,18 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       }
     }
     const rows = mainRows(token, recall);
-    if (token.query.length <= RECENT_QUERY && setting("recentRows") && !(token.kind === "[[" && st.ta?.value[token.start - 1] === "#")) {
-      return rows.concat(recentRows(token, rows));
-    }
-    return rows;
+    const all = token.query.length <= RECENT_QUERY && setting("recentRows") && (!hashed(token) || tagged(token)) ? rows.concat(recentRows(token, rows)) : rows;
+    return tagged(token) ? all.map((row) => ({ ...row, insertion: tagInsertion(token, row.title) })) : all;
+  }
+  const tagInsertion = (token, title) => token.kind === "#" ? `#[[${title}]]` : `[[${title}]]`;
+  function namespaceRows(filters) {
+    const label = filters.labels.find((l) => /^ns:/i.test(l));
+    const prefix = label.slice(3).replace(/^"|"$/g, "");
+    const picked = frequent("page");
+    const refs = indexes.aliases?.refsByPage;
+    const pages = (indexes.titles?.startingWith(prefix) ?? []).filter((page) => page.title !== st.pageTitle);
+    pages.sort((a, b) => (picked?.get(b.uid) ?? 0) - (picked?.get(a.uid) ?? 0) || (refs?.get(b.uid) ?? 0) - (refs?.get(a.uid) ?? 0) || a.title.localeCompare(b.title));
+    return pages.slice(0, ROW_LIMIT).map((page) => ({ kind: "page", key: `page:${page.uid}`, uid: page.uid, title: page.title, refs: refs?.get(page.uid) ?? null }));
   }
   const frequent = (kind) => setting("frecency") ? frecency?.scores(kind) : null;
   const wideMemo = { rows: null, refs: null, uid: null, index: null };
@@ -4922,6 +4963,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     });
     const hit = token.kind === "((" && setting("refPreselect") ? uidHit(query) : null;
     const withHit = (rows) => hit ? [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT) : rows;
+    if (tagged(token) && filters?.ns.length && !planText.trim() && !filters.is.length) return namespaceRows(filters);
     const plan = searchPlan(planText);
     if (!plan) return withHit([]);
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
@@ -4947,7 +4989,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
     if (!setting("aliasPages") || compact < MIN_ALIAS_QUERY && st.aliasOnly == null) return [];
-    if (st.ta?.value[token.start - 1] === "#") return [];
+    if (hashed(token) && !tagged(token)) return [];
     const format = setting("aliasLinkFormat");
     const accepted = pageFilter(filters, { currentPage: st.pageTitle, resolve: (v) => indexes.titles?.resolve(v) ?? null });
     const hits = matchAliases(indexes.aliases, plan, {
@@ -5166,7 +5208,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const inline = setting("aliasInline");
     const pages = st.rows.some((row) => row.kind === "page");
     if (st.aliasOnly != null) return st.rows.slice(0, ROW_LIMIT);
-    if (st.token?.kind !== "[[" || st.drill || inline && !pages) return st.rows.slice(0, ROW_LIMIT);
+    if (st.token?.kind === "((" || st.drill || inline && !pages) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = /* @__PURE__ */ new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
       const title = row.getAttribute("title")?.toLowerCase();
@@ -5237,7 +5279,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && (rows[0].uidHit || !exactElsewhere(rows, searchText)) || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText));
+    const wanted = !hashed(st.token) && !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && (rows[0].uidHit || !exactElsewhere(rows, searchText)) || setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       st.phase = "ARMED";
       st.active = -1;
@@ -5569,7 +5611,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   let chipsFor = null;
   let chipsScrolled = false;
   let revealedChip = -1;
-  const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
+  const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1 && !tagged(st.token);
   const chipTitle = (row, alias) => {
     const n = setting("aliasUsage") ? aliasUses(indexes.aliases, row.uid, alias) : 0;
     return n > 0 ? `${alias} ×${n}` : alias;
@@ -5797,8 +5839,9 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (st.phase === "SCOPE" || !st.token) return [];
     const row = st.phase === "OWNED" ? shown[st.active] : null;
     const kind = st.token.kind;
-    const aliasNew = (page) => Boolean(page) && setting("aliasCreate") && kind === "[[";
-    const canDrill = (source) => Boolean(source) && (setting("tabDrill") || setting("drill")) && hasKids(source.uid);
+    const tag = tagged(st.token);
+    const aliasNew = (page) => Boolean(page) && setting("aliasCreate") && kind === "[[" && !tag;
+    const canDrill = (source) => Boolean(source) && !tag && (setting("tabDrill") || setting("drill")) && hasKids(source.uid);
     const state = {
       kind,
       prompt: st.prompt?.kind ?? null,
@@ -5811,7 +5854,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         block: Boolean(ownedSource(row, -1)?.block),
         page: variantType(row) === "page"
       } : null,
-      native: !row && kind === "[[" ? (() => {
+      native: !row && kind === "[[" && !tag ? (() => {
         const source = armedSource();
         return source ? { drill: canDrill(source), aliasNew: aliasNew(source) } : null;
       })() : null,
@@ -5819,7 +5862,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
       footer: footerRows().length ? st.foot >= 0 ? "active" : "available" : null,
-      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn(), tag },
       held: Boolean(st.held)
     };
     return pickerHints(state);
@@ -6022,7 +6065,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   });
   const relatedKey = (token) => `${token.start}\0${token.kind}\0${token.query}`;
   function relatedQuery(token) {
-    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows")) {
+    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows") || tagged(token)) {
       semantic.cancel();
       dropRelated();
       return;
@@ -6365,6 +6408,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   const footerKeyOf = (subject) => subject ? `${subject.pane}:${subject.kind}:${subject.uid}` : null;
   const footerPane = () => footer.subject?.pane === "scopePreview" ? scopePreview : preview;
   function footerSubject() {
+    if (tagged(st.token)) return null;
     if (!setting("semanticRelated") || st.prompt || st.phase === "IDLE" || !st.pop) return null;
     if (st.phase === "SCOPE") {
       if (!st.scope?.preview) return null;
@@ -6798,7 +6842,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function evaluate(ta) {
     if (!anyFeature() || st.composing) return reset("off");
     if (ta.selectionStart !== ta.selectionEnd) return reset("selection");
-    const token = findToken(ta.value, ta.selectionStart);
+    const token = findToken(ta.value, ta.selectionStart, { tags: setting("tagRows") });
     if (!token) return reset("no-token");
     if (st.ta !== ta || st.token?.start !== token.start) {
       st.uid = api.ui.getFocusedBlock?.()?.["block-uid"] ?? null;
@@ -6908,7 +6952,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       return;
     }
     if (st.phase === "OWNED" && variantKey(event, shown[st.active], st.chip)) return;
-    if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
+    if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && !tagged(st.token) && (st.phase === "ARMED" || st.phase === "OWNED")) {
       const page = aliasSource();
       if (page) {
         openPrompt(page);
@@ -6919,7 +6963,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     if (st.phase === "OWNED" && chipKey(event)) return;
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (st.phase === "ARMED") {
-      if (key === "Tab" && !event.shiftKey && setting("tabDrill") && st.token.kind === "[[" && enterScope(armedSource(), event)) return;
+      if (key === "Tab" && !event.shiftKey && setting("tabDrill") && st.token.kind === "[[" && !tagged(st.token) && enterScope(armedSource(), event)) return;
       if ((key === "Enter" || key === "Tab") && !event.shiftKey) rememberNative();
       if (key === "ArrowUp" && !event.shiftKey && count && !strip.hidden && nativeActiveIsFirst()) {
         own(count - 1);
@@ -6955,7 +6999,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
       case "Tab": {
         if (event.shiftKey) return;
         const row = shown[st.active];
-        if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, -1), event)) return;
+        if (key === "Tab" && setting("tabDrill") && !tagged(st.token) && enterScope(ownedSource(row, -1), event)) return;
         consume(event);
         if (!row || !commit(row)) refused();
         return;
@@ -7028,7 +7072,8 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     }
     return null;
   }
-  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
+  const variantSetting = (id) => id === "insertVariants" && tagged(st.token) ? false : setting(id);
+  const variantsOn = () => ({ insertVariants: variantSetting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
   const HOLD_MS = 300;
   const MODIFIER_KEYS = /* @__PURE__ */ new Set(["Shift", "Alt", "Meta", "Control"]);
   let holdTimer = null;
@@ -7061,7 +7106,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     return filters ? filters.planText : query;
   }
   function variantKey(event, row, chip = -1) {
-    const variant = variantOf(event, setting);
+    const variant = variantOf(event, variantSetting);
     const target = variant ? variantTarget(row, chip) : null;
     if (!target) return false;
     consume(event);
@@ -7631,7 +7676,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   let nativePick = null;
   function rememberNative() {
     if (!frecency || !st.token || !st.ta || !(setting("frecency") || setting("recentRows"))) return;
-    const memo = { ta: st.ta, start: st.token.start, kind: st.token.kind };
+    const memo = { ta: st.ta, start: st.token.start, kind: st.token.kind, query: st.token.query };
     nativePick = memo;
     let frames = NATIVE_PICK_FRAMES;
     const wait = () => {
@@ -7650,7 +7695,13 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     const memo = nativePick;
     if (!memo || lifecycle.disposed || !memo.ta.isConnected) return false;
     const text = memo.ta.value.slice(memo.start);
-    if (memo.kind === "((") {
+    if (memo.kind === "#") {
+      const m = /^#(?:\[\[([^\]]+)\]\]|([^\s,()[\]";!?#]+))/.exec(text);
+      const title = m?.[1] ?? m?.[2];
+      const uid = title && title !== memo.query ? indexes.titles?.resolve(title)?.uid : null;
+      if (!uid) return false;
+      frecency.record("page", uid);
+    } else if (memo.kind === "((") {
       const m = /^\(\(([\w-]{9})\)\)/.exec(text);
       if (!m) return false;
       frecency.record("block", m[1]);
@@ -7762,14 +7813,14 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
   function variantLines(target, query) {
     if (!target) return [];
     const lines = [];
-    if (setting("insertVariants")) {
+    if (variantSetting("insertVariants")) {
       lines.push([keyLabel("shiftEnter"), `insert ${variantInsertion("embed", target, query)}`], [keyLabel("altEnter"), `insert ${variantInsertion("label", target, query)}`]);
     }
     if (setting("openInSidebar")) lines.push([`${keyLabel("sidebarEnter")}, ⇧click`, "open it in the right sidebar"]);
     return lines;
   }
   const rowVariantLines = (row, chip = -1) => variantLines(variantTarget(row, chip), labelQuery(row));
-  const drillLine = (uid, what) => setting("tabDrill") && hasKids(uid) ? ["⇥", what] : null;
+  const drillLine = (uid, what) => setting("tabDrill") && !tagged(st.token) && hasKids(uid) ? ["⇥", what] : null;
   function stripTip(target) {
     const chip = target.closest?.(".burrow-chip");
     const active = shown[st.active];
@@ -7805,15 +7856,15 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
         ...rowVariantLines(row),
         setting("aliasChips") && row.aliases.length > 1 ? [keyLabel("altDown"), `pick one of its ${row.aliases.length} aliases`] : null,
         drillLine(row.uid, "list the blocks on this page"),
-        setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null
+        setting("aliasCreate") && !tagged(st.token) ? [keyLabel("altA"), "add an alias to this page"] : null
       ].filter(Boolean) };
     }
     if (row.kind === "page") {
       return { el: node, title: row.title, lines: [
-        ["", row.recent === "pick" ? "Recent pick" : "Edited recently"],
+        row.recent ? ["", row.recent === "pick" ? "Recent pick" : "Edited recently"] : null,
         ["↵", `or click: insert ${row.insertion}`],
         drillLine(row.uid, "list the blocks on this page"),
-        setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null
+        setting("aliasCreate") && !tagged(st.token) ? [keyLabel("altA"), "add an alias to this page"] : null
       ].filter(Boolean) };
     }
     const upLine = setting("refOutline") ? ["⇧⇥", "go up to its parent (the parent's children, this block highlighted)"] : null;
@@ -8020,7 +8071,7 @@ function escapeRe(s) {
 }
 
 // src/extension.js
-var VERSION = "0.13.1";
+var VERSION = "0.14.0";
 var activeLifecycle = null;
 var FEATURES = ["aliasPages", "aliasExpand", "refRanking", "refPreselect", "betterMatch", "drill", "drillPreview", "recentRows", "frecency", "pageBoost", "aliasInline", "aliasPreselect", "aliasChips", "aliasUsage", "aliasPrefix", "tabDrill", "paneLayout", "keyHints", "rowPreview", "previewImages", "previewTables", "aliasCreate", "aliasDelete", "drillOrdinals", "drillEmpty", "drillCap", "refSearch", "refSearchHotkey", "helpTips", "helpSheet", "helpNudge", "refContext", "refOutline", "semanticRows", "semanticRelated"];
 function safeLocalStorage() {

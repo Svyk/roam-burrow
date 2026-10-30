@@ -43,6 +43,7 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
   };
   setAliases(aliases);
   const sorted = [...byLower.keys()].filter((t) => /[#>]/.test(t)).sort();
+  let allSorted = null;
   const one = (list) => (list?.length === 1 ? list[0] : null);
   return {
     size: byRaw.size,
@@ -59,6 +60,21 @@ export function buildTitleIndex(rows, aliases, withContent = null) {
       const compact = searchKey(raw).compact;
       return one(byLower.get(lower)) || one(compact && byCompact.get(compact))
         || one(aliasLower.get(lower)) || one(compact && aliasCompact.get(compact)) || null;
+    },
+    // Every page whose title starts with `prefix`, without case (`#ns:`).
+    startingWith(prefix) {
+      const lower = String(prefix ?? "").toLowerCase();
+      allSorted ||= [...byLower.keys()].sort();
+      let lo = 0;
+      let hi = allSorted.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (allSorted[mid] < lower) lo = mid + 1;
+        else hi = mid;
+      }
+      const pages = [];
+      for (let i = lo; i < allSorted.length && allSorted[i].startsWith(lower); i += 1) pages.push(...byLower.get(allSorted[i]));
+      return pages;
     },
     hasPrefix(lower) {
       let lo = 0;

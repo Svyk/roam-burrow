@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-30
+
+### Added
+
+- **Burrow rows in `#`** (`tagRows`, on). Roam's `#` tag popup gets Burrow's page rows above its list: alias rows with forgiving matching, frequent pages first, recent pages with up to two characters typed, in `#word` and `#[[word`. `#ns:Systems/` lists pages under Systems/, `#ns:Systems/la` the ones whose title goes on with `la`. A row inserts `#[[Page]]`: a tag cannot carry an alias label. Nothing starts selected, so Enter still leaves what you typed; ↑ moves onto the rows. No drill-down, embeds, alias chips or Related rows here.
+
 ## [0.13.1] - 2026-10-30
 
 ### Changed
