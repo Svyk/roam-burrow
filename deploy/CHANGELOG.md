@@ -4,6 +4,12 @@ All notable changes to this project follow [Keep a Changelog](https://keepachang
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-30
+
+### Added
+
+- **Drill from a near title** (`drillNearTitle`, on). `[[Executor Lanes#grok` no longer needs the exact title: the text before the first `#` or `>` drills when one page clearly wins Burrow's strict match on titles and aliases. It is the only match in its band, or one of up to five and the only one the typed heading or child resolves on. In notes, `Concepts/Executor Lanes` and `Systems/Executor Lanes and LaunchAgents` both match, and only the second has a grok heading. The row always names the page. Once a page wins it stays for that title, so a later step that matches nothing makes Enter insert `[[Page]]`: a drill still never creates a page. Roam keeps text a title or alias holds (`C#`, also from its middle), `Name #12`, filters, typos, under three characters and ties. Spec §30.
+
 ## [0.15.0] - 2026-10-30
 
 ### Added

@@ -1,3 +1,4 @@
+import { parseFilters } from "./filters.js";
 import { ordinalQuery, startsWithOrdinal } from "./ordinal.js";
 import { matchFromKey, searchKey, searchPlan, stripRoamMarkup } from "./search.js";
 
@@ -39,6 +40,38 @@ export function parseDrill(query, titles) {
     return { page, typedTitle: title, ...parsed };
   }
   return null;
+}
+
+// More pages than this match the typed title: none clearly wins.
+export const NEAR_PAGES = 5;
+const NEAR_MIN = 3;
+
+// Drill from a near title (spec §30): the text before the first `#` or `>` is
+// no exact title, but one page clearly wins the match. It wins alone, or
+// among up to NEAR_PAGES as the only one the steps typed so far resolve on
+// (`Executor Lanes#grok`). `held` keeps the page chosen for this title while
+// the steps change, so a step that stops matching is not handed to Roam's
+// Enter, which would create the page.
+export function parseNearDrill(query, titles, { steps, held = null } = {}) {
+  const text = String(query ?? "");
+  if (!titles?.near) return null;
+  const at = text.search(/[#>]/);
+  if (at <= 0) return null;
+  const title = text.slice(0, at).trim();
+  const lower = text.trim().toLowerCase();
+  // `Bug #12` is a name being typed, and filters mean what they say.
+  if (searchKey(title).compact.length < NEAR_MIN || /\s#\d/.test(text) || parseFilters(text)) return null;
+  if (titles.resolve(text) || titles.namesText(lower)) return null;
+  const parsed = parseSteps(text.slice(at));
+  if (!parsed) return null;
+  const found = (page) => ({ page, typedTitle: title, near: true, ...parsed });
+  if (held?.typedTitle === title) return found(held.page);
+  const pages = titles.near(title);
+  if (pages.length === 1) return found(pages[0]);
+  if (!pages.length || pages.length > NEAR_PAGES) return null;
+  if (!(parsed.heading ?? parsed.steps[0])) return null;
+  const reached = pages.filter((page) => steps?.({ page, ...parsed }));
+  return reached.length === 1 ? found(reached[0]) : null;
 }
 
 // Best scorer match among candidates; ties go to outline order: the order

@@ -1,7 +1,7 @@
 import { aliasInsertion, aliasUses, groupAliasHits, matchAliases, roamAliasesWillList } from "./aliases.js";
 import { addAliasToPage, deleteAliasFromPage, validAlias } from "./aliasedit.js";
 import { createPromptComposer } from "./compose.js";
-import { parseDrill, resolveDrill } from "./drill.js";
+import { parseDrill, parseNearDrill, resolveDrill } from "./drill.js";
 import { createAllBlocks, mergeRows, sourceFor, wantsAllBlocks } from "./allblocks.js";
 import { parseFilters, pageFilter, refFilter } from "./filters.js";
 import { createHelpSheet, helpGroups, helpKeyAction } from "./help.js";
@@ -113,7 +113,7 @@ const valueSetter = Object.getOwnPropertyDescriptor(globalThis.HTMLTextAreaEleme
 // preview), Esc passes through. Deleting the `#` or `>` ends drill mode.
 export function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, saveSetting = null, doc = document, win = window }) {
   const st = {
-    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, pageTitle: null, filters: null, wide: null,
+    phase: "IDLE", ta: null, token: null, uid: null, rows: [], active: -1, drill: null, nearHeld: null, pageTitle: null, filters: null, wide: null,
     pop: null, composing: false, ignoreNextInput: false, released: null, waitFrame: 0, observers: [],
     auto: false, chip: -1, scope: null, prompt: null, help: false, aliasOnly: null, rel: -1, held: false, foot: -1,
   };
@@ -241,11 +241,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (indexes.refs !== richRefs) { richRefs = indexes.refs; richCache.clear(); }
     const recall = setting("betterMatch");
     if (token.kind === "[[" && setting("drill") && !hashed(token)) {
-      const parsed = parseDrill(token.query, indexes.titles);
+      const walk = { ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") };
+      const parsed = parseDrill(token.query, indexes.titles) || (setting("drillNearTitle") ? parseNearDrill(token.query, indexes.titles, {
+        held: st.nearHeld,
+        steps: (expr) => { const hit = resolveDrill(expr, tree, { ...walk, strict: true }); return hit.target && hit.failedAt == null; },
+      }) : null);
+      st.nearHeld = parsed?.near ? parsed : null;
       if (parsed) {
-        const result = resolveDrill(parsed, tree, { strict: !recall, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") });
-        st.drill = { ...result, key: `${result.page.uid}:${result.target?.uid ?? ""}` };
-        return [drillRow(result)];
+        const result = resolveDrill(parsed, tree, { ...walk, strict: !recall });
+        st.drill = { ...result, near: Boolean(parsed.near), key: `${result.page.uid}:${result.target?.uid ?? ""}` };
+        return [drillRow(result, parsed.near)];
       }
     }
     const rows = mainRows(token, recall);
@@ -403,12 +408,16 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     return { uid: query, string, refs: indexes.refs?.byUid.get(query)?.refs ?? 0, level: 3, page: block[":block/page"]?.[":node/title"] ?? null };
   }
 
-  function drillRow(result) {
+  // A page taken from a near title is always named on the row.
+  function drillRow(result, near = false) {
     const { page, target } = result;
     let crumb = page.title;
     if (target) {
       const parents = tree.trail(target.uid);
-      if (parents.length > 1) crumb = readableText(parents[parents.length - 1].string);
+      if (parents.length > 1) {
+        const parent = readableText(parents[parents.length - 1].string);
+        crumb = near ? `${page.title} › ${parent}` : parent;
+      }
     }
     return {
       kind: "drill", key: `drill:${result.insertion}`, uid: target?.uid ?? page.uid, level: 3, insertion: result.insertion,
@@ -2309,6 +2318,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.wide = null;
     st.released = null;
     st.drill = null;
+    st.nearHeld = null;
     st.auto = false;
     st.chip = -1;
     st.scope = null;
