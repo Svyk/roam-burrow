@@ -53,3 +53,35 @@ test("a caret moved back into a closed token is no token: the popup is Roam's un
   // A later token's closer is not this one's.
   assert.equal(findToken("((ab ((cd))", 4).query, "ab");
 });
+
+test("a bare # token only with tags on, ended as Roam ends its popup", () => {
+  assert.equal(findToken("see #bur", 8), null);
+  const tags = { tags: true };
+  assert.deepEqual(findToken("see #bur", 8, tags), { kind: "#", start: 4, end: 8, caret: 8, query: "bur", closed: false });
+  assert.equal(findToken("x#bur", 5, tags).start, 1);
+  assert.equal(findToken("##bur", 5, tags).query, "bur");
+  assert.equal(findToken("#ns:Sys/la-b", 12, tags).query, "ns:Sys/la-b");
+  for (const value of ["#", "see # bur", "#a b", "#a,b", "#a;b", "#a!b", "#a(b", "#a]b", "#a\"b"]) assert.equal(findToken(value, value.length, tags), null, value);
+  // The closer Roam paired for a ( typed before it stays.
+  assert.equal(findToken("(#bur)", 5, tags).end, 5);
+  // More of the word after the caret: a pick would leave it behind.
+  assert.equal(findToken("#burrow", 4, tags), null);
+  assert.equal(findToken("#bur next", 4, tags).query, "bur");
+});
+
+test("[[ and (( win over a # inside them; a closed one leaves the # free", () => {
+  const tags = { tags: true };
+  assert.equal(findToken("[[a #bur", 8, tags).kind, "[[");
+  assert.equal(findToken("((a #bur", 8, tags).kind, "((");
+  assert.equal(findToken("[[a #b| c]]".replace("|", ""), 6, tags), null);
+  assert.equal(findToken("[[a]] #bur", 10, tags).kind, "#");
+  assert.equal(findToken("((abc)) #bur", 12, tags).start, 8);
+  assert.equal(findToken("#[[bur]]", 6, tags).kind, "[[");
+});
+
+test("a # token replaces only its span and goes stale with its text", () => {
+  const token = findToken("a #bur b", 6, { tags: true });
+  assert.equal(applyToken("a #bur b", token, "#[[Burrow]]"), "a #[[Burrow]] b");
+  assert.equal(tokenStillValid("a #bur b", 6, 6, token), true);
+  assert.equal(tokenStillValid("a #bux b", 6, 6, token), false);
+});

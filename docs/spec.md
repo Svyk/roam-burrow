@@ -185,6 +185,7 @@ Roam's `extensionAPI.settings.panel.create`, read through a `setting(id)` helper
 | `insertVariants` | switch | on | BRW-15: ⇧↵ embed, ⌥↵ labelled link on Burrow's rows (§23) |
 | `openInSidebar` | switch | on | BRW-15: ⌘⇧↵ or ⇧+click opens the row in the right sidebar (§23) |
 | `semanticRows` | switch | on | BRW-13: up to three Related rows from Roam's semantic search, per graph; the query goes to the embedding provider (§24) |
+| `tagRows` | switch | on | BRW-5: Burrow's page rows in Roam's `#` popup, inserting `#[[Page]]` (§28) |
 | `aliasKeyword` | input | `Aliases` | Same value as roam-aliases' Keyword |
 | `aliasLinkFormat` | select | `[alias]([[Page]])` | or `[[Page]]` |
 | `perfHud` | switch | off | Show `__BURROW_PERF` p50/p95 in a corner |
@@ -642,6 +643,22 @@ So "step aside for Roam's first row" would make Enter create a junk block named 
 **Exact text.** No filter, row 0 is not a uid hit. If row 0's string equals the typed text (trimmed, any case) it stays pre-selected. Else if another Burrow row, or a Roam row that is not a Create row, has that text, nothing is pre-selected: Enter is Roam's. A list that arrives late gives the selection back (the existing path in `evaluate`). The Create check is `.create-footnote` or a `.bp3-text-overflow-ellipsis` line starting `Create as`; if Roam renames that line, Burrow stops pre-selecting, the safe side.
 
 Gate: `tools/preselect-gate.mjs <window> <svy|notes>`. Runs on this build (2026-10-30): svy 9/9, notes 7/9 in one run, its two failures being Roam's write limit in the `gone` arm, and those two cases 2/2 on their own. Nothing is written beyond the insert the user picked.
+
+## 28. Burrow rows in `#` (BRW-5, 2026-10-30)
+
+Measured live in notes with Burrow gone, on `Burrow/Fixtures`:
+
+- The `#` popup is the same `.rm-autocomplete__results` as `[[`: same rows, same `.rm-aliases` slot (empty for a bare tag; roam-aliases lists only in `#[[`).
+- A lone `#` opens nothing. `#word` opens it. Space, `,`, `;`, `!`, `?`, `(`, `)`, `]` and `"` close it; `-`, `/`, `:`, `.`, `'` and `*` keep it open, with `No pages found.` when nothing matches. `x#bur`, `##bur` and `` `#bur `` open it as well.
+- **No row starts highlighted.** Plain Enter and Tab close the popup and leave the typed text. ↓ reaches the first row, which holds the typed word when it is not exact. A picked row inserts `#word`, or `#[[Two words]]` when the title needs brackets. Esc closes the popup and leaves the block.
+
+`src/token.js` gets a third kind, `#`, only with `tags` on and only outside `[[`/`((` tokens: `[[a #b` stays `[[`, and inside a closed token the popup stays Roam's. With more of the word after the caret, no token: a pick would leave that part behind. `hashed(token)` is both spellings, `#word` and `#[[word`; `tagged(token)` is that with `tagRows` on. Off, `#[[` behaves as before and a bare `#` is no token.
+
+- **Rows**: the same alias rows and recent pages as `[[`, with forgiving matching and frecency. Every row inserts the page: `#[[Page]]` in a bare tag, `[[Page]]` in `#[[` (the # is already there). A chip would pick an alias nothing can show, so there are none.
+- **Nothing pre-selected**, unlike `[[`. Roam's Enter here means "keep what I typed", and tags are often new pages; ↑ from Roam's list moves onto Burrow's rows.
+- **`ns:`**: a space ends a bare tag, so `ns:` can never be followed by words. With `ns:` and no words, in `#` or `#[[`, the value is the start of a title: `#ns:Systems/` lists pages under Systems/, `#ns:Systems/la` narrows it. These are page rows, so a page with no alias counts, ordered by frecency, then references. `startingWith` sorts all titles once per index, on first use. `#[[ns:Systems/ lo` keeps the `[[` meaning.
+- **Left out**: `[[alias:`, drill, Tab drill, ⌥A, ⇧↵ and ⌥↵, Related rows and the Related footer. ⌘⇧↵ stays: it writes nothing.
+- A native pick counts for frecency as in `[[`; `#word` with the word as typed counts as no pick.
 
 ## Also noticed
 

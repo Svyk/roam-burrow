@@ -34,7 +34,7 @@ export function hintsKey(items) {
 // The picker's hint line, contextual (spec §14): only keys that do something
 // for what is highlighted now, each [keys, label, tip] (the tip is the hover
 // text). Pure: the strip says what it knows.
-//   s.kind "[[" | "(("; s.prompt null | "add" | "delete"; s.chips: in the chips;
+//   s.kind "[[" | "((" | "#"; s.prompt null | "add" | "delete"; s.chips: in the chips;
 //   s.row (a Burrow row holds the selection): { kind: "alias" | "page" | "ref" | "drill",
 //     chips: more aliases to pick, drill: Tab drills into it, aliasNew: ⌥A applies };
 //   s.native (Roam's [[ row holds it): { drill, aliasNew } or null;
@@ -87,14 +87,14 @@ function baseHints(s, mac) {
     return items;
   }
   if (row?.kind === "alias") {
-    items.push(["↵", "pick alias", on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
+    items.push(["↵", on.tag ? "insert" : "pick alias", on.tag ? "Insert #[[Page]]: a tag cannot carry an alias label" : on.pageOnly ? "Insert [[Page]]" : "Insert [alias]([[Page]])"]);
     if (row.chips) items.push([k("altDown"), "more aliases", "Move into the page's other aliases: ←→ choose, ↵ inserts the page shown as that alias"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (row.aliasNew) items.push(addAlias);
     return items;
   }
   if (row?.kind === "page") {
-    items.push(["↵", "insert", "Insert [[Page]]"]);
+    items.push(["↵", "insert", on.tag ? "Insert #[[Page]]" : "Insert [[Page]]"]);
     if (row.drill && on.tabDrill) items.push(drillHint(PAGE));
     if (row.aliasNew) items.push(addAlias);
     return items;

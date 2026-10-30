@@ -185,6 +185,11 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     },
   });
 
+  // A tag: bare `#word`, or `#[[word`. tagged: with Burrow's rows (tagRows,
+  // spec §28), so everything that would not fit after a # stays out.
+  const hashed = (token) => token?.kind === "#" || (token?.kind === "[[" && st.ta?.value[token.start - 1] === "#");
+  const tagged = (token) => hashed(token) && setting("tagRows");
+
   const anyFeature = () => setting("aliasPages") || setting("recentRows") || setting("refRanking") || setting("drill") || setting("tabDrill")
     || setting("paneLayout") || setting("keyHints") || setting("helpSheet") || setting("semanticRows") || setting("semanticRelated");
 
@@ -226,7 +231,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     st.aliasOnly = null;
     st.filters = null;
     st.wide = null;
-    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && st.ta?.value[token.start - 1] !== "#") {
+    if (token.kind === "[[" && setting("aliasPrefix") && setting("aliasPages") && !hashed(token)) {
       const m = ALIAS_PREFIX.exec(token.query);
       if (m) {
         st.aliasOnly = m[1];
@@ -235,7 +240,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     if (indexes.refs !== richRefs) { richRefs = indexes.refs; richCache.clear(); }
     const recall = setting("betterMatch");
-    if (token.kind === "[[" && setting("drill") && st.ta?.value[token.start - 1] !== "#") {
+    if (token.kind === "[[" && setting("drill") && !hashed(token)) {
       const parsed = parseDrill(token.query, indexes.titles);
       if (parsed) {
         const result = resolveDrill(parsed, tree, { strict: !recall, ordinals: setting("drillOrdinals"), hideEmpty: setting("drillEmpty") });
@@ -246,10 +251,25 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const rows = mainRows(token, recall);
     // Up to two characters: the recent picks and edits after the matches
     // (alias rows in [[), nothing selected (spec §18).
-    if (token.query.length <= RECENT_QUERY && setting("recentRows") && !(token.kind === "[[" && st.ta?.value[token.start - 1] === "#")) {
-      return rows.concat(recentRows(token, rows));
-    }
-    return rows;
+    const all = token.query.length <= RECENT_QUERY && setting("recentRows") && (!hashed(token) || tagged(token)) ? rows.concat(recentRows(token, rows)) : rows;
+    return tagged(token) ? all.map((row) => ({ ...row, insertion: tagInsertion(token, row.title) })) : all;
+  }
+
+  // A tag cannot carry an alias label, so every row is the page. In `#[[` the
+  // # stays where it is.
+  const tagInsertion = (token, title) => (token.kind === "#" ? `#[[${title}]]` : `[[${title}]]`);
+
+  // `#ns:Systems/` or `#ns:Systems/la`: a space ends a bare tag, so what
+  // follows ns: is the start of a title. Pages with no alias count too, the
+  // ones picked often first, then the most linked.
+  function namespaceRows(filters) {
+    const label = filters.labels.find((l) => /^ns:/i.test(l));
+    const prefix = label.slice(3).replace(/^"|"$/g, "");
+    const picked = frequent("page");
+    const refs = indexes.aliases?.refsByPage;
+    const pages = (indexes.titles?.startingWith(prefix) ?? []).filter((page) => page.title !== st.pageTitle);
+    pages.sort((a, b) => (picked?.get(b.uid) ?? 0) - (picked?.get(a.uid) ?? 0) || (refs?.get(b.uid) ?? 0) - (refs?.get(a.uid) ?? 0) || a.title.localeCompare(b.title));
+    return pages.slice(0, ROW_LIMIT).map((page) => ({ kind: "page", key: `page:${page.uid}`, uid: page.uid, title: page.title, refs: refs?.get(page.uid) ?? null }));
   }
 
   const frequent = (kind) => (setting("frecency") ? frecency?.scores(kind) : null);
@@ -328,6 +348,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     // A uid comes first: `-AbCdEfGh` also reads as a -word filter, and it needs no ranking.
     const hit = token.kind === "((" && setting("refPreselect") ? uidHit(query) : null;
     const withHit = (rows) => (hit ? [refRow(hit, { uidHit: true }), ...rows.filter((row) => row.uid !== hit.uid)].slice(0, ROW_LIMIT) : rows);
+    if (tagged(token) && filters?.ns.length && !planText.trim() && !filters.is.length) return namespaceRows(filters);
     const plan = searchPlan(planText);
     if (!plan) return withHit([]);
     const compact = plan.clauses.reduce((n, c) => n + c.compact.length, 0);
@@ -348,7 +369,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       return mergeRows(rows, wideRows(filters, plan, options, rows, refRow), ROW_LIMIT);
     }
     if (!setting("aliasPages") || (compact < MIN_ALIAS_QUERY && st.aliasOnly == null)) return [];
-    if (st.ta?.value[token.start - 1] === "#") return [];
+    if (hashed(token) && !tagged(token)) return [];
     const format = setting("aliasLinkFormat");
     // No cut here: visibleRows drops rows Roam or roam-aliases already show,
     // and a cut before that could hide a row nobody else lists.
@@ -573,7 +594,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const inline = setting("aliasInline");
     const pages = st.rows.some((row) => row.kind === "page");
     if (st.aliasOnly != null) return st.rows.slice(0, ROW_LIMIT);
-    if (st.token?.kind !== "[[" || st.drill || (inline && !pages)) return st.rows.slice(0, ROW_LIMIT);
+    if (st.token?.kind === "((" || st.drill || (inline && !pages)) return st.rows.slice(0, ROW_LIMIT);
     const nativeTitles = new Set();
     for (const row of st.pop.querySelectorAll(NATIVE_ROWS)) {
       const title = row.getAttribute("title")?.toLowerCase();
@@ -633,7 +654,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     if (st.phase === "IDLE") st.phase = "ARMED";
     if (st.active >= rows.length) st.active = rows.length - 1;
-    const wanted = !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && (rows[0].uidHit || !exactElsewhere(rows, searchText)))
+    // Nothing starts selected in a tag: there Enter leaves what was typed.
+    const wanted = !hashed(st.token) && !rows[0].recent && !rows[0].wide && (rows[0].kind === "drill" || (st.token.kind === "((" && setting("refPreselect") && rows[0].level >= 2 && (rows[0].uidHit || !exactElsewhere(rows, searchText)))
       || (setting("aliasPreselect") && rows[0].kind === "alias" && aliasStarts(rows[0].alias, searchText) && !exactTitle(searchText)));
     if (st.phase === "OWNED" && st.auto && !wanted) {
       // Native rows arrived late, or the query moved on: give the selection back.
@@ -1006,7 +1028,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   let chipsFor = null;
   let chipsScrolled = false;
   let revealedChip = -1;
-  const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1;
+  const chipsAvailable = (row) => st.phase === "OWNED" && setting("aliasChips") && row?.kind === "alias" && row.aliases.length > 1 && !tagged(st.token);
 
   // The alias, and ×N when the graph links it that often (aliasUsage).
   const chipTitle = (row, alias) => {
@@ -1270,8 +1292,9 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     if (st.phase === "SCOPE" || !st.token) return [];
     const row = st.phase === "OWNED" ? shown[st.active] : null;
     const kind = st.token.kind;
-    const aliasNew = (page) => Boolean(page) && setting("aliasCreate") && kind === "[[";
-    const canDrill = (source) => Boolean(source) && (setting("tabDrill") || setting("drill")) && hasKids(source.uid);
+    const tag = tagged(st.token);
+    const aliasNew = (page) => Boolean(page) && setting("aliasCreate") && kind === "[[" && !tag;
+    const canDrill = (source) => Boolean(source) && !tag && (setting("tabDrill") || setting("drill")) && hasKids(source.uid);
     const state = {
       kind,
       prompt: st.prompt?.kind ?? null,
@@ -1281,7 +1304,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
         drill: canDrill(ownedSource(row, st.chip)), block: Boolean(ownedSource(row, -1)?.block),
         page: variantType(row) === "page",
       } : null,
-      native: !row && kind === "[[" ? (() => {
+      native: !row && kind === "[[" && !tag ? (() => {
         const source = armedSource();
         return source ? { drill: canDrill(source), aliasNew: aliasNew(source) } : null;
       })() : null,
@@ -1289,7 +1312,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       recentAbove: shown.length > 0 && shown.every((r) => r.recent),
       related: st.phase === "RELATED" ? "active" : related.visible ? "available" : null,
       footer: footerRows().length ? (st.foot >= 0 ? "active" : "available") : null,
-      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn() },
+      on: { tabDrill: setting("tabDrill"), drill: setting("drill"), aliasDelete: setting("aliasDelete"), pageOnly: setting("aliasLinkFormat") === "[[Page]]", refOutline: setting("refOutline"), ...variantsOn(), tag },
       held: Boolean(st.held),
     };
     return pickerHints(state);
@@ -1502,7 +1525,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function relatedQuery(token) {
     // A drill, query filters (in:, is:, -word, "phrase") and the alias: prefix
     // ask for literal matches: the band would ignore them, so it stays out.
-    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows")) {
+    if (st.drill || st.filters || st.aliasOnly != null || !setting("semanticRows") || tagged(token)) {
       semantic.cancel();
       dropRelated();
       return;
@@ -1831,6 +1854,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   // block or page row while Roam's preview is open, the drill-down's block or
   // page, or the block highlighted in the drill panel.
   function footerSubject() {
+    if (tagged(st.token)) return null;
     if (!setting("semanticRelated") || st.prompt || st.phase === "IDLE" || !st.pop) return null;
     if (st.phase === "SCOPE") {
       if (!st.scope?.preview) return null;
@@ -2278,7 +2302,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function evaluate(ta) {
     if (!anyFeature() || st.composing) return reset("off");
     if (ta.selectionStart !== ta.selectionEnd) return reset("selection");
-    const token = findToken(ta.value, ta.selectionStart);
+    const token = findToken(ta.value, ta.selectionStart, { tags: setting("tagRows") });
     if (!token) return reset("no-token");
     if (st.ta !== ta || st.token?.start !== token.start) {
       st.uid = api.ui.getFocusedBlock?.()?.["block-uid"] ?? null;
@@ -2367,14 +2391,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     }
     if (st.phase === "RELATED") { relatedKeyDown(event); return; }
     if (st.phase === "OWNED" && variantKey(event, shown[st.active], st.chip)) return;
-    if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && (st.phase === "ARMED" || st.phase === "OWNED")) {
+    if (isAltA(event) && setting("aliasCreate") && st.token?.kind === "[[" && !tagged(st.token) && (st.phase === "ARMED" || st.phase === "OWNED")) {
       const page = aliasSource();
       if (page) { openPrompt(page); consume(event); return; }
     }
     if (st.phase === "OWNED" && chipKey(event)) return;
     if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (st.phase === "ARMED") {
-      if (key === "Tab" && !event.shiftKey && setting("tabDrill") && st.token.kind === "[[" && enterScope(armedSource(), event)) return;
+      if (key === "Tab" && !event.shiftKey && setting("tabDrill") && st.token.kind === "[[" && !tagged(st.token) && enterScope(armedSource(), event)) return;
       if ((key === "Enter" || key === "Tab") && !event.shiftKey) rememberNative();
       if (key === "ArrowUp" && !event.shiftKey && count && !strip.hidden && nativeActiveIsFirst()) {
         own(count - 1);
@@ -2411,7 +2435,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
       case "Tab": {
         if (event.shiftKey) return;
         const row = shown[st.active];
-        if (key === "Tab" && setting("tabDrill") && enterScope(ownedSource(row, -1), event)) return;
+        if (key === "Tab" && setting("tabDrill") && !tagged(st.token) && enterScope(ownedSource(row, -1), event)) return;
         // Refused (the text or the block changed under the row): the key
         // stays Burrow's and only redraws, so Enter never runs a Roam row the
         // user did not see highlighted.
@@ -2494,7 +2518,8 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     return null;
   }
 
-  const variantsOn = () => ({ insertVariants: setting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
+  const variantSetting = (id) => (id === "insertVariants" && tagged(st.token) ? false : setting(id));
+  const variantsOn = () => ({ insertVariants: variantSetting("insertVariants"), openInSidebar: setting("openInSidebar"), held: st.held });
 
   // The hint line is full already, so the variants take its place while ⇧, ⌥
   // or ⌘ is held on a Burrow row or the drill panel: after HOLD_MS with no
@@ -2528,7 +2553,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
 
   // Returns true when the key was one of the variants and is consumed.
   function variantKey(event, row, chip = -1) {
-    const variant = variantOf(event, setting);
+    const variant = variantOf(event, variantSetting);
     const target = variant ? variantTarget(row, chip) : null;
     if (!target) return false;
     consume(event);
@@ -3063,7 +3088,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   let nativePick = null;
   function rememberNative() {
     if (!frecency || !st.token || !st.ta || !(setting("frecency") || setting("recentRows"))) return;
-    const memo = { ta: st.ta, start: st.token.start, kind: st.token.kind };
+    const memo = { ta: st.ta, start: st.token.start, kind: st.token.kind, query: st.token.query };
     nativePick = memo;
     let frames = NATIVE_PICK_FRAMES;
     const wait = () => {
@@ -3077,7 +3102,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
     const memo = nativePick;
     if (!memo || lifecycle.disposed || !memo.ta.isConnected) return false;
     const text = memo.ta.value.slice(memo.start);
-    if (memo.kind === "((") {
+    if (memo.kind === "#") {
+      // `#word` or `#[[Two words]]`; the typed word as it stood is no pick.
+      const m = /^#(?:\[\[([^\]]+)\]\]|([^\s,()[\]";!?#]+))/.exec(text);
+      const title = m?.[1] ?? m?.[2];
+      const uid = title && title !== memo.query ? indexes.titles?.resolve(title)?.uid : null;
+      if (!uid) return false;
+      frecency.record("page", uid);
+    } else if (memo.kind === "((") {
       const m = /^\(\(([\w-]{9})\)\)/.exec(text);
       if (!m) return false;
       frecency.record("block", m[1]);
@@ -3185,14 +3217,14 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   function variantLines(target, query) {
     if (!target) return [];
     const lines = [];
-    if (setting("insertVariants")) {
+    if (variantSetting("insertVariants")) {
       lines.push([keyLabel("shiftEnter"), `insert ${variantInsertion("embed", target, query)}`], [keyLabel("altEnter"), `insert ${variantInsertion("label", target, query)}`]);
     }
     if (setting("openInSidebar")) lines.push([`${keyLabel("sidebarEnter")}, ⇧click`, "open it in the right sidebar"]);
     return lines;
   }
   const rowVariantLines = (row, chip = -1) => variantLines(variantTarget(row, chip), labelQuery(row));
-  const drillLine = (uid, what) => (setting("tabDrill") && hasKids(uid) ? ["⇥", what] : null);
+  const drillLine = (uid, what) => (setting("tabDrill") && !tagged(st.token) && hasKids(uid) ? ["⇥", what] : null);
 
   function stripTip(target) {
     const chip = target.closest?.(".burrow-chip");
@@ -3229,15 +3261,15 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
         ...rowVariantLines(row),
         setting("aliasChips") && row.aliases.length > 1 ? [keyLabel("altDown"), `pick one of its ${row.aliases.length} aliases`] : null,
         drillLine(row.uid, "list the blocks on this page"),
-        setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null,
+        setting("aliasCreate") && !tagged(st.token) ? [keyLabel("altA"), "add an alias to this page"] : null,
       ].filter(Boolean) };
     }
     if (row.kind === "page") {
       return { el: node, title: row.title, lines: [
-        ["", row.recent === "pick" ? "Recent pick" : "Edited recently"],
+        row.recent ? ["", row.recent === "pick" ? "Recent pick" : "Edited recently"] : null,
         ["↵", `or click: insert ${row.insertion}`],
         drillLine(row.uid, "list the blocks on this page"),
-        setting("aliasCreate") ? [keyLabel("altA"), "add an alias to this page"] : null,
+        setting("aliasCreate") && !tagged(st.token) ? [keyLabel("altA"), "add an alias to this page"] : null,
       ].filter(Boolean) };
     }
     const upLine = setting("refOutline") ? ["⇧⇥", "go up to its parent (the parent's children, this block highlighted)"] : null;
