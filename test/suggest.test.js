@@ -188,3 +188,18 @@ test("the hint line and the tip say suggested", () => withSuggest({ value: "deep
   assert.match(doc.querySelector(".burrow-hints")?.textContent ?? "", /suggested/);
   assert.doesNotMatch(doc.querySelector(".burrow-hints")?.textContent ?? "", /related/);
 }));
+
+test("the switch going off during the pause asks nothing", async () => {
+  const overrides = { suggestRows: true };
+  await withSuggest({ value: "deep work [[|]]", overrides }, async (h) => {
+    assert.ok(await until(h.shownBand));
+  });
+  const later = {};
+  await withSuggest({ value: "deep work [[|]]", overrides: later, api: {} }, async (h) => {
+    h.calls.length = 0;
+    await h.type("deep word [[");
+    later.suggestRows = false;
+    await sleep(40);
+    assert.equal(h.calls.length, 0);
+  });
+});

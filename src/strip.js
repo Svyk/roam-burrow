@@ -1522,7 +1522,7 @@ export function createStrip({ setting, indexes, perf, lifecycle, api, frecency =
   const suggest = createSemantic({
     api, win, perf, trace: (event) => trace({ ...event, ev: "suggest" }), graph: () => api.graph?.name ?? "", perfName: "suggest.request",
     keyOf: (token) => `${api.graph?.name ?? ""}\u0000suggest\u0000${token.query}`, what: "suggested links",
-    canAsk: () => typeof api.data?.ai?.suggestLinks === "function", eligible: (text) => Boolean(text),
+    canAsk: () => setting("suggestRows") && typeof api.data?.ai?.suggestLinks === "function", eligible: (text) => Boolean(text),
     fetch: async (token) => suggestTitles(await api.data.ai.suggestLinks({ text: token.query })),
     onReply: (token, titles) => onSuggestReply(token.source, titles),
   });

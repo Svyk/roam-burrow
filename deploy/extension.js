@@ -6089,7 +6089,7 @@ function createStrip({ setting, indexes, perf, lifecycle, api, frecency = null, 
     perfName: "suggest.request",
     keyOf: (token) => `${api.graph?.name ?? ""}\0suggest\0${token.query}`,
     what: "suggested links",
-    canAsk: () => typeof api.data?.ai?.suggestLinks === "function",
+    canAsk: () => setting("suggestRows") && typeof api.data?.ai?.suggestLinks === "function",
     eligible: (text) => Boolean(text),
     fetch: async (token) => suggestTitles(await api.data.ai.suggestLinks({ text: token.query })),
     onReply: (token, titles) => onSuggestReply(token.source, titles)
